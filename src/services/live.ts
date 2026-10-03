@@ -161,7 +161,8 @@ async function callRaw(o: Op, pathValues: string[] = [], body?: unknown, query: 
     const res: any = await sdk().executeAsync({ connectorOperation: { tableName: o.ds, operationName: o.op, parameters: build() } })
     if (!res?.success) {
       const e = res?.error
-      const raw = e?.message ?? (typeof e === 'string' ? e : JSON.stringify(e ?? 'Connector call failed'))
+      const st = e?.status ?? e?.statusCode ?? res?.status
+      const raw = `${st ? `HTTP ${st}: ` : ''}${e?.message ?? (typeof e === 'string' ? e : JSON.stringify(e ?? 'Connector call failed'))}`
       let pretty = raw
       try { const j = JSON.parse(raw); pretty = j?.error?.message ?? raw } catch { /* not JSON */ }
       throw new Error(`${raw.includes('InvalidApiVersion') ? 'InvalidApiVersion: ' : ''}${pretty}`)
@@ -526,11 +527,28 @@ export const liveBackend: Backend = {
     }
     if (asset.kind === 'agent') {
       const re = OPS.agentReassign()
+      let reassignErr: Error | null = null
       if (re) {
-        // Needs: the connection's account = System Administrator in the target environment; new owner = temporary System Customizer there.
-        await callRaw(re, [asset.envId, asset.id], { NewOwnerAadUserId: to.id })
-        return
+        try {
+          // Needs: the connection's account = System Administrator in the target environment; new owner = temporary System Customizer there.
+          await callRaw(re, [asset.envId, asset.id], { NewOwnerAadUserId: to.id })
+          return
+        } catch (e) { reassignErr = e as Error }
       }
+      // Fallback: plain Dataverse "assign" - only possible for the environment this app runs in.
+      const botsTable = nativeTable(/^bots?$/i)
+      if (botsTable && (await getCurrentEnvId()) === asset.envId) {
+        try {
+          const sysId = await nativeSystemUserId(to.id)
+          if (!sysId) throw new Error('the new owner has no user record in this environment')
+          const r: any = await sdk().updateRecordAsync<any, any>(botsTable, asset.id, { 'ownerid@odata.bind': `/systemusers(${sysId})` })
+          if (!r?.success) throw new Error(r?.error?.message ?? 'update failed')
+          return
+        } catch (e2) {
+          throw new Error(`${reassignErr ? `Reassign API failed → ${reassignErr.message}\n\n` : ''}Dataverse assign fallback also failed → ${(e2 as Error).message}`)
+        }
+      }
+      if (reassignErr) throw reassignErr
     }
     if (asset.kind === 'agent' && asset.orgHost === 'native') {
       const botsTable = nativeTable(/^bots?$/i)

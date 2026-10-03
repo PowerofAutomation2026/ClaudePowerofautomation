@@ -1,4 +1,4 @@
-import type { Asset, AuditEntry, Person, TransferOptions } from './types'
+import type { Asset, AssetKind, AuditEntry, Person, TransferOptions } from './types'
 
 export const fmtDate = (s?: string) => (s ? new Date(s).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—')
 
@@ -62,4 +62,22 @@ export function risksFor(a: Asset): Risk[] {
     r.push({ level: 'info', text: 'Agents have a single owner (co-owner mode does not apply).' })
   }
   return r
+}
+
+/** Turn a raw connector error into plain-language likely causes (shown under a failed transfer). */
+export function explainTransferError(err: string, kind: AssetKind): string[] {
+  const e = err.toLowerCase()
+  const tips: string[] = []
+  if (/405|method not allowed/.test(e) && kind === 'agent') tips.push('HTTP 405: classic (pre-agent) chatbots are not supported by the reassign API. Use Power Apps → Solutions → the agent → Assign, or the admin center.')
+  if (/403|forbidden|unauthor|access is denied|privilege|permission/.test(e))
+    tips.push('Permission: the account signed in to the connection must be a Power Platform / AI / tenant admin AND hold the System Administrator role in the item\'s environment.')
+  if (/licen/.test(e)) tips.push('Licence: the new owner needs an active licence (for agents: Microsoft 365 Copilot).')
+  if (/managed|solution|locked/.test(e)) tips.push('The item is in a managed solution. Make an unmanaged customization (open it, small edit, save) or change the owner in the Power Platform admin center.')
+  if (/not found|does not exist|no user|systemuser|user record/.test(e)) tips.push('The new owner must exist as a user in the item\'s environment (add them to the environment first).')
+  if (kind === 'agent') {
+    tips.push('Most common cause for agents: the NEW owner must temporarily hold the System Customizer security role in the agent\'s environment (Power Platform admin center → Environments → that environment → Users → Manage security roles). Add it, retry, then remove it.')
+    tips.push('Also check: the new owner has a Microsoft 365 Copilot licence, and the agent is not a classic chatbot.')
+  } else if (kind === 'app') tips.push('The new owner must be a licensed user in the tenant; apps in managed solutions cannot be re-owned.')
+  else tips.push('For flows the new owner must have a licence that allows the flow\'s connectors; solution flows may need their connection references re-pointed.')
+  return [...new Set(tips)]
 }

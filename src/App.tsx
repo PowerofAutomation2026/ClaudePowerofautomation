@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentCategory, Asset, AssetKind, AuditEntry, Backend, Env, ItemStatus, Person, ScanNote, TransferOptions } from './types'
 import { hasConnectors, pickBackend } from './services'
-import { ago, assetRows, auditRows, download, powershellFor, risksFor, toCsv } from './util'
+import { ago, assetRows, auditRows, download, explainTransferError, powershellFor, risksFor, toCsv } from './util'
 
 const ls = {
   get<T>(k: string, d: T): T { try { const v = localStorage.getItem(k); return v ? (JSON.parse(v) as T) : d } catch { return d } },
@@ -330,10 +330,11 @@ function Drawer({ children, onClose }: { children: React.ReactNode; onClose: () 
   return (<><div className="drawer-bg" onClick={onClose} /><aside className="drawer">{children}</aside></>)
 }
 
-function TransferDrawer({ backend, from, items, busyRef, onClose, onAudit, onDone, flash }: {
+function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAudit, onDone, flash }: {
   backend: Backend; from: Person; items: Asset[]; busyRef: React.MutableRefObject<boolean>
   onClose: () => void; onAudit: (e: AuditEntry[]) => void; onDone: (keys: string[]) => void; flash: (m: string) => void
 }) {
+  const [items] = useState(itemsIn) // snapshot: results and errors must stay visible even if the table behind changes
   const [toEmail, setToEmail] = useState('')
   const [msg, setMsg] = useState<{ level: 'error' | 'info' | 'ok'; text: string } | null>(null)
   const ownerRef = useRef<HTMLInputElement>(null)
@@ -379,12 +380,14 @@ function TransferDrawer({ backend, from, items, busyRef, onClose, onAudit, onDon
     }
     await Promise.all([worker(), worker(), worker()]) // light concurrency to stay under connector throttling
     onAudit(entries)
-    if (!dry) { onDone(ok); setLastBatch({ id: batch, to, keys: ok }) }
-    const nFail = entries.filter((e) => e.status === 'failed').length
+    if (!dry && ok.length) { onDone(ok); setLastBatch({ id: batch, to, keys: ok }) }
+    const failedEntries = entries.filter((e) => e.status === 'failed')
+    const nFail = failedEntries.length
     const nOk = entries.length - nFail
+    const firstErr = failedEntries[0]?.error
     setMsg({ level: nFail ? 'error' : 'ok', text: dry
       ? `Dry run finished: ${nOk} OK, ${nFail} would fail. NOTHING was changed. Untick "Dry run" and click "Transfer now" to really move ownership to ${to.name}.`
-      : `Transfer finished: ${nOk} moved to ${to.name}, ${nFail} failed.${nFail ? ' See the red messages below; use Retry.' : ''}` })
+      : `Transfer finished: ${nOk} moved to ${to.name}, ${nFail} failed.${firstErr ? `\n\nError from the service:\n${firstErr}` : ''}` })
     flash(dry ? 'Dry run complete – nothing changed' : `Transferred ${ok.length}/${list.length}`)
     setRunning(false); busyRef.current = false
   }
@@ -414,7 +417,17 @@ function TransferDrawer({ backend, from, items, busyRef, onClose, onAudit, onDon
         <label className="row"><input type="checkbox" checked={dry} onChange={(e) => setDry(e.target.checked)} /> <b>Dry run</b> (simulate, change nothing)</label>
         {needsConfirm && <div className="field"><label>Type <b>TRANSFER {items.length}</b> to confirm</label><input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} /></div>}
         {dry && <div className="risk info">Dry run is ON – nothing will be changed. Untick it to really transfer.</div>}
-        {msg && <div className={`banner`} style={msg.level === 'error' ? { borderColor: 'var(--bad)', color: 'var(--bad)', background: 'rgba(251,113,133,.08)' } : msg.level === 'ok' ? { borderColor: 'var(--ok)', color: 'var(--ok)', background: 'rgba(52,211,153,.08)' } : { borderColor: 'var(--accent)', color: 'var(--accent2)', background: 'rgba(124,92,255,.08)' }}>{msg.text}</div>}
+        {msg && <div className={`banner`} style={msg.level === 'error' ? { borderColor: 'var(--bad)', color: 'var(--bad)', background: 'rgba(251,113,133,.08)' } : msg.level === 'ok' ? { borderColor: 'var(--ok)', color: 'var(--ok)', background: 'rgba(52,211,153,.08)' } : { borderColor: 'var(--accent)', color: 'var(--accent2)', background: 'rgba(124,92,255,.08)' }}><span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.text}</span></div>}
+        {failed.length > 0 && !running && (
+          <div className="card" style={{ padding: 12 }}>
+            <b>Why this usually fails</b>
+            <ul style={{ margin: '6px 0 8px', paddingLeft: 18, fontSize: 12.5 }}>
+              {explainTransferError(failed[0] ? (status[failed[0].key]?.err ?? '') : '', failed[0]!.kind).map((t, i) => <li key={i} style={{ marginBottom: 4 }}>{t}</li>)}
+            </ul>
+            <button className="btn sm" onClick={() => navigator.clipboard?.writeText(failed.map((a) => `${a.kind} ${a.name} (${a.envName}) [${a.id}]: ${status[a.key]?.err}`).join('\n\n')).then(() => flash('Error details copied'))}>Copy error details</button>
+          </div>)}
+        {items.some((a) => a.kind === 'agent') && !running && (
+          <div className="risk info">🤖 Agent transfer checklist: your connection account = System Administrator in the agent's environment · the new owner = System Customizer role there (temporary) + Microsoft 365 Copilot licence · not a classic chatbot.</div>)}
         {running && <div className="progress"><i style={{ width: `${(doneCount / Math.max(1, items.length)) * 100}%` }} /></div>}
         <div className="row">
           <button className={`btn ${dry ? 'primary' : 'danger'}`} disabled={running || !items.length || (needsConfirm && confirmText !== `TRANSFER ${items.length}`)} onClick={() => run(items)}>
@@ -432,7 +445,7 @@ function TransferDrawer({ backend, from, items, busyRef, onClose, onAudit, onDon
           return (<div key={a.key} className="item"><span className={`pill ${a.kind}`}>{a.kind}</span>
             <div><div className="name">{a.name}</div><div className="id">{a.envName}</div>
               {rs.map((r, i) => <div key={i} className={`risk ${r.level}`}>{r.level === 'warn' ? '⚠' : 'ℹ'} {r.text}</div>)}
-              {s?.err && <div className="risk" style={{ color: 'var(--bad)' }}>{s.err}</div>}</div>
+              {s?.err && <div className="risk" style={{ color: 'var(--bad)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{s.err}</div>}</div>
             <span className="st">{!s ? <span className="pill mut">queued</span> : s.s === 'running' ? <span className="spin" /> : <span className={`pill ${s.s === 'failed' ? 'bad' : 'ok'}`}>{s.s === 'dry' ? 'ok (dry)' : s.s}</span>}</span></div>)
         })}
       </div>

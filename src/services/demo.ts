@@ -80,6 +80,7 @@ export const demoBackend: Backend = {
   },
   async transfer(asset, to, opts) {
     await sleep(300 + rnd() * 600)
+    if (asset.kind === 'agent' && /Policy/.test(asset.name)) throw new Error('HTTP 403: Forbidden - the operation failed (simulated demo error for agent transfer)')
     if (asset.name === 'Daily backup') throw new Error('Simulated failure: flow is locked by a solution (managed)')
     const real = store.find((a) => a.key === asset.key)
     if (!real) throw new Error('Not found')

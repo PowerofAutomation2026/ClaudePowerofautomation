@@ -106,3 +106,10 @@ If discovery shows 0, open the Scan report: it prints the owner ids it saw so th
   so the rules can be tuned from real data.
 * New interface: animated aurora background, profile hero with type-mix bar (blue = apps, orange = flows, aqua = agents – validated colour slots 1-3 with direct labels),
   icon stat tiles with count-up, tabs with counts, type chips, status dots, shimmer skeleton while scanning. Dark and light themes.
+
+## v1.7.1 – agent transfer failures
+* A failed transfer no longer clears the item list: the error stays on screen (full service text, HTTP status) with a plain-language "Why this usually fails" box and **Retry**.
+* Agent transfer first calls *Reassign the owner of the bot*; if that fails and the agent lives in the app's own environment it falls back to a Dataverse assign.
+* Known causes (Microsoft docs / community): the **new owner needs the System Customizer role** in the agent's environment (temporarily) and a Microsoft 365 Copilot licence;
+  the connection account needs System Administrator there; **managed-solution** agents can be blocked (make an unmanaged edit or use the admin center *Change owner*);
+  **classic chatbots** return HTTP 405.
