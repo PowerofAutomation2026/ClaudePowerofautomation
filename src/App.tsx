@@ -120,6 +120,7 @@ export default function App() {
         <div className="logo">🛡️</div>
         <div><h1>Ownership Command Center</h1><div className="sub">Find &amp; transfer Power Apps and Flows across every environment · no app registration</div></div>
         <div className="spacer" />
+        <span className="pill mut" title="Build running in this tab - if it is old, hard-refresh (Ctrl+Shift+R)">{__BUILD__}</span>
         <span className={`pill ${demo ? 'warn' : 'ok'}`}>{demo ? 'DEMO DATA' : 'LIVE'}</span>
         <button className="btn sm" onClick={() => setPalette(true)}>⌘ <kbd>Ctrl K</kbd></button>
         <button className="btn sm" onClick={() => setPanel('history')}>🕘 History ({audit.filter((a) => !a.dryRun).length})</button>
@@ -142,7 +143,7 @@ export default function App() {
         </form>
         {recent.length > 0 && <div className="chips">{recent.map((r) => <span key={r} className="chip" onClick={() => { setEmail(r); search(r) }}>{r}</span>)}</div>}
         {loading && <div style={{ marginTop: 12 }}><div className="sub">{loading}</div><div className="progress"><i style={{ width: `${prog * 100}%` }} /></div></div>}
-        {error && <div className="risk" style={{ marginTop: 10, color: 'var(--bad)' }}>⚠ {error}</div>}
+        {error && <div className="risk" style={{ marginTop: 10, color: 'var(--bad)' }}>⚠ {error} <button type="button" className="btn sm" onClick={() => setPanel('diag')}>🩺 Open diagnostics</button></div>}
       </section>
 
       {user && !loading && (
