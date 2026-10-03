@@ -545,6 +545,60 @@ export const liveBackend: Backend = {
 
       onProgress(++done, envs.length, env.name)
     }
+    // ---- Live check: the tenant inventory lags (deleted agents linger for a while), so confirm every agent against the Dataverse of its environment ----
+    if (agentsViaInventory) {
+      const agents = out.filter((a) => a.kind === 'agent' && a.orgHost === 'inventory')
+      const byEnv = new Map<string, Asset[]>()
+      for (const a of agents) (byEnv.get(a.envId) ?? byEnv.set(a.envId, []).get(a.envId)!).push(a)
+      const homeId = await getCurrentEnvId()
+      const botsTable = nativeKey('bot')
+      let live = 0, gone = 0, moved = 0, unchecked = 0
+      const drop = new Set<Asset>()
+      for (const [eid, list] of byEnv) {
+        const env = envs.find((e) => e.id.toLowerCase() === eid.toLowerCase())
+        const useNative = !!botsTable && homeId?.toLowerCase() === eid.toLowerCase()
+        const host = !useNative && dvList && env?.orgUrl ? new URL(env.orgUrl).host : null
+        if (!useNative && !host) { unchecked += list.length; continue }
+        try {
+          const found = new Map<string, any>()
+          const sysId = await (async () => {
+            if (useNative) return nativeSystemUserId(user.id)
+            const su = asList(await call(dvList!, [], undefined, {}, { dataset: host, table: 'systemusers', '$filter': `azureactivedirectoryobjectid eq ${user.id}`, '$select': 'systemuserid', '$top': 1 }))
+            return su[0]?.systemuserid ?? null
+          })()
+          for (let i = 0; i < list.length; i += 15) {
+            const chunk = list.slice(i, i + 15)
+            const filter = chunk.map((a) => `botid eq ${a.id}`).join(' or ')
+            if (useNative) {
+              const r: any = await sdk().retrieveMultipleRecordsAsync<any>(botsTable!, { filter, select: ['botid', 'name', 'statecode', '_ownerid_value', 'modifiedon'], top: 100 })
+              if (!r?.success) throw new Error(r?.error?.message ?? 'query failed')
+              for (const b of r.data ?? []) found.set(String(b.botid).toLowerCase(), b)
+            } else {
+              const rows = asList(await call(dvList!, [], undefined, {}, { dataset: host, table: 'bots', '$filter': filter, '$select': 'botid,name,statecode,_ownerid_value,modifiedon', '$top': 100 }))
+              for (const b of rows) found.set(String(b.botid).toLowerCase(), b)
+            }
+            await tick()
+          }
+          for (const a of list) {
+            const b = found.get(a.id.toLowerCase())
+            if (!b) { drop.add(a); gone++; continue }                                   // not in Dataverse any more = deleted
+            if (sysId && b._ownerid_value && String(b._ownerid_value).toLowerCase() !== String(sysId).toLowerCase()) { drop.add(a); moved++; continue }   // owner already changed
+            a.name = b.name ?? a.name
+            a.state = b.statecode === 0 ? 'Started' : 'Stopped'
+            a.modifiedTime = b.modifiedon ?? a.modifiedTime
+            a.meta = { ...(a.meta ?? {}), live: 'verified' }
+            live++
+          }
+        } catch (e) { unchecked += list.length; note(env?.name ?? eid, 'agent', 'warn', `live check of agents failed: ${(e as Error).message.slice(0, 250)} - showing inventory data unverified`) }
+      }
+      for (let i = out.length - 1; i >= 0; i--) if (drop.has(out[i]!)) out.splice(i, 1)
+      note('(all)', 'agent', gone || moved || unchecked ? 'warn' : 'info',
+        `Live check against Dataverse: ${live} agent(s) confirmed existing and owned by the user` +
+        (gone ? `; ${gone} DELETED agent(s) removed from the list (the inventory still lists them for a while)` : '') +
+        (moved ? `; ${moved} removed because Dataverse shows a different owner now` : '') +
+        (unchecked ? `; ${unchecked} could not be live-checked (no Dataverse access to their environment) and are shown from the inventory only` : ''))
+    }
+
     return { assets: out, notes }
   },
 

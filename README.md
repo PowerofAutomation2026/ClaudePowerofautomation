@@ -158,3 +158,6 @@ apps: Get Admin App; flows: owner roles) and each row shows **Verified at the so
 * Flows keep an immutable *creator*; a rescan now also checks the Owner role, so a transferred flow is no longer listed under the old owner.
 * Membership settle time before an agent reassign raised from 4 s to 8 s.
 * Where to look as the new owner: Copilot Studio → pick the SAME environment as the agent (e.g. *microsoft (default)*) → Agents. Admin center / inventory can lag 5–15 min.
+
+## v1.9.1 – live agent count (deleted agents no longer listed)
+The tenant inventory keeps showing deleted agents for a while. After the inventory read, every agent is now checked against the Dataverse `bot` table of its own environment: deleted agents and agents whose owner already changed are dropped, name/state are refreshed. The Scan report says how many were confirmed, how many deleted ones were removed, and how many could not be live-checked (environments this app cannot reach).
