@@ -178,6 +178,17 @@ foreach ($n in $needed) {
   }
 }
 
+# Dataverse tables of THIS environment (Copilot Studio agents live in 'bot'); no extra connection needed.
+Step 'Adding Dataverse tables for Copilot Studio agents (this environment)'
+foreach ($tbl in @('bot','systemuser')) {
+  $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  $o = (& pac code add-data-source -a dataverse -t $tbl 2>&1) | Out-String
+  $ErrorActionPreference = $prev
+  if ($LASTEXITCODE -eq 0) { Ok "Dataverse table '$tbl' added" }
+  elseif ($o -match '(?i)already') { Ok "Dataverse table '$tbl' already added" }
+  else { Warn "Could not add Dataverse table '$tbl' (agents will be skipped): $($o.Trim())" }
+}
+
 # ---------- 6. build + publish ----------
 Step 'Building'
 # pac sometimes generates TypeScript that does not compile (e.g. parameters named api-version). The app does not

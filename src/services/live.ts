@@ -129,7 +129,7 @@ function pickSupportedVersion(message: string): string | null {
 let cachedClient: ReturnType<typeof getClient> | null = null
 const sdk = () => (cachedClient ??= getClient(dataSourcesInfo as any))
 
-async function call(o: Op, pathValues: string[] = [], body?: unknown, query: Record<string, unknown> = {}, extra: Record<string, unknown> = {}): Promise<any> {
+async function callRaw(o: Op, pathValues: string[] = [], body?: unknown, query: Record<string, unknown> = {}, extra: Record<string, unknown> = {}): Promise<any> {
   const cacheKey = `${o.ds}|${o.op}`
   const build = (): Record<string, unknown> => {
     const params: Record<string, unknown> = {}
@@ -153,7 +153,7 @@ async function call(o: Op, pathValues: string[] = [], body?: unknown, query: Rec
       try { const j = JSON.parse(raw); pretty = j?.error?.message ?? raw } catch { /* not JSON */ }
       throw new Error(`${raw.includes('InvalidApiVersion') ? 'InvalidApiVersion: ' : ''}${pretty}`)
     }
-    return res.data?.value ?? res.data
+    return res.data
   }
   try {
     return await run()
@@ -168,6 +168,30 @@ async function call(o: Op, pathValues: string[] = [], body?: unknown, query: Rec
   }
 }
 
+/** Unwrap the `value` array of an OData-style response. */
+const call = async (o: Op, pathValues: string[] = [], body?: unknown, query: Record<string, unknown> = {}, extra: Record<string, unknown> = {}): Promise<any> => {
+  const d = await callRaw(o, pathValues, body, query, extra)
+  return d?.value ?? d
+}
+
+/** Follow `nextLink` / skiptoken paging when the operation exposes a skiptoken parameter (bounded). */
+async function callAll(o: Op, pathValues: string[], maxPages = 10, maxItems = 20000): Promise<{ items: any[]; truncated: boolean }> {
+  const tokenParam = o.params.find((p) => p.in === 'query' && /skiptoken/i.test(p.name))?.name
+  const items: any[] = []
+  let token: string | undefined
+  for (let page = 0; page < maxPages; page++) {
+    const d = await callRaw(o, pathValues, undefined, token && tokenParam ? { [tokenParam]: token } : {})
+    items.push(...asList(d))
+    const link: string | undefined = d?.nextLink ?? d?.['@odata.nextLink']
+    const m = link ? /[?&]\$?skiptoken=([^&]+)/i.exec(link) : null
+    token = m ? decodeURIComponent(m[1]) : undefined
+    if (!token || !tokenParam) return { items, truncated: !!link && !tokenParam }
+    if (items.length >= maxItems) return { items, truncated: true }
+    await tick()
+  }
+  return { items, truncated: true }
+}
+
 async function mapLimit<T, R>(items: T[], n: number, fn: (x: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length)
   let i = 0
@@ -179,6 +203,25 @@ async function mapLimit<T, R>(items: T[], n: number, fn: (x: T) => Promise<R>): 
 
 const stateOf = (s?: string): Asset['state'] => (s === 'Started' || s === 'Stopped' || s === 'Suspended' ? s : 'Unknown')
 const asList = (v: any): any[] => (Array.isArray(v) ? v : Array.isArray(v?.value) ? v.value : [])
+const tick = () => new Promise<void>((r) => setTimeout(r, 0)) // yield to the browser so memory can be reclaimed between heavy steps
+
+
+// ---- Dataverse of the environment this app runs in (no extra connection needed; added by `pac code add-data-source -a dataverse`) ----
+const nativeTable = (re: RegExp): string | null =>
+  Object.keys(dataSourcesInfo).find((k) => re.test(k) && /dataverse/i.test(String(dataSourcesInfo[k]?.dataSourceType ?? 'dataverse'))) ?? null
+let currentEnvId: string | null | undefined
+async function getCurrentEnvId(): Promise<string | null> {
+  if (currentEnvId !== undefined) return currentEnvId
+  try { currentEnvId = (await getContext()).app.environmentId ?? null } catch { currentEnvId = null }
+  return currentEnvId
+}
+async function nativeSystemUserId(aadId: string): Promise<string | null> {
+  const t = nativeTable(/^systemusers?$/i)
+  if (!t) return null
+  const r: any = await sdk().retrieveMultipleRecordsAsync<any>(t, { filter: `azureactivedirectoryobjectid eq ${aadId}`, select: ['systemuserid'], top: 1 })
+  if (!r?.success) throw new Error(r?.error?.message ?? 'Dataverse query failed (systemusers)')
+  return r.data?.[0]?.systemuserid ?? null
+}
 
 export const liveBackend: Backend = {
   label: 'Live',
@@ -211,7 +254,7 @@ export const liveBackend: Backend = {
     const note = (env: string, kind: ScanNote['kind'], level: ScanNote['level'], text: string) => notes.push({ env, kind, level, text })
     if (!appsOp) note('(all)', 'app', 'error', 'No "list apps" operation in this build - add the Power Apps for Admins connector.')
     if (!flowOps.length) note('(all)', 'flow', 'error', 'No "list flows" operation in this build - add the Power Automate Management (or Power Automate for Admins) connector. Flows cannot be discovered without it.')
-    if (!dvList) note('(all)', 'agent', 'info', 'Copilot Studio agents skipped: the optional "Microsoft Dataverse (legacy)" connector is not in this build.')
+    if (!dvList && !nativeTable(/^bots?$/i)) note('(all)', 'agent', 'warn', 'Copilot Studio agents cannot be scanned: this build has neither the Dataverse "bot" table nor the Dataverse (legacy) connector. Re-run the deploy script.')
 
     const out: Asset[] = []
     const mail = user.email.toLowerCase()
@@ -224,7 +267,9 @@ export const liveBackend: Backend = {
       // ---- apps ----
       if (appsOp) {
         try {
-          const list = asList(await call(appsOp, [env.id]))
+          onProgress(done, envs.length, `${env.name} · apps`)
+          const { items: list, truncated } = await callAll(appsOp, [env.id])
+          if (truncated) note(env.name, 'app', 'warn', `app list was cut off at ${list.length} items (paging limit) - some apps may be missing`)
           let mine = 0
           for (const x of list) {
             const o = x.properties?.owner
@@ -245,7 +290,10 @@ export const liveBackend: Backend = {
       let flowsDone = false
       for (const op of flowOps) {
         try {
-          let list = asList(await call(op, [env.id]))
+          onProgress(done, envs.length, `${env.name} · flows`)
+          const paged = await callAll(op, [env.id])
+          let list = paged.items
+          if (paged.truncated) note(env.name, 'flow', 'warn', `flow list was cut off at ${list.length} items (paging limit) - some flows may be missing`)
           const total = list.length
           let how = 'creator field'
           if (total && !list.some((x) => x.properties?.creator)) {
@@ -283,7 +331,27 @@ export const liveBackend: Backend = {
       if (flowOps.length && !flowsDone) note(env.name, 'flow', 'error', 'All flow list operations failed in this environment (are you an admin there?).')
 
       // ---- Copilot Studio agents (Dataverse bots table) ----
-      if (dvList && env.orgUrl) {
+      await tick()
+      onProgress(done, envs.length, `${env.name} · agents`)
+      const botsTable = nativeTable(/^bots?$/i)
+      const isHome = botsTable && (await getCurrentEnvId()) === env.id
+      if (isHome) {
+        // Environment this app runs in: use its own Dataverse directly.
+        try {
+          const sysId = await nativeSystemUserId(user.id)
+          if (!sysId) note(env.name, 'agent', 'info', 'user has no Dataverse user record here (no agents)')
+          else {
+            const r: any = await sdk().retrieveMultipleRecordsAsync<any>(botsTable!, { filter: `_ownerid_value eq ${sysId}`, select: ['botid', 'name', 'statecode', 'modifiedon', 'createdon', 'ismanaged'], top: 500 })
+            if (!r?.success) throw new Error(r?.error?.message ?? 'query failed')
+            for (const b of r.data ?? []) out.push({
+              key: `agent:${env.id}:${b.botid}`, id: b.botid, kind: 'agent', name: b.name ?? b.botid, envId: env.id, envName: env.name,
+              ownerId: user.id, ownerName: user.name, ownerEmail: user.email, state: b.statecode === 0 ? 'Started' : 'Stopped',
+              createdTime: b.createdon, modifiedTime: b.modifiedon, inSolution: !!b.ismanaged, orgHost: 'native',
+            })
+            note(env.name, 'agent', 'info', `${(r.data ?? []).length} Copilot Studio agent(s) owned by user (this app's own Dataverse)`)
+          }
+        } catch (e) { note(env.name, 'agent', 'warn', `agents: ${(e as Error).message.slice(0, 250)}`) }
+      } else if (dvList && env.orgUrl) {
         try {
           const host = new URL(env.orgUrl).host
           const su = asList(await call(dvList, [], undefined, {}, { dataset: host, table: 'systemusers', '$filter': `azureactivedirectoryobjectid eq ${user.id}`, '$select': 'systemuserid', '$top': 1 }))
@@ -299,7 +367,9 @@ export const liveBackend: Backend = {
             note(env.name, 'agent', 'info', `${bots.length} Copilot Studio agent(s) owned by user`)
           }
         } catch (e) { note(env.name, 'agent', 'warn', `agents: ${(e as Error).message.slice(0, 250)}`) }
-      } else if (dvList && !env.orgUrl) note(env.name, 'agent', 'info', 'no Dataverse database in this environment')
+      } else if (env.orgUrl) {
+        note(env.name, 'agent', 'info', botsTable ? 'agents here need the optional "Microsoft Dataverse (legacy)" connector (the app can only read its own environment natively)' : 'agents not scanned: add Dataverse tables to the build (deploy script does this) or the legacy Dataverse connector')
+      } else note(env.name, 'agent', 'info', 'no Dataverse database in this environment')
 
       onProgress(++done, envs.length, env.name)
     }
@@ -310,6 +380,15 @@ export const liveBackend: Backend = {
     if (asset.kind === 'app') {
       // Power Apps have exactly one owner, so co-owner mode does not apply.
       await call(need('appOwner'), [asset.envId, asset.id], { newAppOwner: to.id })
+      return
+    }
+    if (asset.kind === 'agent' && asset.orgHost === 'native') {
+      const botsTable = nativeTable(/^bots?$/i)
+      if (!botsTable) throw new Error('Dataverse "bot" table is not in this build - re-run the deploy script.')
+      const sysId = await nativeSystemUserId(to.id)
+      if (!sysId) throw new Error('The new owner has no user record in this environment - add them to the environment first.')
+      const r: any = await sdk().updateRecordAsync<any, any>(botsTable, asset.id, { 'ownerid@odata.bind': `/systemusers(${sysId})` })
+      if (!r?.success) throw new Error(r?.error?.message ?? 'Dataverse update failed')
       return
     }
     if (asset.kind === 'agent') {
@@ -333,6 +412,7 @@ export const liveBackend: Backend = {
       const optional = !REQUIRED.includes(k)
       return { name: k + (optional ? ` (optional${NEEDS[k] ? ': ' + NEEDS[k] : ''})` : ''), ok: !!o, detail: o ? `${o.ds} → ${o.op}  [${o.method} ${o.path}]` : 'not found' }
     })
+    rows.push({ name: 'native Dataverse tables (agents in this app\'s own environment)', ok: !!nativeTable(/^bots?$/i) && !!nativeTable(/^systemusers?$/i), detail: `bots: ${nativeTable(/^bots?$/i) ?? 'missing'}, systemusers: ${nativeTable(/^systemusers?$/i) ?? 'missing'}` })
     rows.push({ name: 'flow list candidates', ok: flowLists().length > 0, detail: flowLists().map((o) => `${o.ds} → ${o.op} [${o.method} ${o.path}]`).join('\n') || 'none' })
     const ops = allOps()
     const sources = [...new Set(ops.map((o) => o.ds))]

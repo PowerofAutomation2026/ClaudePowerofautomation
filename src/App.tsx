@@ -8,6 +8,12 @@ const ls = {
   set(k: string, v: unknown) { try { localStorage.setItem(k, JSON.stringify(v)) } catch { /* ignore */ } },
 }
 
+/** Crash forensics: remember what we were doing; if the tab dies (e.g. out of memory) the next load reports where. */
+const crumb = {
+  set(step: string) { ls.set('occ.crumb', { step, at: Date.now(), busy: true }) },
+  clear() { ls.set('occ.crumb', { busy: false }) },
+}
+
 type SortKey = 'name' | 'kind' | 'envName' | 'state' | 'modifiedTime'
 type Panel = null | 'transfer' | 'history' | 'diag'
 
@@ -22,6 +28,7 @@ export default function App() {
   const [user, setUser] = useState<Person | null>(null)
   const [assets, setAssets] = useState<Asset[]>([])
   const [notes, setNotes] = useState<ScanNote[]>([])
+  const [lastCrash, setLastCrash] = useState<{ step: string; at: number } | null>(() => { const c = ls.get<{ busy?: boolean; step?: string; at?: number }>('occ.crumb', {}); return c.busy && c.step ? { step: c.step, at: c.at ?? 0 } : null })
   const [showNotes, setShowNotes] = useState(false)
   const [loading, setLoading] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -44,6 +51,7 @@ export default function App() {
   useEffect(() => { document.documentElement.dataset.theme = theme; ls.set('occ.theme', theme) }, [theme])
   useEffect(() => { ls.set('occ.demo', demo) }, [demo])
   useEffect(() => { ls.set('occ.audit', audit.slice(-500)) }, [audit])
+  useEffect(() => { crumb.clear() }, []) // reaching here means the page loaded; lastCrash was captured above
   const flash = useCallback((m: string) => { setToast(m); setTimeout(() => setToast(null), 2600) }, [])
 
   useEffect(() => {
@@ -59,7 +67,9 @@ export default function App() {
       const p = await backend.resolveUser(target)
       setUser(p)
       const scope = envScope.length ? envs.filter((e) => envScope.includes(e.id)) : envs
-      const { assets: found, notes: scanNotes } = await backend.listAssets(p, scope, (d, t, name) => { setProg(d / t); setLoading(`Scanning ${name} (${d}/${t})`) })
+      crumb.set(`scanning ${p.email} (${scope.length} environment(s))`)
+      const { assets: found, notes: scanNotes } = await backend.listAssets(p, scope, (d, t, name) => { crumb.set(`scanning ${name} for ${p.email}`); setProg(d / t); setLoading(`Scanning ${name} (${d}/${t})`) })
+      crumb.clear()
       setAssets(found)
       setNotes(scanNotes)
       setShowNotes(scanNotes.some((n) => n.level !== 'info') || !found.some((a) => a.kind === 'flow'))
@@ -67,7 +77,7 @@ export default function App() {
       setRecent(r); ls.set('occ.recent', r)
       flash(`Found ${found.length} item(s) for ${p.name}`)
     } catch (e) { setError((e as Error).message); setUser(null) }
-    finally { setLoading(null) }
+    finally { setLoading(null); crumb.clear() }
   }, [backend, email, envs, envScope, recent, flash])
 
   const visible = useMemo(() => {
@@ -134,6 +144,9 @@ export default function App() {
         <button className="btn sm" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? '☀️' : '🌙'}</button>
       </header>
 
+      {lastCrash && <div className="banner" style={{ borderColor: 'var(--bad)', color: 'var(--bad)', background: 'rgba(251,113,133,.08)' }}>
+        Last time this page stopped unexpectedly while <b>{lastCrash.step}</b>{lastCrash.at ? ` (${new Date(lastCrash.at).toLocaleTimeString()})` : ''}. Likely too much data for the browser tab:
+        scan <b>one environment at a time</b> (use the dropdown) and close other tabs. <a href="#" style={{ color: 'inherit' }} onClick={(e) => { e.preventDefault(); setLastCrash(null) }}>Dismiss</a></div>}
       {!hasConnectors && !demo && <div className="banner">No connectors found in this build. Run the deploy script (it adds them), or switch to Demo mode.</div>}
       {demo && <div className="banner" style={{ borderColor: 'var(--accent)', color: 'var(--accent2)', background: 'rgba(124,92,255,.08)' }}>Demo mode – sample tenant, nothing is changed. Try <b>alex.morgan@contoso.com</b>.{' '}
         <a href="#" onClick={(e) => { e.preventDefault(); setDemo(false) }} style={{ color: 'inherit' }}>Go live</a></div>}

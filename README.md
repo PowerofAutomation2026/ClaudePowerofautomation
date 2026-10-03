@@ -73,6 +73,8 @@ connection references re-pointed after transfer.
 * **`InvalidApiVersion`** → the connectors list `api-version` as optional but the service requires it. The app always sends it and, if rejected, reads the accepted versions from the error and retries.
 
 ## Copilot Studio agents (experimental)
+**This app's own environment** is read through the app's built-in Dataverse access: the deploy script runs `pac code add-data-source -a dataverse -t bot` and `-t systemuser`
+(no extra connection). **Other environments** need the optional *Microsoft Dataverse (legacy)* connector.
 Agents are Dataverse `bot` rows. With the optional *Microsoft Dataverse (legacy)* connector the app finds the user's Dataverse record in each
 environment that has a database, lists `bots` owned by them and transfers ownership with `ownerid@odata.bind`. The new owner must already be a user in
 that environment. Agents have a single owner. Verify with a dry run, then one agent, first.
@@ -83,3 +85,6 @@ warnings (for example "not an admin in this environment"). Use *Copy* to share i
 
 * **Browser tab crashes with "Out of Memory"** → fixed in v1.3.0: one SDK client for the whole session, environments scanned one at a time, owner lookups
   capped (400 flows/environment) and limited to 4 at once. If it still happens, scan one environment at a time (pick it in the dropdown) and close other tabs.
+
+* **Crash breadcrumb** → if a tab dies, the next load shows "Last time this page stopped unexpectedly while …" naming the environment/phase it was scanning.
+* Large environments are read page by page (max 10 pages / 20,000 items per list) and the report tells you if a list was cut off.
