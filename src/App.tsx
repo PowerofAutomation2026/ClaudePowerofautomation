@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentCategory, Asset, AssetKind, AuditEntry, Backend, Env, ItemStatus, Person, ScanNote, TransferOptions } from './types'
 import { hasConnectors, pickBackend } from './services'
-import { ago, assetRows, auditRows, download, explainTransferError, powershellFor, risksFor, toCsv } from './util'
+import { ago, assetRows, auditRows, download, explainTransferError, isPartialUpdate, powershellFor, risksFor, toCsv } from './util'
 
 const ls = {
   get<T>(k: string, d: T): T { try { const v = localStorage.getItem(k); return v ? (JSON.parse(v) as T) : d } catch { return d } },
@@ -348,6 +348,19 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
   const needsConfirm = !dry && items.length > 5
   const doneCount = Object.values(status).filter((x) => x.s === 'done' || x.s === 'dry').length
   const failed = items.filter((a) => status[a.key]?.s === 'failed')
+  const partial = failed.filter((a) => a.kind === 'agent' && isPartialUpdate(status[a.key]?.err ?? ''))
+
+  /** Put failed (possibly half-updated) agents back on their original owner. */
+  const restoreOriginal = async () => {
+    setRunning(true); busyRef.current = true
+    let okN = 0; const errs: string[] = []
+    for (const a of partial) {
+      try { await backend.transfer(a, { id: a.ownerId, name: a.ownerName, email: a.ownerEmail }, { mode: 'replace', removeOldOwner: false }); okN++ }
+      catch (e) { errs.push(`${a.name}: ${(e as Error).message}`) }
+    }
+    setMsg({ level: errs.length ? 'error' : 'ok', text: `Restore original owner: ${okN}/${partial.length} restored.${errs.length ? '\n' + errs.join('\n') : ' Check the agents in Copilot Studio.'}` })
+    setRunning(false); busyRef.current = false
+  }
 
   const run = async (list: Asset[]) => {
     const target = toEmail.trim()
@@ -420,14 +433,22 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
         {msg && <div className={`banner`} style={msg.level === 'error' ? { borderColor: 'var(--bad)', color: 'var(--bad)', background: 'rgba(251,113,133,.08)' } : msg.level === 'ok' ? { borderColor: 'var(--ok)', color: 'var(--ok)', background: 'rgba(52,211,153,.08)' } : { borderColor: 'var(--accent)', color: 'var(--accent2)', background: 'rgba(124,92,255,.08)' }}><span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.text}</span></div>}
         {failed.length > 0 && !running && (
           <div className="card" style={{ padding: 12 }}>
-            <b>Why this usually fails</b>
+            <b>{partial.length ? '⚠ Agent left half-updated – what to do' : 'Why this usually fails'}</b>
             <ul style={{ margin: '6px 0 8px', paddingLeft: 18, fontSize: 12.5 }}>
               {explainTransferError(failed[0] ? (status[failed[0].key]?.err ?? '') : '', failed[0]!.kind).map((t, i) => <li key={i} style={{ marginBottom: 4 }}>{t}</li>)}
             </ul>
+            {partial.length > 0 && <button className="btn sm" style={{ marginRight: 8 }} onClick={restoreOriginal}>↩ Restore original owner ({partial.length})</button>}
             <button className="btn sm" onClick={() => navigator.clipboard?.writeText(failed.map((a) => `${a.kind} ${a.name} (${a.envName}) [${a.id}]: ${status[a.key]?.err}`).join('\n\n')).then(() => flash('Error details copied'))}>Copy error details</button>
           </div>)}
         {items.some((a) => a.kind === 'agent') && !running && (
-          <div className="risk info">🤖 Agent transfer checklist: your connection account = System Administrator in the agent's environment · the new owner = System Customizer role there (temporary) + Microsoft 365 Copilot licence · not a classic chatbot.</div>)}
+          <div className="card" style={{ padding: 12, fontSize: 12.5 }}>
+            <b>🤖 Before you transfer agents (otherwise it fails with HTTP 502)</b>
+            <ol style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+              <li>The <b>new owner</b> is a user in the agent's environment and has the <b>System Customizer</b> security role there (Power Platform admin center → Environments → the environment → Users → Manage security roles). Temporary is fine.</li>
+              <li>The new owner has a <b>Copilot Studio / Microsoft 365 Copilot</b> licence.</li>
+              <li>Your connection account is an admin with <b>System Administrator</b> in that environment.</li>
+              <li>The agent is not a classic chatbot and not locked in a managed solution.</li>
+            </ol></div>)}
         {running && <div className="progress"><i style={{ width: `${(doneCount / Math.max(1, items.length)) * 100}%` }} /></div>}
         <div className="row">
           <button className={`btn ${dry ? 'primary' : 'danger'}`} disabled={running || !items.length || (needsConfirm && confirmText !== `TRANSFER ${items.length}`)} onClick={() => run(items)}>

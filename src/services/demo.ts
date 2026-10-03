@@ -80,7 +80,7 @@ export const demoBackend: Backend = {
   },
   async transfer(asset, to, opts) {
     await sleep(300 + rnd() * 600)
-    if (asset.kind === 'agent' && /Policy/.test(asset.name)) throw new Error('HTTP 403: Forbidden - the operation failed (simulated demo error for agent transfer)')
+    if (asset.kind === 'agent' && /Policy|IT Support/.test(asset.name)) throw new Error('HTTP 502: The response is not in a JSON format. — "Failed to reassign agent. The new owner was only partially updated, and the agent may not function correctly until another reassignment is performed." (simulated demo error)')
     if (asset.name === 'Daily backup') throw new Error('Simulated failure: flow is locked by a solution (managed)')
     const real = store.find((a) => a.key === asset.key)
     if (!real) throw new Error('Not found')

@@ -64,10 +64,19 @@ export function risksFor(a: Asset): Risk[] {
   return r
 }
 
+/** True when the service says an agent reassignment started but did not finish (agent may be half-updated). */
+export const isPartialUpdate = (err: string) => /partially updated|only partially|not in a json format/i.test(err)
+
 /** Turn a raw connector error into plain-language likely causes (shown under a failed transfer). */
 export function explainTransferError(err: string, kind: AssetKind): string[] {
   const e = err.toLowerCase()
   const tips: string[] = []
+  if (kind === 'agent' && isPartialUpdate(err)) {
+    tips.push('⚠ The service started the reassignment but could not finish ("only partially updated"). The agent may be half-updated and may not work until a reassignment SUCCEEDS. Fix the cause below, then click Retry – or click "Restore original owner".')
+    tips.push('Cause (Microsoft-documented): the NEW owner is missing the System Customizer security role in the agent\'s environment. In that case the API fails with a generic HTTP 502 "The response is not in a JSON format".')
+    tips.push('Fix: Power Platform admin center → Environments → (the agent\'s environment) → Users → select the new owner → Manage security roles → tick System Customizer → Save. Wait ~1-2 minutes, then Retry. Remove the role afterwards if you like.')
+    tips.push('The new owner must also be a member (user) of that environment and hold a Copilot Studio / Microsoft 365 Copilot licence.')
+  }
   if (/405|method not allowed/.test(e) && kind === 'agent') tips.push('HTTP 405: classic (pre-agent) chatbots are not supported by the reassign API. Use Power Apps → Solutions → the agent → Assign, or the admin center.')
   if (/403|forbidden|unauthor|access is denied|privilege|permission/.test(e))
     tips.push('Permission: the account signed in to the connection must be a Power Platform / AI / tenant admin AND hold the System Administrator role in the item\'s environment.')

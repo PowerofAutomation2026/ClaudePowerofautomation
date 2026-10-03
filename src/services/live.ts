@@ -162,10 +162,21 @@ async function callRaw(o: Op, pathValues: string[] = [], body?: unknown, query: 
     if (!res?.success) {
       const e = res?.error
       const st = e?.status ?? e?.statusCode ?? res?.status
-      const raw = `${st ? `HTTP ${st}: ` : ''}${e?.message ?? (typeof e === 'string' ? e : JSON.stringify(e ?? 'Connector call failed'))}`
-      let pretty = raw
-      try { const j = JSON.parse(raw); pretty = j?.error?.message ?? raw } catch { /* not JSON */ }
-      throw new Error(`${raw.includes('InvalidApiVersion') ? 'InvalidApiVersion: ' : ''}${pretty}`)
+      const rawMsg: string = e?.message ?? (typeof e === 'string' ? e : JSON.stringify(e ?? 'Connector call failed'))
+      // The message is often a JSON document ({"error":{"message":..., "innerError": "<the real reason>"}}): surface both parts.
+      let pretty = rawMsg
+      try {
+        const start = rawMsg.indexOf('{'); const end = rawMsg.lastIndexOf('}')
+        if (start >= 0 && end > start) {
+          const j = JSON.parse(rawMsg.slice(start, end + 1))
+          const er = j?.error ?? j
+          const inner = typeof er?.innerError === 'string' ? er.innerError : er?.innerError?.message
+          pretty = [er?.message, inner].filter(Boolean).join(' — ') || rawMsg
+        }
+      } catch { /* not JSON */ }
+      console.warn('connector error', o.op, st, rawMsg.slice(0, 600))
+      const raw = `${st ? `HTTP ${st}: ` : ''}${pretty}`
+      throw new Error(`${/InvalidApiVersion/i.test(rawMsg) ? 'InvalidApiVersion: ' : ''}${raw}`)
     }
     return res.data
   }

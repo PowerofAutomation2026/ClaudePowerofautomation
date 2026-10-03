@@ -113,3 +113,9 @@ If discovery shows 0, open the Scan report: it prints the owner ids it saw so th
 * Known causes (Microsoft docs / community): the **new owner needs the System Customizer role** in the agent's environment (temporarily) and a Microsoft 365 Copilot licence;
   the connection account needs System Administrator there; **managed-solution** agents can be blocked (make an unmanaged edit or use the admin center *Change owner*);
   **classic chatbots** return HTTP 405.
+
+## v1.7.2 – "HTTP 502 … only partially updated" when transferring an agent
+That is the Copilot Studio reassign API refusing to finish. Documented cause: the **new owner lacks the System Customizer security role in the agent's environment**
+(or isn't a user there / has no licence). The connector only shows a generic *"The response is not in a JSON format"*; the real reason is in `innerError`, which the app now shows.
+1. Admin center → Environments → *(agent's environment)* → Users → new owner → Manage security roles → tick **System Customizer** → Save (wait 1-2 min).
+2. Click **Retry** in the transfer panel. If a failed attempt left the agent half-updated, **↩ Restore original owner** puts it back.
