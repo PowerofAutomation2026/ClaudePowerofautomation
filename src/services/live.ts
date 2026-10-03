@@ -98,23 +98,58 @@ const need = (k: OpKey): Op => {
   return o
 }
 
+/** The connectors mark api-version as "optional", but the Power Platform services reject calls without one. */
 const API_VERSION: Record<string, string> = { powerapps: '2017-08-01', flow: '2016-11-01', platform: '2020-10-01' }
 const defaultApiVersion = (ds: string) => (/powerplatform/i.test(ds) ? API_VERSION.platform : /flow/i.test(ds) ? API_VERSION.flow : API_VERSION.powerapps)
+const PREFERRED_VERSIONS = ['2020-10-01', '2016-11-01', '2017-08-01', '2018-01-01', '2019-05-01', '2020-06-01', '2021-04-01']
+const versionCache: Record<string, string> = {}
+const isApiVersionParam = (name: string) => /^api[-_]?version$/i.test(name)
+
+/** Parse the "supported list of API versions are: …" part of an InvalidApiVersion error and pick one. */
+function pickSupportedVersion(message: string): string | null {
+  const tail = message.split(/supported list/i)[1] ?? message
+  const versions = [...new Set(tail.match(/\d{4}-\d{2}-\d{2}/g) ?? [])]
+  if (!versions.length) return null
+  return PREFERRED_VERSIONS.find((v) => versions.includes(v)) ?? versions[Math.max(0, versions.length - 2)]
+}
 
 async function call(o: Op, pathValues: string[] = [], body?: unknown, query: Record<string, unknown> = {}): Promise<any> {
-  const params: Record<string, unknown> = {}
-  o.pathNames.forEach((n, i) => { if (pathValues[i] !== undefined) params[n] = pathValues[i] })
-  for (const p of o.params) {
-    if (SYNTHETIC.has(p.name.toLowerCase())) continue
-    if (p.in === 'body') params[p.name] = body
-    else if (p.in === 'query') {
-      if (p.name in query) params[p.name] = query[p.name]
-      else if (p.required && /api-?version/i.test(p.name)) params[p.name] = defaultApiVersion(o.ds)
-    } else if (p.in === 'header' && /content-?type/i.test(p.name) && body !== undefined) params[p.name] = 'application/json'
+  const cacheKey = `${o.ds}|${o.op}`
+  const build = (): Record<string, unknown> => {
+    const params: Record<string, unknown> = {}
+    o.pathNames.forEach((n, i) => { if (pathValues[i] !== undefined) params[n] = pathValues[i] })
+    for (const p of o.params) {
+      if (SYNTHETIC.has(p.name.toLowerCase())) continue
+      if (p.in === 'body') params[p.name] = body
+      else if (p.in === 'query') {
+        if (p.name in query) params[p.name] = query[p.name]
+        else if (isApiVersionParam(p.name)) params[p.name] = versionCache[cacheKey] ?? defaultApiVersion(o.ds)   // always send, even if "optional"
+      } else if (p.in === 'header' && /content-?type/i.test(p.name) && body !== undefined) params[p.name] = 'application/json'
+    }
+    return params
   }
-  const res: any = await getClient(dataSourcesInfo as any).executeAsync({ connectorOperation: { tableName: o.ds, operationName: o.op, parameters: params } })
-  if (!res?.success) throw new Error(res?.error?.message ?? String(res?.error ?? 'Connector call failed'))
-  return res.data?.value ?? res.data
+  const run = async () => {
+    const res: any = await getClient(dataSourcesInfo as any).executeAsync({ connectorOperation: { tableName: o.ds, operationName: o.op, parameters: build() } })
+    if (!res?.success) {
+      const e = res?.error
+      const raw = e?.message ?? (typeof e === 'string' ? e : JSON.stringify(e ?? 'Connector call failed'))
+      let pretty = raw
+      try { const j = JSON.parse(raw); pretty = j?.error?.message ?? raw } catch { /* not JSON */ }
+      throw new Error(`${raw.includes('InvalidApiVersion') ? 'InvalidApiVersion: ' : ''}${pretty}`)
+    }
+    return res.data?.value ?? res.data
+  }
+  try {
+    return await run()
+  } catch (err) {
+    const msg = (err as Error).message
+    const hasVersionParam = o.params.some((p) => p.in === 'query' && isApiVersionParam(p.name))
+    if (hasVersionParam && /InvalidApiVersion/i.test(msg)) {
+      const v = pickSupportedVersion(msg)
+      if (v && v !== versionCache[cacheKey]) { versionCache[cacheKey] = v; return await run() }
+    }
+    throw err
+  }
 }
 
 async function mapLimit<T, R>(items: T[], n: number, fn: (x: T) => Promise<R>): Promise<R[]> {

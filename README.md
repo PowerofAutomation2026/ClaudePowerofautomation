@@ -69,3 +69,4 @@ connection references re-pointed after transfer.
   (sets `appId` in `power.config.json`) and updates it in place. Keep `power.config.json` between runs.
 * **`power.config.json is required to push an app`** → the file was missing/unreadable (a UTF-8 BOM from Windows PowerShell breaks `pac`). The deploy script
   now edits it without a BOM, keeps a copy in `.deploy-state/`, restores it if `pac` removes it, and as a last resort publishes under a new dated name.
+* **`InvalidApiVersion`** → the connectors list `api-version` as optional but the service requires it. The app always sends it and, if rejected, reads the accepted versions from the error and retries.
