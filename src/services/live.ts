@@ -1,151 +1,141 @@
 /**
- * Live backend. Uses ONLY the connectors the signed-in admin already has - no Azure app registration:
- *   - Power Apps for Admins       (apps + environments + change app owner)
- *   - Power Automate for Admins   (flows + owner roles)
- *   - Office 365 Users            (email -> Entra object id)
+ * Live backend - NO Azure app registration.
  *
- * `pac code add-data-source` generates a typed service per connector into src/generated/services.
- * Because generated method names/argument order depend on the connector version, each operation is
- * bound by name pattern in OPS below. The Diagnostics panel shows what bound; tweak OPS if needed.
+ * The app runs inside Power Apps, so every call goes through the signed-in admin's own connector
+ * connections via the code-apps SDK (`getClient(...).executeAsync`). The operations are discovered
+ * from the generated `dataSourcesInfo` by their stable REST path + HTTP verb (e.g. POST ...modifyAppOwner),
+ * not by generated method names, so it keeps working whichever connector version `pac` generated.
+ *
+ *   Power Apps for Admins      -> environments, apps, change app owner
+ *   Power Automate for Admins  -> flows, modify flow permissions (owner)
+ *   Office 365 Users           -> email -> Entra object id
  */
-import type { Asset, Backend, Env, Person, TransferOptions } from '../types'
+import { getClient } from '@microsoft/power-apps/data'
+import type { Asset, Backend, Env } from '../types'
 
-type AnyFn = (...a: any[]) => Promise<any>
-type Svc = Record<string, AnyFn>
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const infoModules = import.meta.glob('../../.power/schemas/appschemas/dataSourcesInfo.ts', { eager: true }) as Record<string, any>
+const dataSourcesInfo: Record<string, any> = Object.values(infoModules)[0]?.dataSourcesInfo ?? {}
 
-const modules = import.meta.glob('../generated/services/*.ts') as Record<string, () => Promise<Record<string, unknown>>>
+interface Op { ds: string; op: string; def: { path: string; method: string; parameters: { name: string; in: string; required: boolean }[] } }
 
-async function loadService(fileRegex: RegExp): Promise<{ file: string; svc: Svc } | null> {
-  for (const [path, loader] of Object.entries(modules)) {
-    if (!fileRegex.test(path)) continue
-    const mod = await loader()
-    const svcKey = Object.keys(mod).find((k) => /Service$/.test(k)) ?? Object.keys(mod)[0]
-    return { file: path.split('/').pop()!, svc: mod[svcKey] as Svc }
+function find(dsRe: RegExp, method: string, pathRe: RegExp, notRe?: RegExp): Op | null {
+  for (const [ds, info] of Object.entries(dataSourcesInfo)) {
+    if (!dsRe.test(`${ds} ${info?.tableId ?? ''}`)) continue
+    for (const [op, def] of Object.entries<any>(info.apis ?? {})) {
+      if (String(def.method).toUpperCase() === method && pathRe.test(def.path) && !(notRe && notRe.test(def.path))) return { ds, op, def }
+    }
   }
   return null
 }
 
-function findMethod(svc: Svc, re: RegExp): { name: string; fn: AnyFn } | null {
-  const proto = Object.getPrototypeOf(svc)
-  const names = new Set([...Object.keys(svc), ...Object.getOwnPropertyNames(proto ?? {})])
-  for (const n of names) if (re.test(n) && typeof svc[n] === 'function' && n !== 'constructor') return { name: n, fn: svc[n].bind(svc) }
-  return null
+const PA = /powerappsforadmin/i
+const FL = /flow|automate/i
+const DEFAULT_API_VERSION: Record<string, string> = { pa: '2017-08-01', fl: '2016-11-01' }
+
+/** Discoverable operations, by REST path. */
+const OPS = {
+  envs: () => find(PA, 'GET', /scopes\/admin\/environments\/?(\?|$)/),
+  apps: () => find(PA, 'GET', /scopes\/admin\/environments\/\{[^}/]+\}\/apps\/?(\?|$)/),
+  appOwner: () => find(PA, 'POST', /modifyAppOwner/i),
+  flows: () => find(FL, 'GET', /scopes\/admin\/environments\/\{[^}/]+\}\/(v2\/)?flows\/?(\?|$)/),
+  flowOwner: () => find(FL, 'POST', /\/flows\/\{[^}/]+\}\/modifyPermissions/i),
+  user: () => find(/office365users/i, 'GET', /\/users\/\{[^}/]+\}\/?(\?|$)/, /photo|manager|directReports|trending|relevant/i),
+} as const
+type OpKey = keyof typeof OPS
+
+const need = (k: OpKey): Op => {
+  const o = OPS[k]()
+  if (!o) throw new Error(`Connector operation "${k}" not found. Run the deploy script (it adds the connectors) and check 🩺 Diagnostics.`)
+  return o
 }
 
-/** Method-name patterns per operation. Adjust here if your generated names differ. */
-export const OPS = {
-  apps: { file: /powerappsforadmins/i, method: /^(get)?_?apps?_?(as)?_?admin|adminapps|getappsasadmin/i },
-  envs: { file: /powerappsforadmins/i, method: /^(get)?_?environments?_?(as)?_?admin|adminenvironments?/i },
-  appOwner: { file: /powerappsforadmins/i, method: /(modify|change|put|set)_?app_?owner|appowner/i },
-  flows: { file: /(powerautomateforadmins|flowforadmins|flowmanagement)/i, method: /(get)?_?(list)?_?flows?_?(as)?_?admin|adminflows?|listflowsasadmin/i },
-  flowOwner: { file: /(powerautomateforadmins|flowforadmins|flowmanagement)/i, method: /(modify|put|set|add|change)_?(flow)?_?(owner|permissions|role)/i },
-  users: { file: /office365users/i, method: /^user_?(profile|get)(_v2)?$|userprofile|userget/i },
+/** Build the parameter object by name: path params in path order, one body, required query defaults. */
+async function call(o: Op, pathValues: string[] = [], body?: unknown, query: Record<string, unknown> = {}): Promise<any> {
+  const pathNames = [...o.def.path.matchAll(/\{([^}]+)\}/g)].map((m) => m[1])
+  const params: Record<string, unknown> = {}
+  pathNames.forEach((n, i) => { if (pathValues[i] !== undefined) params[n] = pathValues[i] })
+  for (const p of o.def.parameters) {
+    if (p.in === 'body') params[p.name] = body
+    else if (p.in === 'query') {
+      if (p.name in query) params[p.name] = query[p.name]
+      else if (p.required && /api-version/i.test(p.name)) params[p.name] = DEFAULT_API_VERSION[PA.test(o.ds) ? 'pa' : 'fl']
+    }
+  }
+  const res: any = await getClient(dataSourcesInfo as any).executeAsync({ connectorOperation: { tableName: o.ds, operationName: o.op, parameters: params } })
+  if (!res?.success) throw new Error(res?.error?.message ?? String(res?.error ?? 'Connector call failed'))
+  return res.data?.value ?? res.data
 }
 
-async function bind(key: keyof typeof OPS) {
-  const o = OPS[key]
-  const s = await loadService(o.file)
-  if (!s) return { err: `Connector not added (no file matching ${o.file})` as string }
-  const m = findMethod(s.svc, o.method)
-  if (!m) return { err: `${s.file}: no method matching ${o.method}. Available: ${Object.keys(s.svc).join(', ')}` as string }
-  return { fn: m.fn, label: `${s.file} → ${m.name}` }
-}
-
-function unwrap(res: any): any {
-  if (res && res.success === false) throw new Error(res.error?.message ?? res.error ?? 'Connector call failed')
-  const d = res && 'data' in res ? res.data : res
-  return d?.value ?? d
-}
-
-const stateOf = (s?: string): Asset['state'] =>
-  s === 'Started' || s === 'Stopped' || s === 'Suspended' || s === 'Published' ? s : 'Unknown'
+const stateOf = (s?: string): Asset['state'] => (s === 'Started' || s === 'Stopped' || s === 'Suspended' ? s : 'Unknown')
 
 export const liveBackend: Backend = {
   label: 'Live',
 
   async listEnvironments() {
-    const b = await bind('envs')
-    if (!b.fn) throw new Error(b.err)
-    const rows = unwrap(await b.fn())
-    return (rows as any[]).map<Env>((e) => ({
-      id: e.name ?? e.id,
-      name: e.properties?.displayName ?? e.name,
-      isDefault: !!e.properties?.isDefault,
-      region: e.location,
-    }))
+    const rows: any[] = await call(need('envs'))
+    return rows.map<Env>((e) => ({ id: e.name, name: e.properties?.displayName ?? e.name, isDefault: !!e.properties?.isDefault, region: e.location }))
   },
 
   async resolveUser(q) {
     if (/^[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(q)) return { id: q, name: q, email: q }
-    const b = await bind('users')
-    if (!b.fn) throw new Error(b.err + ' - or paste the user Entra object id instead of an email.')
-    const u = unwrap(await b.fn(q))
+    const u = await call(need('user'), [q])
     if (!u?.id) throw new Error(`No user found for ${q}`)
     return { id: u.id, name: u.displayName ?? q, email: u.mail ?? u.userPrincipalName ?? q }
   },
 
   async listAssets(user, envs, onProgress) {
-    const [ba, bf] = await Promise.all([bind('apps'), bind('flows')])
+    const apps = OPS.apps(); const flows = OPS.flows()
+    if (!apps && !flows) throw new Error('No admin connectors found in this build. Run the deploy script.')
     const out: Asset[] = []
+    const mail = user.email.toLowerCase()
     let done = 0
     for (const env of envs) {
       onProgress(done, envs.length, env.name)
-      if (ba.fn) {
-        try {
-          const apps = unwrap(await ba.fn(env.id)) as any[]
-          for (const a of apps ?? []) {
-            const o = a.properties?.owner
-            if (o?.id !== user.id && o?.email?.toLowerCase() !== user.email.toLowerCase()) continue
-            out.push({
-              key: `app:${env.id}:${a.name}`, id: a.name, kind: 'app', name: a.properties?.displayName ?? a.name,
-              envId: env.id, envName: env.name, ownerId: o.id, ownerName: o.displayName ?? user.name, ownerEmail: o.email ?? user.email,
-              state: 'Published', createdTime: a.properties?.createdTime, modifiedTime: a.properties?.lastModifiedTime,
-              inSolution: !!a.properties?.solutionId, connections: Object.keys(a.properties?.connectionReferences ?? {}).length,
-            })
-          }
-        } catch (e) { console.warn('apps', env.name, e) }
-      }
-      if (bf.fn) {
-        try {
-          const flows = unwrap(await bf.fn(env.id)) as any[]
-          for (const f of flows ?? []) {
-            const c = f.properties?.creator
-            if (c?.userId !== user.id && c?.objectId !== user.id) continue
-            out.push({
-              key: `flow:${env.id}:${f.name}`, id: f.name, kind: 'flow', name: f.properties?.displayName ?? f.name,
-              envId: env.id, envName: env.name, ownerId: user.id, ownerName: user.name, ownerEmail: user.email,
-              state: stateOf(f.properties?.state), createdTime: f.properties?.createdTime, modifiedTime: f.properties?.lastModifiedTime,
-              inSolution: !!f.properties?.workflowEntityId, connections: Object.keys(f.properties?.connectionReferences ?? {}).length,
-            })
-          }
-        } catch (e) { console.warn('flows', env.name, e) }
-      }
+      const [a, f] = await Promise.allSettled([apps ? call(apps, [env.id]) : [], flows ? call(flows, [env.id]) : []])
+      if (a.status === 'fulfilled') for (const x of a.value as any[]) {
+        const o = x.properties?.owner
+        if (!o || (o.id !== user.id && String(o.email ?? o.userPrincipalName ?? '').toLowerCase() !== mail)) continue
+        out.push({
+          key: `app:${env.id}:${x.name}`, id: x.name, kind: 'app', name: x.properties?.displayName ?? x.name, envId: env.id, envName: env.name,
+          ownerId: o.id ?? user.id, ownerName: o.displayName ?? user.name, ownerEmail: o.email ?? user.email, state: 'Published',
+          createdTime: x.properties?.createdTime, modifiedTime: x.properties?.lastModifiedTime,
+          inSolution: !!x.properties?.solutionId, connections: Object.keys(x.properties?.connectionReferences ?? {}).length,
+        })
+      } else console.warn('apps', env.name, a.reason)
+      if (f.status === 'fulfilled') for (const x of f.value as any[]) {
+        const c = x.properties?.creator
+        if (!c || (c.userId !== user.id && c.objectId !== user.id)) continue
+        out.push({
+          key: `flow:${env.id}:${x.name}`, id: x.name, kind: 'flow', name: x.properties?.displayName ?? x.name, envId: env.id, envName: env.name,
+          ownerId: user.id, ownerName: user.name, ownerEmail: user.email, state: stateOf(x.properties?.state),
+          createdTime: x.properties?.createdTime, modifiedTime: x.properties?.lastModifiedTime,
+          inSolution: !!x.properties?.workflowEntityId, connections: Object.keys(x.properties?.connectionReferences ?? {}).length,
+        })
+      } else console.warn('flows', env.name, f.reason)
       onProgress(++done, envs.length, env.name)
     }
     return out
   },
 
-  async transfer(asset, to, opts: TransferOptions) {
+  async transfer(asset, to, opts) {
     if (asset.kind === 'app') {
-      const b = await bind('appOwner')
-      if (!b.fn) throw new Error(b.err)
-      // Power Apps only has a single owner: "co-owner" mode is not applicable, so it always replaces.
-      unwrap(await b.fn(asset.envId, asset.id, { newAppOwner: to.id }))
+      // Power Apps have exactly one owner, so co-owner mode does not apply.
+      await call(need('appOwner'), [asset.envId, asset.id], { newAppOwner: to.id })
       return
     }
-    const b = await bind('flowOwner')
-    if (!b.fn) throw new Error(b.err)
-    const put = [{ properties: { principal: { id: to.id, type: 'User' }, roleName: 'Owner' } }]
-    const del = opts.mode === 'replace' && opts.removeOldOwner ? [{ id: asset.ownerId }] : undefined
-    unwrap(await b.fn(asset.envId, asset.id, { put, ...(del ? { delete: del } : {}) }))
+    const body: Record<string, unknown> = { put: [{ properties: { principal: { id: to.id, type: 'User' }, roleName: 'Owner' } }] }
+    if (opts.mode === 'replace' && opts.removeOldOwner) body.delete = [{ id: asset.ownerId }]
+    await call(need('flowOwner'), [asset.envId, asset.id], body)
   },
 
   async diagnostics() {
-    const keys = Object.keys(OPS) as (keyof typeof OPS)[]
-    const rows = await Promise.all(keys.map(async (k) => {
-      const b = await bind(k)
-      return { name: k, ok: !!b.fn, detail: b.fn ? (b as any).label : (b as any).err }
-    }))
+    const rows: { name: string; ok: boolean; detail: string }[] = (Object.keys(OPS) as OpKey[]).map((k) => {
+      const o = OPS[k]()
+      return { name: k, ok: !!o, detail: o ? `${o.ds} → ${o.op}  [${o.def.method} ${o.def.path}]` : 'not found - connector missing or path differs' }
+    })
+    const sources = Object.keys(dataSourcesInfo)
+    rows.push({ name: 'data sources', ok: sources.length > 0, detail: sources.join(', ') || 'none (build has no connectors)' })
     return rows
   },
 }

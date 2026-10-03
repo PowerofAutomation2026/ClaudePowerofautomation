@@ -296,6 +296,7 @@ function TransferDrawer({ backend, from, items, busyRef, onClose, onAudit, onDon
           {failed.length > 0 && !running && <button className="btn" onClick={() => run(failed)}>↻ Retry {failed.length} failed</button>}
           {lastBatch && !running && <button className="btn" onClick={undo}>↩ Undo last batch</button>}
           <button className="btn" onClick={() => setScript((s) => !s)}>{'</>'} PowerShell</button>
+          <button className="btn" disabled={!items.length} title="Run later with scripts/Invoke-OwnershipPlan.ps1" onClick={() => download('plan.csv', toCsv(items.map((a) => ({ Type: a.kind, EnvironmentId: a.envId, Id: a.id, Name: a.name, OldOwnerId: a.ownerId, NewOwnerId: toEmail.trim() }))), 'text/csv')}>⬇ Plan CSV</button>
         </div>
         {script && (<><pre className="code">{powershellFor(items, { id: '<NEW_OWNER_OBJECT_ID>', name: toEmail, email: toEmail }, opts)}</pre>
           <button className="btn sm" onClick={() => navigator.clipboard?.writeText(powershellFor(items, { id: '<NEW_OWNER_OBJECT_ID>', name: toEmail, email: toEmail }, opts)).then(() => flash('Copied'))}>Copy</button></>)}
@@ -336,7 +337,7 @@ function DiagDrawer({ backend, onClose }: { backend: Backend; onClose: () => voi
   useEffect(() => { backend.diagnostics().then(setRows) }, [backend])
   return (
     <Drawer onClose={onClose}>
-      <h2>Connector diagnostics</h2><div className="sub">Shows which connector operations this build bound to. Adjust <code>OPS</code> in <code>src/services/live.ts</code> if one is missing.</div>
+      <h2>Connector diagnostics</h2><div className="sub">Operations are discovered from the connectors by REST path. If one is missing, the connector was not added or its path differs.</div>
       <div className="col" style={{ marginTop: 12 }}>{!rows ? <span className="spin" /> : rows.map((r) => (
         <div key={r.name} className="item"><span className={`pill ${r.ok ? 'ok' : 'bad'}`}>{r.ok ? 'bound' : 'missing'}</span><div><div className="name">{r.name}</div><div className="id">{r.detail}</div></div></div>))}</div>
     </Drawer>)

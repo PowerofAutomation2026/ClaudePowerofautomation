@@ -35,11 +35,16 @@ npm run dev      # Demo mode in the browser
 npm run build
 ```
 
+## Fallback without the UI (still no app registration)
+In the transfer panel click **⬇ Plan CSV** (put the new owner's *object id* in `NewOwnerId`), then run
+`./scripts/Invoke-OwnershipPlan.ps1 -PlanCsv plan.csv -WhatIf` and again without `-WhatIf`. It uses Microsoft's own admin
+module with interactive sign-in.
+
 ## Important: verify the connector bindings
-`pac code add-data-source` generates connector services into `src/generated/services`. Method names and
-argument order depend on the connector version, so `src/services/live.ts` binds each operation by name pattern
-(`OPS`). After deploying, open **🩺 Diagnostics** in the app: every operation should say *bound*. If one says
-*missing*, adjust the pattern (or argument shape) in `OPS` for your generated service. This could not be tested
+The app calls connectors through the code-apps SDK (`getClient().executeAsync`) using the operations in the generated
+`.power/schemas/appschemas/dataSourcesInfo.ts`. `src/services/live.ts` finds each operation by its REST path and verb
+(e.g. `POST …/modifyAppOwner`), so generated method names don't matter. After deploying, open **🩺 Diagnostics**:
+every operation should say *bound*. If one is missing, adjust its path pattern in `OPS`. This could not be tested
 against a live tenant while building, so treat the first Live run as a pilot: use **Dry run**, then try one item.
 
 Notes: Power Apps have a single owner (co-owner mode applies to flows only). Solution flows may need their
