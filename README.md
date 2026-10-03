@@ -126,3 +126,8 @@ then grants *Environment Maker* itself. (System Customizer appears only in a com
 * Add the new owner as a **member** of the environment first (admin center → Environments → *env* → Users → Add user, lowest role), wait 1-2 min, transfer.
 * The app now asks you to confirm the checklist before a real agent transfer, and for agents in the app's own environment it **checks the new owner's user record first** and stops *before* calling the service (no half-updated agents).
 * Only if it still fails: temporarily add System Customizer, retry, remove.
+
+## v1.7.4 – built-in "add new owner to the environment" step (no roles)
+Before a real agent transfer the app calls the Power Platform for Admins operation **Add Admin Power Apps Sync User** for each agent environment, which makes the new owner a
+member (Dataverse user record) of that environment without assigning any security role – Microsoft's documented requirement for a reassign. Untick it in the panel to skip. If it fails
+(for example the connection account lacks rights) the error is shown and the transfer still proceeds. Wait ~1 min and Retry if the reassign reports "partially updated".

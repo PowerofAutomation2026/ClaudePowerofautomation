@@ -344,6 +344,7 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
   const [running, setRunning] = useState(false)
   const [confirmText, setConfirmText] = useState('')
   const [agentOk, setAgentOk] = useState(false)
+  const [prepare, setPrepare] = useState(true)
   const [lastBatch, setLastBatch] = useState<{ id: string; to: Person; keys: string[] } | null>(null)
   const [script, setScript] = useState(false)
   const needsConfirm = !dry && items.length > 5
@@ -375,7 +376,19 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
       setMsg({ level: 'error', text: `New owner not found: ${(e as Error).message}` }); setRunning(false); busyRef.current = false; return
     }
     if (to.id === from.id) { setMsg({ level: 'error', text: 'The new owner is the same person as the current owner.' }); setRunning(false); busyRef.current = false; return }
-    setMsg({ level: 'info', text: `${dry ? 'Simulating' : 'Transferring'} ${list.length} item(s) to ${to.name} (${to.email})…` })
+    // Agents: make the new owner a member of each agent environment first (no roles) - Microsoft's documented requirement.
+    let prepNotes = ''
+    const agentEnvs = [...new Map(list.filter((a) => a.kind === 'agent').map((a) => [a.envId, a.envName])).entries()]
+    if (!dry && prepare && backend.prepareOwner && agentEnvs.length) {
+      setMsg({ level: 'info', text: `Adding ${to.email} as a member of ${agentEnvs.length} environment(s)…` })
+      const lines: string[] = []
+      for (const [eid, ename] of agentEnvs) {
+        try { lines.push(`✔ ${ename}: ${await backend.prepareOwner(eid, to)}`) } catch (e) { lines.push(`✖ ${ename}: could not add as member – ${(e as Error).message}`) }
+      }
+      prepNotes = '\n\nEnvironment membership step:\n' + lines.join('\n')
+      await new Promise((r) => setTimeout(r, 4000)) // let the user record sync before reassigning
+    }
+    setMsg({ level: 'info', text: `${dry ? 'Simulating' : 'Transferring'} ${list.length} item(s) to ${to.name} (${to.email})…${prepNotes}` })
     const batch = new Date().toISOString()
     const entries: AuditEntry[] = []
     const ok: string[] = []
@@ -402,7 +415,7 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
     const firstErr = failedEntries[0]?.error
     setMsg({ level: nFail ? 'error' : 'ok', text: dry
       ? `Dry run finished: ${nOk} OK, ${nFail} would fail. NOTHING was changed. Untick "Dry run" and click "Transfer now" to really move ownership to ${to.name}.`
-      : `Transfer finished: ${nOk} moved to ${to.name}, ${nFail} failed.${firstErr ? `\n\nError from the service:\n${firstErr}` : ''}` })
+      : `Transfer finished: ${nOk} moved to ${to.name}, ${nFail} failed.${firstErr ? `\n\nError from the service:\n${firstErr}` : ''}${prepNotes}` })
     flash(dry ? 'Dry run complete – nothing changed' : `Transferred ${ok.length}/${list.length}`)
     setRunning(false); busyRef.current = false
   }
@@ -440,7 +453,7 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
               {explainTransferError(failed[0] ? (status[failed[0].key]?.err ?? '') : '', failed[0]!.kind).map((t, i) => <li key={i} style={{ marginBottom: 4 }}>{t}</li>)}
             </ul>
             {partial.length > 0 && <button className="btn sm" style={{ marginRight: 8 }} onClick={restoreOriginal}>↩ Restore original owner ({partial.length})</button>}
-            <button className="btn sm" onClick={() => navigator.clipboard?.writeText(failed.map((a) => `${a.kind} ${a.name} (${a.envName}) [${a.id}]: ${status[a.key]?.err}`).join('\n\n')).then(() => flash('Error details copied'))}>Copy error details</button>
+            <button className="btn sm" onClick={() => navigator.clipboard?.writeText(failed.map((a) => `${a.kind} ${a.name}\n  environment: ${a.envName} (${a.envId})\n  id: ${a.id}\n  new owner: ${toEmail}\n  when: ${new Date().toISOString()}\n  error: ${status[a.key]?.err}`).join('\n\n')).then(() => flash('Error details copied'))}>Copy error details</button>
           </div>)}
         {needsAgentOk && !running && (
           <div className="card" style={{ padding: 12, fontSize: 12.5 }}>
@@ -451,6 +464,7 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
               <li>Your connection account is an admin with <b>System Administrator</b> in that environment.</li>
               <li>The agent is not a classic chatbot and not locked in a managed solution.</li>
             </ol>
+            <label className="row" style={{ marginBottom: 6 }}><input type="checkbox" checked={prepare} onChange={(e) => setPrepare(e.target.checked)} /> <b>Add the new owner to each agent's environment first</b> (membership only – no security roles) – recommended</label>
             <label className="row"><input type="checkbox" checked={agentOk} onChange={(e) => setAgentOk(e.target.checked)} /> <b>I checked these</b> – a failed attempt can leave an agent half-updated.</label>
           </div>)}
         {running && <div className="progress"><i style={{ width: `${(doneCount / Math.max(1, items.length)) * 100}%` }} /></div>}

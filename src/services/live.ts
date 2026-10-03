@@ -100,6 +100,10 @@ const OPS = {
   agentReassign: () => { const o = allOps(); return pick(
     o.find((x) => x.norm === 'reassigncopilotagent'),
     o.find((x) => x.method === 'POST' && /botAdminOperations\/reassign/i.test(x.path))) },
+  /** Power Platform for Admins: "Add Admin Power Apps Sync User" = add a user as a member (Dataverse user record) of an environment, no roles needed. */
+  syncUser: () => { const o = allOps(); return pick(
+    o.find((x) => x.norm === 'addadminpowerappssyncuser'),
+    o.find((x) => x.method === 'POST' && /\/(addUser|syncUser|addsyncuser)\b/i.test(x.path))) },
   /** Microsoft Dataverse (legacy): list / patch rows in ANY environment by passing `dataset` (the org host). */
   dvList: () => { const o = allOps(); return pick(
     o.find((x) => /commondataservice/i.test(x.ds) && x.method === 'GET' && /datasets\/\{dataset\}\/tables\/\{table\}\/items$/i.test(bare(x.path)))) },
@@ -111,7 +115,7 @@ const OPS = {
 } as const
 type OpKey = keyof typeof OPS
 const REQUIRED: OpKey[] = ['apps', 'appOwner', 'user']
-const NEEDS: Partial<Record<OpKey, string>> = { envs: 'environment list', flows: 'flow list', flowOwner: 'change flow owner', flowOwners: 'flow owners lookup (only if list has no creator)', dvList: 'agents fallback (legacy Dataverse read)', dvUpdate: 'agents fallback (legacy Dataverse write)', inventory: 'Copilot Studio agents - discovery (all environments)', agentReassign: 'Copilot Studio agents - transfer' }
+const NEEDS: Partial<Record<OpKey, string>> = { envs: 'environment list', flows: 'flow list', flowOwner: 'change flow owner', flowOwners: 'flow owners lookup (only if list has no creator)', dvList: 'agents fallback (legacy Dataverse read)', dvUpdate: 'agents fallback (legacy Dataverse write)', inventory: 'Copilot Studio agents - discovery (all environments)', agentReassign: 'Copilot Studio agents - transfer', syncUser: 'add new owner to an environment (membership, no roles)' }
 
 const need = (k: OpKey): Op => {
   const o = OPS[k]()
@@ -528,6 +532,19 @@ export const liveBackend: Backend = {
       onProgress(++done, envs.length, env.name)
     }
     return { assets: out, notes }
+  },
+
+  async prepareOwner(envId, to) {
+    const op = OPS.syncUser()
+    if (!op) return 'skipped: "Add Admin Power Apps Sync User" operation is not in this build (Power Platform for Admins connector)'
+    try {
+      await callRaw(op, [envId], { ObjectId: to.id })
+      return 'added as an environment member (or already was)'
+    } catch (e) {
+      const m = (e as Error).message
+      if (/already|exists|conflict|409/i.test(m)) return 'already a member'
+      throw new Error(m)
+    }
   },
 
   async transfer(asset, to, opts) {

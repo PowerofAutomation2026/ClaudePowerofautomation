@@ -78,6 +78,10 @@ export const demoBackend: Backend = {
     const assets = store.filter((a) => a.ownerId === user.id && envs.some((e) => e.id === a.envId)).map((a) => ({ ...a }))
     return { assets, notes: [{ env: '(demo)', kind: 'env' as const, level: 'info' as const, text: `Scanned ${envs.length} sample environments` }] }
   },
+  async prepareOwner(envId, to) {
+    await sleep(400)
+    return `added ${to.email} as a member of ${envId} (demo)`
+  },
   async transfer(asset, to, opts) {
     await sleep(300 + rnd() * 600)
     if (asset.kind === 'agent' && /Policy|IT Support/.test(asset.name)) throw new Error('HTTP 502: The response is not in a JSON format. — "Failed to reassign agent. The new owner was only partially updated, and the agent may not function correctly until another reassignment is performed." (simulated demo error)')
