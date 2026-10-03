@@ -15,7 +15,7 @@
  */
 import { getClient } from '@microsoft/power-apps/data'
 import { getContext } from '@microsoft/power-apps/app'
-import type { Asset, Backend, Env, ScanNote } from '../types'
+import type { AgentCategory, Asset, Backend, Env, ScanNote } from '../types'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const infoModules = import.meta.glob('../../.power/schemas/appschemas/dataSourcesInfo.ts', { eager: true }) as Record<string, any>
@@ -228,6 +228,38 @@ const invProp = (r: any, k: string): any => {
 }
 const invRows = (d: any): any[] => (Array.isArray(d?.data) ? d.data : Array.isArray(d?.body?.data) ? d.body.data : Array.isArray(d) ? d : asList(d))
 
+/** Short string facts about an inventory row (used as classification evidence and shown in the UI). */
+function invMeta(r: any): Record<string, string> {
+  let p = r?.properties
+  if (typeof p === 'string') { try { p = JSON.parse(p) } catch { p = {} } }
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries<any>(p ?? {})) {
+    if (v == null || typeof v === 'object') continue
+    const sv = String(v)
+    if (sv.length <= 80 && !/^(ownerId|environmentId|tenantId|displayName|createdAt|modifiedAt|lastModifiedAt)$/i.test(k)) out[k] = sv
+  }
+  if (r?.kind) out.kind = String(r.kind)
+  return out
+}
+
+/**
+ * The inventory type "microsoft.copilotstudio/agents" is broader than "agents you build in Copilot Studio"
+ * (it also contains Agent Builder agents, CLI harness agents, and tool / MCP style entries). Classify so the UI can
+ * show real Copilot Studio agents by default and hide the rest behind a toggle.
+ */
+function classifyAgent(r: any): { category: AgentCategory; meta: Record<string, string> } {
+  const meta = invMeta(r)
+  const name = String(invProp(r, 'displayName') ?? r?.name ?? '')
+  const hay = `${name} ${Object.entries(meta).filter(([k]) => /type|kind|categor|template|schema|source|origin|harness|createdIn|name/i.test(k)).map(([, v]) => v).join(' ')}`
+  const createdIn = String(meta.createdIn ?? '').toLowerCase()
+  let category: AgentCategory = 'agent'
+  if (String(meta.isCLIAgent ?? '').toLowerCase() === 'true') category = 'cli'
+  else if (/(^|[^a-z0-9])mcp([^a-z0-9]|$)|model[ -]context[ -]protocol/i.test(hay)) category = 'mcp'
+  else if (/(^|[^a-z0-9])(tool|tools|connector action|plugin)([^a-z0-9]|$)/i.test(hay)) category = 'tool'
+  else if (/agent ?builder|m365 ?copilot|microsoft ?365|copilot ?chat|word|excel|powerpoint|outlook|sharepoint|teams ?toolkit/i.test(createdIn)) category = 'agentbuilder'
+  return { category, meta }
+}
+
 async function inventoryAgents(op: Op, ownerAad: string | null): Promise<{ rows: any[]; total?: number; truncated: boolean }> {
   const rows: any[] = []
   let token: string | undefined
@@ -338,17 +370,27 @@ export const liveBackend: Backend = {
           }
         }
         let inScopeCount = 0
+        const cat: Record<string, number> = {}
+        const seen: Record<string, Set<string>> = {}
         for (const r of owned) {
           const eid = String(invProp(r, 'environmentId') ?? '')
           if (!inScope.has(eid.toLowerCase())) continue
           inScopeCount++
           const id = String(r.name ?? invProp(r, 'agentId') ?? '')
+          const { category, meta } = classifyAgent(r)
+          cat[category] = (cat[category] ?? 0) + 1
+          for (const [k, v] of Object.entries(meta)) { (seen[k] ??= new Set()).add(v); if ((seen[k]?.size ?? 0) > 6) seen[k]!.delete(v) }
           out.push({
             key: `agent:${eid}:${id}`, id, kind: 'agent', name: invProp(r, 'displayName') ?? id, envId: eid, envName: envName.get(eid.toLowerCase()) ?? eid,
             ownerId: user.id, ownerName: user.name, ownerEmail: user.email, state: 'Started',
             createdTime: invProp(r, 'createdAt'), modifiedTime: invProp(r, 'modifiedAt') ?? invProp(r, 'lastModifiedAt'), orgHost: 'inventory',
+            category, meta,
           })
         }
+        const catText = Object.entries(cat).map(([k, v]) => `${k}: ${v}`).join(', ') || 'none'
+        note('(all)', 'agent', 'info', `Inventory classification of the user's items: ${catText}. Only "agent" (real Copilot Studio agents) is shown by default; the rest are hidden behind a toggle.`)
+        const evidence = Object.entries(seen).map(([k, v]) => `${k}={${[...v].join(' | ')}}`).join('; ')
+        if (evidence) note('(all)', 'agent', 'info', `Inventory properties seen (for tuning the filter): ${evidence.slice(0, 700)}`)
         agentsViaInventory = true
         note('(all)', 'agent', 'info', `Copilot Studio inventory: ${owned.length} agent(s) owned by user in the tenant, ${inScopeCount} in the scanned environment(s) (${via}${res?.truncated ? '; list truncated' : ''})`)
       } catch (e) { note('(all)', 'agent', 'warn', `agent inventory failed: ${(e as Error).message.slice(0, 300)} - falling back to per-environment Dataverse`) }

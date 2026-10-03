@@ -98,3 +98,11 @@ show up from one deployment. Transfer uses *Reassign the owner of the bot* (`Rea
 Requirements: the connection's account must be a tenant/Power Platform admin and hold **System Administrator** in the agent's environment; the new owner needs the
 **System Customizer** role there (temporarily) and a Microsoft 365 Copilot licence. Classic chatbots are not supported by the reassign API (HTTP 405).
 If discovery shows 0, open the Scan report: it prints the owner ids it saw so the id format can be compared.
+
+## v1.7.0 – only real Copilot Studio agents + new look
+* The tenant inventory type `microsoft.copilotstudio/agents` also contains Agent Builder agents, CLI-harness agents and tool / MCP style entries. Every item is
+  classified (`agent`, `agentbuilder`, `tool`, `mcp`, `cli`, `other`) from its inventory properties. **Only `agent` is shown and transferable by default**; the rest are
+  counted in a banner ("N other inventory items are hidden") with a *Show them* toggle. The Scan report prints the classification counts and the property values it saw,
+  so the rules can be tuned from real data.
+* New interface: animated aurora background, profile hero with type-mix bar (blue = apps, orange = flows, aqua = agents – validated colour slots 1-3 with direct labels),
+  icon stat tiles with count-up, tabs with counts, type chips, status dots, shimmer skeleton while scanning. Dark and light themes.

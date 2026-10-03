@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Asset, AssetKind, AuditEntry, Backend, Env, ItemStatus, Person, ScanNote, TransferOptions } from './types'
+import type { AgentCategory, Asset, AssetKind, AuditEntry, Backend, Env, ItemStatus, Person, ScanNote, TransferOptions } from './types'
 import { hasConnectors, pickBackend } from './services'
 import { ago, assetRows, auditRows, download, powershellFor, risksFor, toCsv } from './util'
 
@@ -17,6 +17,52 @@ const crumb = {
 type SortKey = 'name' | 'kind' | 'envName' | 'state' | 'modifiedTime'
 type Panel = null | 'transfer' | 'history' | 'diag'
 
+
+const KIND_UI: Record<AssetKind, { label: string; plural: string; icon: string }> = {
+  app: { label: 'App', plural: 'Apps', icon: '📱' },
+  flow: { label: 'Flow', plural: 'Flows', icon: '⚡' },
+  agent: { label: 'Agent', plural: 'Agents', icon: '🤖' },
+}
+const CAT_LABEL: Record<AgentCategory, string> = { agent: 'Copilot Studio agent', agentbuilder: 'Agent Builder', tool: 'Tool', mcp: 'MCP', cli: 'CLI agent', other: 'Other' }
+
+function useCountUp(target: number) {
+  const [v, setV] = useState(0)
+  useEffect(() => {
+    let raf = 0
+    const t0 = performance.now()
+    const step = (t: number) => { const p = Math.min(1, (t - t0) / 650); setV(Math.round(target * (1 - Math.pow(1 - p, 3)))); if (p < 1) raf = requestAnimationFrame(step) }
+    raf = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(raf)
+  }, [target])
+  return v
+}
+const Num = ({ n }: { n: number }) => <>{useCountUp(n)}</>
+
+function Avatar({ name }: { name: string }) {
+  const initials = name.split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((x) => x[0]!.toUpperCase()).join('') || '?'
+  return <div className="avatar" aria-hidden>{initials}</div>
+}
+
+/** Part-to-whole: one stacked bar, 2px gaps, direct count labels + a legend (identity never colour-only). */
+function MixBar({ counts, active, onPick }: { counts: Record<AssetKind, number>; active: 'all' | AssetKind; onPick: (k: 'all' | AssetKind) => void }) {
+  const total = counts.app + counts.flow + counts.agent
+  const kinds = (['app', 'flow', 'agent'] as const).filter((k) => counts[k] > 0)
+  if (!total) return null
+  return (
+    <div className="mix">
+      <div className="mixbar" role="img" aria-label={`Mix of ${total} items: ${kinds.map((k) => `${counts[k]} ${KIND_UI[k].plural.toLowerCase()}`).join(', ')}`}>
+        {kinds.map((k) => (
+          <button key={k} className={`seg-${k}${active === k ? ' on' : ''}`} style={{ flexGrow: counts[k] }} title={`${KIND_UI[k].plural}: ${counts[k]} (${Math.round((counts[k] / total) * 100)}%) – click to filter`}
+            onClick={() => onPick(active === k ? 'all' : k)}>
+            <span>{KIND_UI[k].icon} {counts[k]}</span>
+          </button>))}
+      </div>
+      <div className="mixlegend">
+        {kinds.map((k) => <span key={k}><i className={`sw-${k}`} />{KIND_UI[k].plural} <b>{counts[k]}</b> <em>{Math.round((counts[k] / total) * 100)}%</em></span>)}
+      </div>
+    </div>)
+}
+
 export default function App() {
   const [theme, setTheme] = useState<string>(() => ls.get('occ.theme', 'dark'))
   const [demo, setDemo] = useState<boolean>(() => ls.get('occ.demo', !hasConnectors))
@@ -26,7 +72,8 @@ export default function App() {
   const [envScope, setEnvScope] = useState<string[]>([]) // empty = all
   const [email, setEmail] = useState('')
   const [user, setUser] = useState<Person | null>(null)
-  const [assets, setAssets] = useState<Asset[]>([])
+  const [allAssets, setAssets] = useState<Asset[]>([])
+  const [showOthers, setShowOthers] = useState(false)
   const [notes, setNotes] = useState<ScanNote[]>([])
   const [lastCrash, setLastCrash] = useState<{ step: string; at: number } | null>(() => { const c = ls.get<{ busy?: boolean; step?: string; at?: number }>('occ.crumb', {}); return c.busy && c.step ? { step: c.step, at: c.at ?? 0 } : null })
   const [showNotes, setShowNotes] = useState(false)
@@ -80,6 +127,16 @@ export default function App() {
     finally { setLoading(null); crumb.clear() }
   }, [backend, email, envs, envScope, recent, flash])
 
+  // Only real Copilot Studio agents by default; tools / MCP / Agent Builder / CLI items sit behind a toggle.
+  const assets = useMemo(() => allAssets.filter((a) => showOthers || a.kind !== 'agent' || !a.category || a.category === 'agent'), [allAssets, showOthers])
+  const hiddenCount = allAssets.length - assets.length
+  const hiddenByCat = useMemo(() => {
+    const m: Record<string, number> = {}
+    allAssets.filter((a) => a.kind === 'agent' && a.category && a.category !== 'agent').forEach((a) => { m[a.category!] = (m[a.category!] ?? 0) + 1 })
+    return m
+  }, [allAssets])
+  const counts = useMemo(() => ({ app: assets.filter((a) => a.kind === 'app').length, flow: assets.filter((a) => a.kind === 'flow').length, agent: assets.filter((a) => a.kind === 'agent').length }), [assets])
+
   const visible = useMemo(() => {
     const t = q.toLowerCase()
     const list = assets.filter((a) =>
@@ -132,9 +189,10 @@ export default function App() {
 
   return (
     <div className="app">
+      <div className="aurora" aria-hidden />
       <header className="top">
         <div className="logo">🛡️</div>
-        <div><h1>Ownership Command Center</h1><div className="sub">Find &amp; transfer Power Apps, Flows and Copilot Studio agents across every environment · no app registration</div></div>
+        <div><h1>Ownership <span className="grad">Command Center</span></h1><div className="sub">Find &amp; transfer Power Apps, Flows and Copilot Studio agents across every environment · no app registration</div></div>
         <div className="spacer" />
         <span className="pill mut" title="Build running in this tab - if it is old, hard-refresh (Ctrl+Shift+R)">{__BUILD__}</span>
         <span className={`pill ${demo ? 'warn' : 'ok'}`}>{demo ? 'DEMO DATA' : 'LIVE'}</span>
@@ -161,7 +219,8 @@ export default function App() {
           <button className="btn primary" disabled={!!loading || !email.trim() || !envs.length}>{loading ? <span className="spin" /> : '🔎'} Scan</button>
         </form>
         {recent.length > 0 && <div className="chips">{recent.map((r) => <span key={r} className="chip" onClick={() => { setEmail(r); search(r) }}>{r}</span>)}</div>}
-        {loading && <div style={{ marginTop: 12 }}><div className="sub">{loading}</div><div className="progress"><i style={{ width: `${prog * 100}%` }} /></div></div>}
+        {loading && <div style={{ marginTop: 14 }}><div className="sub"><span className="spin" /> {loading}</div><div className="progress"><i style={{ width: `${Math.max(4, prog * 100)}%` }} /></div>
+          <div className="skeleton-row"><div className="skeleton" /><div className="skeleton" /><div className="skeleton" /><div className="skeleton" /></div></div>}
         {error && <div className="risk" style={{ marginTop: 10, color: 'var(--bad)' }}>⚠ {error} <button type="button" className="btn sm" onClick={() => setPanel('diag')}>🩺 Open diagnostics</button></div>}
       </section>
 
@@ -183,20 +242,37 @@ export default function App() {
 
       {user && !loading && (
         <>
+          <section className="card hero">
+            <Avatar name={user.name} />
+            <div className="hero-id">
+              <div className="hero-name">{user.name}</div>
+              <div className="sub">{user.email}</div>
+              <div className="sub">{allAssets.length ? `${assets.length} item(s) across ${byEnv.length} environment(s)` : 'Nothing owned in the scanned environments'}</div>
+            </div>
+            <MixBar counts={counts} active={kind} onPick={setKind} />
+          </section>
+
           <div className="stats">
-            <div className="card stat"><div className="n">{assets.length}</div><div className="l">Items owned by {user.name}</div></div>
-            <div className="card stat"><div className="n">{assets.filter((a) => a.kind === 'app').length}</div><div className="l">Canvas / model apps</div></div>
-            <div className="card stat"><div className="n">{assets.filter((a) => a.kind === 'flow').length}</div><div className="l">Cloud flows</div></div>
-            <div className="card stat"><div className="n">{assets.filter((a) => a.kind === 'agent').length}</div><div className="l">Copilot Studio agents</div></div>
-            <div className="card stat"><div className="n">{stale}</div><div className="l">Stale &gt; 6 months</div></div>
-            <div className="card" style={{ gridColumn: 'span 2' }}>
-              <div className="l sub">BY ENVIRONMENT (click to filter)</div>
-              <div className="bars">{byEnv.map((e) => <div key={e.id} className="bar" onClick={() => setEnvFilter(envFilter === e.id ? 'all' : e.id)}><span>{e.name}</span><i style={{ width: `${(e.n / maxEnv) * 100}%` }} /><b>{e.n}</b></div>)}</div>
+            <div className="card stat"><div className="ico">📦</div><div className="n"><Num n={assets.length} /></div><div className="l">Items owned</div></div>
+            <div className="card stat t-app"><div className="ico">📱</div><div className="n"><Num n={counts.app} /></div><div className="l">Apps</div></div>
+            <div className="card stat t-flow"><div className="ico">⚡</div><div className="n"><Num n={counts.flow} /></div><div className="l">Cloud flows</div></div>
+            <div className="card stat t-agent"><div className="ico">🤖</div><div className="n"><Num n={counts.agent} /></div><div className="l">Copilot Studio agents</div></div>
+            <div className="card stat"><div className="ico">🕸️</div><div className="n"><Num n={stale} /></div><div className="l">Stale &gt; 6 months</div></div>
+            <div className="card envcard">
+              <div className="l sub">BY ENVIRONMENT · click to filter</div>
+              <div className="bars">{byEnv.map((e) => <div key={e.id} className={`bar${envFilter === e.id ? ' on' : ''}`} onClick={() => setEnvFilter(envFilter === e.id ? 'all' : e.id)}><span>{e.name}</span><i style={{ width: `${(e.n / maxEnv) * 100}%` }} /><b>{e.n}</b></div>)}</div>
             </div>
           </div>
 
+          {hiddenCount > 0 && (
+            <div className="banner hidden-note">
+              🛈 <b>{hiddenCount}</b> other inventory item(s) are {showOthers ? 'shown' : 'hidden'} because they are <b>not Copilot Studio agents</b>
+              ({Object.entries(hiddenByCat).map(([c, n]) => `${n} ${CAT_LABEL[c as AgentCategory] ?? c}`).join(', ')}).{' '}
+              <a href="#" onClick={(e) => { e.preventDefault(); setShowOthers((v) => !v) }}>{showOthers ? 'Hide them' : 'Show them'}</a>
+            </div>)}
+
           <div className="toolbar">
-            <div className="seg">{(['all', 'app', 'flow', 'agent'] as const).map((k) => <button key={k} className={kind === k ? 'on' : ''} onClick={() => setKind(k)}>{k === 'all' ? 'All' : k === 'app' ? 'Apps' : k === 'flow' ? 'Flows' : 'Agents'}</button>)}</div>
+            <div className="seg">{(['all', 'app', 'flow', 'agent'] as const).map((k) => <button key={k} className={kind === k ? 'on' : ''} onClick={() => setKind(k)}>{k === 'all' ? '✨ All' : `${KIND_UI[k].icon} ${KIND_UI[k].plural}`} <em>{k === 'all' ? assets.length : counts[k]}</em></button>)}</div>
             <input placeholder="Filter by name…" value={q} onChange={(e) => setQ(e.target.value)} />
             <select value={envFilter} onChange={(e) => setEnvFilter(e.target.value)}><option value="all">Any environment</option>{byEnv.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select>
             <select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)}><option value="all">Any state</option>{['Started', 'Stopped', 'Suspended', 'Published'].map((s) => <option key={s}>{s}</option>)}</select>
@@ -206,7 +282,7 @@ export default function App() {
           </div>
 
           <div className="card tw">
-            {visible.length === 0 ? <div className="empty"><div className="big">🫥</div>Nothing matches.</div> : (
+            {visible.length === 0 ? <div className="empty"><div className="big">🫥</div>Nothing matches these filters.</div> : (
               <table>
                 <thead><tr>
                   <th><input type="checkbox" checked={allVisibleSelected} onChange={selectVisible} /></th>
@@ -217,9 +293,9 @@ export default function App() {
                   <tr key={a.key} className={sel.has(a.key) ? 'sel' : ''} onClick={() => toggle(a.key)}>
                     <td><input type="checkbox" checked={sel.has(a.key)} readOnly /></td>
                     <td><div className="name">{a.name}</div><div className="id">{a.id}</div></td>
-                    <td><span className={`pill ${a.kind}`}>{a.kind === 'app' ? 'App' : a.kind === 'flow' ? 'Flow' : 'Agent'}</span></td>
+                    <td><span className={`kind k-${a.kind}`}>{KIND_UI[a.kind].icon} {KIND_UI[a.kind].label}</span>{a.kind === 'agent' && a.category && a.category !== 'agent' && <span className="pill warn" style={{ marginLeft: 6 }} title={a.meta ? Object.entries(a.meta).map(([k, v]) => `${k}: ${v}`).join('\n') : ''}>{CAT_LABEL[a.category]}</span>}</td>
                     <td>{a.envName}</td>
-                    <td><span className={`pill ${a.state === 'Started' || a.state === 'Published' ? 'ok' : a.state === 'Suspended' ? 'bad' : 'mut'}`}>{a.state}</span></td>
+                    <td><span className="state"><i className={`dot ${a.state === 'Started' || a.state === 'Published' ? 'on' : a.state === 'Suspended' ? 'bad' : 'off'}`} />{a.state}</span></td>
                     <td>{ago(a.modifiedTime)}</td>
                     <td>{a.inSolution && <span className="pill warn" title="Solution-aware">solution</span>} {(a.connections ?? 0) > 0 && a.kind === 'flow' && <span className="pill mut">{a.connections} conn</span>}</td>
                   </tr>))}</tbody>

@@ -1,4 +1,6 @@
 export type AssetKind = 'app' | 'flow' | 'agent'
+/** What an inventory "agent" row really is. Only 'agent' (a real Copilot Studio agent) is shown by default. */
+export type AgentCategory = 'agent' | 'agentbuilder' | 'tool' | 'mcp' | 'cli' | 'other'
 
 export interface Env {
   id: string
@@ -30,6 +32,8 @@ export interface Asset {
   inSolution?: boolean
   connections?: number
   orgHost?: string // Dataverse host, for agents
+  category?: AgentCategory // agents only
+  meta?: Record<string, string> // evidence used to classify (createdIn, model, ...)
 }
 
 export type TransferMode = 'replace' | 'coowner'

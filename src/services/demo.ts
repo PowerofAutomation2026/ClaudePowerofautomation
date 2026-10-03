@@ -11,7 +11,7 @@ const ENVS: Env[] = [
 ]
 
 const APP_NAMES = ['Expense Tracker', 'Asset Inspector', 'Visitor Check-in', 'Leave Requests', 'Field Survey', 'Inventory Scanner', 'Onboarding Hub', 'Safety Walkthrough']
-const AGENT_NAMES = ['HR Helpdesk Agent', 'IT Support Copilot', 'Sales Assistant', 'Policy Q&A Bot']
+const AGENT_NAMES = ['HR Helpdesk Agent', 'IT Support Copilot', 'Sales Assistant', 'Policy Q&A Bot', 'Weather MCP Server', 'Expense Lookup Tool', 'Meeting Notes (Agent Builder)']
 const FLOW_NAMES = ['Approve invoices', 'Notify on new lead', 'Sync SharePoint to SQL', 'Weekly digest email', 'Teams alert on failure', 'Archive old files', 'New hire provisioning', 'Daily backup', 'Form to Planner task']
 
 let seed = 7
@@ -51,6 +51,7 @@ ENVS.forEach((env) => {
       modifiedTime: daysAgo(Math.floor(rnd() * 200)),
       inSolution: rnd() > 0.7,
       connections: Math.floor(rnd() * 6),
+      category: kind === 'agent' ? (/MCP/.test(name) ? 'mcp' : /Tool/.test(name) ? 'tool' : /Agent Builder/.test(name) ? 'agentbuilder' : 'agent') : undefined,
     })
   }
 })
