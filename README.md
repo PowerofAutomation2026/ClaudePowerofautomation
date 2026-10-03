@@ -89,3 +89,5 @@ warnings (for example "not an admin in this environment"). Use *Copy* to share i
 * **Crash breadcrumb** → if a tab dies, the next load shows "Last time this page stopped unexpectedly while …" naming the environment/phase it was scanning.
 * Large environments are read page by page (max 10 pages / 20,000 items per list) and the report tells you if a list was cut off.
 * **Agents show 0 although the Dataverse tables were added** → `pac` names the data sources by display name (`agents`, `users`); v1.4.1 identifies them by primary key / entity set instead. 🩺 shows which data source each table mapped to.
+* **Transfer "does nothing"** → the new owner's email must be entered first. v1.5.0 explains this inline, accepts Enter, and shows the result (dry-run or real) in the drawer.
+* **Agents in other environments** → agents are read from the environment the app is deployed in. Run the deploy script again with that environment's ID (state is kept per environment in `.deploy-state/<envId>`).

@@ -384,7 +384,11 @@ export const liveBackend: Backend = {
           }
         } catch (e) { note(env.name, 'agent', 'warn', `agents: ${(e as Error).message.slice(0, 250)}`) }
       } else if (env.orgUrl) {
-        note(env.name, 'agent', 'info', botsTable ? 'agents here need the optional "Microsoft Dataverse (legacy)" connector (the app can only read its own environment natively)' : 'agents not scanned: add Dataverse tables to the build (deploy script does this) or the legacy Dataverse connector')
+        const homeId = await getCurrentEnvId()
+        const homeName = envs.find((e) => e.id === homeId)?.name ?? homeId ?? 'its own environment'
+        note(env.name, 'agent', botsTable ? 'warn' : 'info', botsTable
+          ? `agents NOT scanned here: this app can read agents only in the environment it is deployed to (${homeName}). To scan agents in "${env.name}", deploy the app into "${env.name}" too (run the deploy script again with that environment ID), then scan there.`
+          : 'agents not scanned: the Dataverse tables are missing from this build (re-run the deploy script).')
       } else note(env.name, 'agent', 'info', 'no Dataverse database in this environment')
 
       onProgress(++done, envs.length, env.name)

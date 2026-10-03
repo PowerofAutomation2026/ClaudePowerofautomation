@@ -88,12 +88,26 @@ Run npm @('install','--no-audit','--no-fund')
 
 Step 'Initialising code app'
 $cfgPath   = Join-Path $root 'power.config.json'
-$stateDir  = Join-Path $root '.deploy-state'
+$stateDir  = Join-Path (Join-Path $root '.deploy-state') $EnvironmentId     # per-environment: each environment has its own app id + connections
 $cfgBackup = Join-Path $stateDir 'power.config.json'
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)   # pac (Node) cannot parse a BOM
 
 function Save-ConfigBackup { if (Test-Path $cfgPath) { New-Item -ItemType Directory -Force -Path $stateDir | Out-Null; Copy-Item $cfgPath $cfgBackup -Force } }
 function Restore-ConfigIfMissing { if (-not (Test-Path $cfgPath) -and (Test-Path $cfgBackup)) { Copy-Item $cfgBackup $cfgPath -Force; Warn 'Restored power.config.json from .deploy-state' } }
+
+# If the folder was last used for a DIFFERENT environment, park that environment's files so they do not leak into this deployment.
+if (Test-Path $cfgPath) {
+  $otherEnv = $null
+  try { $otherEnv = ([System.IO.File]::ReadAllText($cfgPath).TrimStart([char]0xFEFF) | ConvertFrom-Json).environmentId } catch { }
+  if ($otherEnv -and $otherEnv -ne $EnvironmentId) {
+    $parked = Join-Path (Join-Path $root '.deploy-state') $otherEnv
+    New-Item -ItemType Directory -Force -Path $parked | Out-Null
+    Copy-Item $cfgPath (Join-Path $parked 'power.config.json') -Force
+    Remove-Item $cfgPath -Force
+    foreach ($d in @('.power','src\generated')) { $dp = Join-Path $root $d; if (Test-Path $dp) { Remove-Item $dp -Recurse -Force } }
+    Warn "This folder was set up for environment $otherEnv - parked its config and starting clean for $EnvironmentId."
+  }
+}
 
 if (-not (Test-Path $cfgPath) -and (Test-Path $cfgBackup)) {
   Copy-Item $cfgBackup $cfgPath -Force
@@ -251,3 +265,4 @@ if ($playUrl) { Write-Host "Open it: $playUrl" -ForegroundColor Green }
 Write-Host "Or from https://make.powerapps.com/environments/$EnvironmentId/apps  (look for '$DisplayName')." -ForegroundColor Green
 Write-Host 'First launch: approve the connector consent prompts. You need Power Platform admin (or Environment admin) rights for the admin connectors to return data.' -ForegroundColor Gray
 Write-Host 'Keep power.config.json - it links this folder to the published app for future updates.' -ForegroundColor Gray
+Write-Host 'Copilot Studio agents are read from the environment the app is deployed in. To scan agents in another environment, run this script again and enter THAT environment ID (you will create its connections once).' -ForegroundColor Gray

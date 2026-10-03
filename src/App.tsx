@@ -259,6 +259,8 @@ function TransferDrawer({ backend, from, items, busyRef, onClose, onAudit, onDon
   onClose: () => void; onAudit: (e: AuditEntry[]) => void; onDone: (keys: string[]) => void; flash: (m: string) => void
 }) {
   const [toEmail, setToEmail] = useState('')
+  const [msg, setMsg] = useState<{ level: 'error' | 'info' | 'ok'; text: string } | null>(null)
+  const ownerRef = useRef<HTMLInputElement>(null)
   const [opts, setOpts] = useState<TransferOptions>({ mode: 'replace', removeOldOwner: true })
   const [dry, setDry] = useState(true)
   const [status, setStatus] = useState<Record<string, { s: ItemStatus; err?: string }>>({})
@@ -271,12 +273,17 @@ function TransferDrawer({ backend, from, items, busyRef, onClose, onAudit, onDon
   const failed = items.filter((a) => status[a.key]?.s === 'failed')
 
   const run = async (list: Asset[]) => {
+    const target = toEmail.trim()
+    if (!target) { setMsg({ level: 'error', text: 'Enter the NEW owner\'s email address first (the box above), then click again.' }); ownerRef.current?.focus(); return }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target) && !/^[0-9a-f-]{36}$/i.test(target)) { setMsg({ level: 'error', text: `"${target}" does not look like an email address or Entra object id.` }); ownerRef.current?.focus(); return }
+    setMsg({ level: 'info', text: `Looking up ${target}…` })
     setRunning(true); busyRef.current = true
     let to: Person
-    try { to = await backend.resolveUser(toEmail.trim()) } catch (e) {
-      flash('New owner not found: ' + (e as Error).message); setRunning(false); busyRef.current = false; return
+    try { to = await backend.resolveUser(target) } catch (e) {
+      setMsg({ level: 'error', text: `New owner not found: ${(e as Error).message}` }); setRunning(false); busyRef.current = false; return
     }
-    if (to.id === from.id) { flash('New owner is the same as current owner'); setRunning(false); busyRef.current = false; return }
+    if (to.id === from.id) { setMsg({ level: 'error', text: 'The new owner is the same person as the current owner.' }); setRunning(false); busyRef.current = false; return }
+    setMsg({ level: 'info', text: `${dry ? 'Simulating' : 'Transferring'} ${list.length} item(s) to ${to.name} (${to.email})…` })
     const batch = new Date().toISOString()
     const entries: AuditEntry[] = []
     const ok: string[] = []
@@ -297,6 +304,11 @@ function TransferDrawer({ backend, from, items, busyRef, onClose, onAudit, onDon
     await Promise.all([worker(), worker(), worker()]) // light concurrency to stay under connector throttling
     onAudit(entries)
     if (!dry) { onDone(ok); setLastBatch({ id: batch, to, keys: ok }) }
+    const nFail = entries.filter((e) => e.status === 'failed').length
+    const nOk = entries.length - nFail
+    setMsg({ level: nFail ? 'error' : 'ok', text: dry
+      ? `Dry run finished: ${nOk} OK, ${nFail} would fail. NOTHING was changed. Untick "Dry run" and click "Transfer now" to really move ownership to ${to.name}.`
+      : `Transfer finished: ${nOk} moved to ${to.name}, ${nFail} failed.${nFail ? ' See the red messages below; use Retry.' : ''}` })
     flash(dry ? 'Dry run complete – nothing changed' : `Transferred ${ok.length}/${list.length}`)
     setRunning(false); busyRef.current = false
   }
@@ -317,7 +329,7 @@ function TransferDrawer({ backend, from, items, busyRef, onClose, onAudit, onDon
       <h2>Transfer ownership</h2>
       <div className="sub">{items.length} item(s) from <b>{from.name}</b> ({from.email})</div>
       <div className="col" style={{ marginTop: 14 }}>
-        <div className="field"><label>New owner email (or Entra object id)</label><input value={toEmail} onChange={(e) => setToEmail(e.target.value)} placeholder="new.owner@contoso.com" disabled={running} /></div>
+        <div className="field"><label><b>① New owner</b> – email address (or Entra object id) of the person who should own these items</label><input ref={ownerRef} autoFocus value={toEmail} onChange={(e) => { setToEmail(e.target.value); setMsg(null) }} onKeyDown={(e) => { if (e.key === 'Enter' && !running) run(items) }} placeholder="new.owner@contoso.com" disabled={running} /></div>
         <div className="seg">
           <button className={opts.mode === 'replace' ? 'on' : ''} onClick={() => setOpts({ ...opts, mode: 'replace' })}>Replace owner</button>
           <button className={opts.mode === 'coowner' ? 'on' : ''} onClick={() => setOpts({ ...opts, mode: 'coowner' })}>Add as co-owner (flows only)</button>
@@ -325,9 +337,11 @@ function TransferDrawer({ backend, from, items, busyRef, onClose, onAudit, onDon
         {opts.mode === 'replace' && <label className="row"><input type="checkbox" checked={opts.removeOldOwner} onChange={(e) => setOpts({ ...opts, removeOldOwner: e.target.checked })} /> Remove previous owner from flows</label>}
         <label className="row"><input type="checkbox" checked={dry} onChange={(e) => setDry(e.target.checked)} /> <b>Dry run</b> (simulate, change nothing)</label>
         {needsConfirm && <div className="field"><label>Type <b>TRANSFER {items.length}</b> to confirm</label><input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} /></div>}
+        {dry && <div className="risk info">Dry run is ON – nothing will be changed. Untick it to really transfer.</div>}
+        {msg && <div className={`banner`} style={msg.level === 'error' ? { borderColor: 'var(--bad)', color: 'var(--bad)', background: 'rgba(251,113,133,.08)' } : msg.level === 'ok' ? { borderColor: 'var(--ok)', color: 'var(--ok)', background: 'rgba(52,211,153,.08)' } : { borderColor: 'var(--accent)', color: 'var(--accent2)', background: 'rgba(124,92,255,.08)' }}>{msg.text}</div>}
         {running && <div className="progress"><i style={{ width: `${(doneCount / Math.max(1, items.length)) * 100}%` }} /></div>}
         <div className="row">
-          <button className={`btn ${dry ? 'primary' : 'danger'}`} disabled={running || !toEmail.trim() || !items.length || (needsConfirm && confirmText !== `TRANSFER ${items.length}`)} onClick={() => run(items)}>
+          <button className={`btn ${dry ? 'primary' : 'danger'}`} disabled={running || !items.length || (needsConfirm && confirmText !== `TRANSFER ${items.length}`)} onClick={() => run(items)}>
             {running ? <span className="spin" /> : dry ? '🧪 Simulate' : '🚀 Transfer now'}
           </button>
           {failed.length > 0 && !running && <button className="btn" onClick={() => run(failed)}>↻ Retry {failed.length} failed</button>}
