@@ -150,3 +150,11 @@ Found by code review + an independent advisor review + a simulated Copilot Studi
 * **Verification:** after a successful reassign the inventory is queried; the result is shown per agent (inventory may lag 5–15 min).
 * **Restore / Undo** are audited, appear only for genuine "partially updated" failures, stop at the first failure, and use the options of the original batch.
 Residual risk: the app cannot read licences. An unlicensed new owner can still half-update the *first* (pilot) agent – check the licence first; use History → Restore if it happens.
+
+## v1.9.0 – "moved" now means CONFIRMED at the source
+Audit result: every transfer is a real server-side admin API call (agents: `ReassignCopilotAgent`; apps: `Set-AdminAppOwner`; flows: `modifyPermissions` Owner role). The UI never changes ownership by itself.
+But "success" used to mean only "the service answered 2xx". Now, after each transfer the owner is **read back from the source** (agents: Dataverse `bot.ownerid` in the app's own environment, otherwise the tenant inventory, re-read after 12 s;
+apps: Get Admin App; flows: owner roles) and each row shows **Verified at the source** or **⚠ NOT confirmed**. Only confirmed rows leave the table; unconfirmed rows stay with a **🔄 Re-check at the source** button.
+* Flows keep an immutable *creator*; a rescan now also checks the Owner role, so a transferred flow is no longer listed under the old owner.
+* Membership settle time before an agent reassign raised from 4 s to 8 s.
+* Where to look as the new owner: Copilot Studio → pick the SAME environment as the agent (e.g. *microsoft (default)*) → Agents. Admin center / inventory can lag 5–15 min.

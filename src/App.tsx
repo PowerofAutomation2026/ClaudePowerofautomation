@@ -345,6 +345,7 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
   const [running, setRunning] = useState(false)
   const [confirmText, setConfirmText] = useState('')
   const [agentOk, setAgentOk] = useState(false)
+  const [lastTo, setLastTo] = useState<Person | null>(null)
   const [prepare, setPrepare] = useState(true)
   const [lastBatch, setLastBatch] = useState<{ id: string; to: Person; keys: string[]; opts: TransferOptions } | null>(null)
   const [script, setScript] = useState(false)
@@ -392,16 +393,37 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
       },
     })
     onAudit(out.entries)
-    if (!dry && out.movedKeys.length) { onDone(out.movedKeys); setLastBatch({ id: batch, to, keys: out.movedKeys, opts: { ...opts } }) }
+    setLastTo(to)
+    if (!dry && out.movedKeys.length) onDone(out.movedKeys) // only CONFIRMED rows leave the table
+    if (!dry && out.acceptedKeys.length) setLastBatch({ id: batch, to, keys: out.acceptedKeys, opts: { ...opts } })
     const failedEntries = out.entries.filter((e) => e.status === 'failed')
     const skipped = out.entries.filter((e) => e.status === 'skipped').length
     const nFail = failedEntries.length
     const nOk = out.entries.filter((e) => e.status === 'done' || e.status === 'dry').length
+    const nUnverified = out.unverifiedKeys.length
+    const nConfirmed = out.entries.filter((e) => /^Verified/.test(e.note ?? '')).length
     const firstErr = failedEntries[0]?.error
     setMsg({ level: nFail ? 'error' : 'ok', text: dry
       ? `Dry run finished: ${nOk} OK, ${nFail} would fail. NOTHING was changed. Untick "Dry run" and click "Transfer now" to really move ownership to ${to.name}.${out.entries.filter((e) => e.status === 'failed' && /^Not attempted/.test(e.error ?? '')).map((e) => `\n• ${e.name}: ${e.error}`).join('')}`
-      : `Transfer finished: ${nOk} moved to ${to.name}, ${nFail} failed${skipped ? `, ${skipped} skipped (batch stopped to protect them)` : ''}.${firstErr ? `\n\nError from the service:\n${firstErr}` : ''}${out.halted ? '\n\nThe batch was STOPPED at the first agent failure so the remaining agents were not touched.' : ''}${out.prepNotes}` })
-    flash(dry ? 'Dry run complete – nothing changed' : `Transferred ${out.movedKeys.length}/${list.length}`)
+      : `Transfer finished: ${nOk} accepted by the service for ${to.name} (${nConfirmed} CONFIRMED at the source${nUnverified ? `, ⚠ ${nUnverified} NOT confirmed yet – see below` : ''}), ${nFail} failed${skipped ? `, ${skipped} skipped (batch stopped to protect them)` : ''}.${firstErr ? `\n\nError from the service:\n${firstErr}` : ''}${out.halted ? '\n\nThe batch was STOPPED at the first agent failure so the remaining agents were not touched.' : ''}${out.prepNotes}` })
+    flash(dry ? 'Dry run complete – nothing changed' : `${nConfirmed} confirmed, ${nUnverified} unverified, ${nFail} failed`)
+    setRunning(false); busyRef.current = false
+  }
+
+  /** Re-read the owner from the source for items that were accepted but not confirmed. */
+  const recheck = async () => {
+    if (!lastTo || !backend.verifyOwner) return
+    setRunning(true); busyRef.current = true
+    const confirmed: string[] = []
+    for (const a of items) {
+      const st = status[a.key]
+      if (!st || st.s !== 'done' || /^Verified/.test(st.note ?? '')) continue
+      const v = await backend.verifyOwner(a, lastTo).catch(() => null)
+      if (v === true) { confirmed.push(a.key); setStatus((m) => ({ ...m, [a.key]: { s: 'done', note: 'Verified at the source: the new owner is now the owner.' } })) }
+      else setStatus((m) => ({ ...m, [a.key]: { s: 'done', note: v === false ? '⚠ Still NOT showing the new owner at the source. Check the portal (right environment) and licence/membership.' : 'Still cannot read the owner back from here – confirm in the portal.' } }))
+    }
+    if (confirmed.length) onDone(confirmed)
+    setMsg({ level: confirmed.length ? 'ok' : 'info', text: `Re-check: ${confirmed.length} newly confirmed at the source.` })
     setRunning(false); busyRef.current = false
   }
 
@@ -465,6 +487,7 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
             {running ? <span className="spin" /> : dry ? '🧪 Simulate' : '🚀 Transfer now'}
           </button>
           {failed.length > 0 && !running && <button className="btn" onClick={() => run(failed)}>↻ Retry {failed.length} failed</button>}
+          {Object.values(status).some((x) => x.s === 'done' && !/^Verified/.test(x.note ?? '')) && !running && backend.verifyOwner && <button className="btn" onClick={recheck}>🔄 Re-check at the source</button>}
           {lastBatch && !running && <button className="btn" onClick={undo}>↩ Undo last batch</button>}
           <button className="btn" onClick={() => setScript((s) => !s)}>{'</>'} PowerShell</button>
           <button className="btn" disabled={!items.length} title="Run later with scripts/Invoke-OwnershipPlan.ps1" onClick={() => download('plan.csv', toCsv(items.map((a) => ({ Type: a.kind, EnvironmentId: a.envId, Id: a.id, Name: a.name, OldOwnerId: a.ownerId, NewOwnerId: toEmail.trim() }))), 'text/csv')}>⬇ Plan CSV</button>

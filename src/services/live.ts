@@ -92,6 +92,10 @@ const OPS = {
   flowOwners: () => { const o = allOps(); return pick(
     o.find((x) => /^(getadminflowownerrole|getflowownerroleasadmin)$/.test(x.norm)),
     o.find((x) => x.method === 'GET' && /admin\/environments\/\{[^}/]+\}\/flows\/\{[^}/]+\}\/(owners|permissions)$/i.test(bare(x.path)))) },
+  /** Power Apps for Admins: read one app back (used to verify an owner change at the source). */
+  appGet: () => { const o = allOps(); return pick(
+    o.find((x) => x.norm === 'getadminapp'),
+    o.find((x) => x.method === 'GET' && /admin\/environments\/\{[^}/]+\}\/apps\/\{[^}/]+\}$/i.test(bare(x.path)))) },
   /** Power Platform for Admins V2: tenant-wide inventory ("Query Power Platform resources"). */
   inventory: () => { const o = allOps(); return pick(
     o.find((x) => x.method === 'POST' && /resourcequery\/resources\/query/i.test(x.path)),
@@ -115,7 +119,7 @@ const OPS = {
 } as const
 type OpKey = keyof typeof OPS
 const REQUIRED: OpKey[] = ['apps', 'appOwner', 'user']
-const NEEDS: Partial<Record<OpKey, string>> = { envs: 'environment list', flows: 'flow list', flowOwner: 'change flow owner', flowOwners: 'flow owners lookup (only if list has no creator)', dvList: 'agents fallback (legacy Dataverse read)', dvUpdate: 'agents fallback (legacy Dataverse write)', inventory: 'Copilot Studio agents - discovery (all environments)', agentReassign: 'Copilot Studio agents - transfer', syncUser: 'add new owner to an environment (membership, no roles)' }
+const NEEDS: Partial<Record<OpKey, string>> = { envs: 'environment list', flows: 'flow list', flowOwner: 'change flow owner', flowOwners: 'flow owners lookup (only if list has no creator)', dvList: 'agents fallback (legacy Dataverse read)', dvUpdate: 'agents fallback (legacy Dataverse write)', inventory: 'Copilot Studio agents - discovery (all environments)', agentReassign: 'Copilot Studio agents - transfer', appGet: 'read an app back to verify its owner', syncUser: 'add new owner to an environment (membership, no roles)' }
 
 const need = (k: OpKey): Op => {
   const o = OPS[k]()
@@ -467,9 +471,17 @@ export const liveBackend: Backend = {
             how = 'owner lookups'
           }
           let mine = 0
+          let movedAway = 0
           for (const x of list) {
             const c = x.properties?.creator
             if (!c || (c.userId !== user.id && c.objectId !== user.id)) continue
+            // A flow's CREATOR never changes. After a transfer the user may no longer be an owner, so confirm with the owner roles.
+            if (how === 'creator field' && ownersOp) {
+              try {
+                const roles = asList(await call(ownersOp, [env.id, x.name]))
+                if (roles.length && !roles.some((r) => (r.properties?.principal?.id ?? r.principal?.id) === user.id && /owner/i.test(r.properties?.roleName ?? r.roleName ?? ''))) { movedAway++; continue }
+              } catch { /* cannot tell - keep the flow listed */ }
+            }
             mine++
             out.push({
               key: `flow:${env.id}:${x.name}`, id: x.name, kind: 'flow', name: x.properties?.displayName ?? x.name, envId: env.id, envName: env.name,
@@ -478,7 +490,7 @@ export const liveBackend: Backend = {
               inSolution: !!x.properties?.workflowEntityId, connections: Object.keys(x.properties?.connectionReferences ?? {}).length,
             })
           }
-          note(env.name, 'flow', 'info', `${op.op}: ${total} flow(s) listed, ${mine} owned by user (via ${how})`)
+          note(env.name, 'flow', 'info', `${op.op}: ${total} flow(s) listed, ${mine} owned by user (via ${how})${movedAway ? `; ${movedAway} flow(s) created by the user are no longer owned by them (already transferred)` : ''}`)
           flowsDone = true
           break
         } catch (e) { note(env.name, 'flow', 'warn', `${op.op} failed: ${(e as Error).message.slice(0, 250)}`) }
@@ -542,10 +554,33 @@ export const liveBackend: Backend = {
     try { return !!(await nativeSystemUserId(to.id)) } catch { return null }
   },
 
+  /** Read the owner back from the SOURCE after a transfer. true = confirmed, false = NOT changed (yet), null = cannot tell. */
   async verifyOwner(asset, to) {
-    const op = OPS.inventory()
-    if (!op || asset.kind !== 'agent') return null
     try {
+      if (asset.kind === 'app') {
+        const op = OPS.appGet()
+        if (!op) return null
+        const x = await call(op, [asset.envId, asset.id])
+        const o = x?.properties?.owner
+        return o ? String(o.id ?? '').toLowerCase() === to.id.toLowerCase() : null
+      }
+      if (asset.kind === 'flow') {
+        const op = OPS.flowOwners()
+        if (!op) return null
+        const roles = asList(await call(op, [asset.envId, asset.id]))
+        if (!roles.length) return null
+        return roles.some((r) => (r.properties?.principal?.id ?? r.principal?.id) === to.id && /owner/i.test(r.properties?.roleName ?? r.roleName ?? ''))
+      }
+      // agent: authoritative Dataverse read in the app's own environment, otherwise the tenant inventory (may lag 5-15 min)
+      if (nativeKey('bot') && (await getCurrentEnvId()) === asset.envId) {
+        const t = nativeKey('bot')!
+        const sysId = await nativeSystemUserId(to.id)
+        const r: any = await sdk().retrieveMultipleRecordsAsync<any>(t, { filter: `botid eq ${asset.id}`, select: ['botid', '_ownerid_value'], top: 1 })
+        const row = r?.success ? r.data?.[0] : null
+        if (row && sysId) return String(row._ownerid_value ?? '').toLowerCase() === sysId.toLowerCase()
+      }
+      const op = OPS.inventory()
+      if (!op) return null
       const body = { TableName: 'PowerPlatformResources', Clauses: [
         { $type: 'where', FieldName: 'type', Operator: '==', Values: ["'microsoft.copilotstudio/agents'"] },
         { $type: 'where', FieldName: 'name', Operator: '==', Values: [`'${asset.id}'`] },

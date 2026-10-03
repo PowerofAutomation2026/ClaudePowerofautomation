@@ -26,11 +26,14 @@ export interface TransferArgs {
   batch: string
   hooks: TransferHooks
   settleMs?: number // pause after adding a user to an environment before reassigning
+  noVerifyDelay?: boolean // tests: skip the propagation pause before the read-back
 }
 
 export interface TransferOutcome {
   entries: AuditEntry[]
-  movedKeys: string[]
+  movedKeys: string[] // CONFIRMED at the source by a read-back (only these rows leave the table)
+  acceptedKeys: string[] // the service answered success (superset of movedKeys; used for Undo)
+  unverifiedKeys: string[] // accepted but NOT confirmed (read-back shows the old owner, or no read-back possible)
   prepNotes: string
   halted?: string
 }
@@ -42,12 +45,29 @@ export async function runTransfer(args: TransferArgs): Promise<TransferOutcome> 
   const { backend, items, to, opts, dry, prepare, batch, hooks } = args
   const entries: AuditEntry[] = []
   const movedKeys: string[] = []
+  const unverifiedKeys: string[] = []
+  const acceptedKeys: string[] = []
   let prepNotes = ''
   let halted: string | undefined
 
   const record = (a: Asset, status: ItemStatus, error?: string, note?: string) => {
     hooks.status(a.key, status, error, note)
     entries.push({ at: new Date().toISOString(), assetKey: a.key, name: a.name, kind: a.kind, envName: a.envName, from: ownerOf(a), to, mode: opts.mode, status, error, dryRun: dry, batch, note })
+  }
+
+  /** Read the owner back from the source; never trust the call's success alone. */
+  const verify = async (a: Asset): Promise<{ status: ItemStatus; note?: string }> => {
+    acceptedKeys.push(a.key)
+    const read = () => (backend.verifyOwner ? backend.verifyOwner(a, to).catch(() => null) : Promise.resolve(null))
+    let v = await read()
+    // Agents: the inventory / admin views can lag - look once more before calling it unconfirmed.
+    if (v === false && a.kind === 'agent' && !args.noVerifyDelay) { await sleep(12000); v = await read() }
+    if (v === true) { movedKeys.push(a.key); return { status: 'done', note: 'Verified at the source: the new owner is now the owner.' } }
+    unverifiedKeys.push(a.key)
+    if (v === false) return { status: 'done', note: a.kind === 'agent'
+      ? '⚠ NOT confirmed: the service accepted the request but the read-back does not show the new owner yet. In Copilot Studio it is usually immediate; the admin center / inventory can lag 5–15 min. Check as the new owner in the SAME environment (' + a.envName + '), or use Re-check.'
+      : '⚠ NOT confirmed: the service accepted the request but the read-back still shows the OLD owner. Do not assume it changed – check the portal, then Re-check.' }
+    return { status: 'done', note: 'Accepted by the service, but the owner could not be read back from here – confirm in the portal (Re-check retries).' }
   }
 
   const agents = items.filter((a) => a.kind === 'agent')
@@ -80,7 +100,7 @@ export async function runTransfer(args: TransferArgs): Promise<TransferOutcome> 
       }
     }
     if (lines.length) prepNotes = '\n\nEnvironment membership step:\n' + lines.join('\n')
-    if (ranPrepare && args.settleMs !== 0) await sleep(args.settleMs ?? 4000)
+    if (ranPrepare && args.settleMs !== 0) await sleep(args.settleMs ?? 8000)
     hooks.message(`${dry ? 'Simulating' : 'Transferring'} ${items.length} item(s) to ${to.name} (${to.email})…${prepNotes}`)
   }
 
@@ -93,13 +113,9 @@ export async function runTransfer(args: TransferArgs): Promise<TransferOutcome> 
     if (dry) { await sleep(60); record(a, 'dry'); continue }
     try {
       await backend.transfer(a, to, opts)
-      movedKeys.push(a.key)
-      let note: string | undefined
-      if (backend.verifyOwner) {
-        const v = await backend.verifyOwner(a, to).catch(() => null)
-        note = v === true ? 'Verified: the inventory shows the new owner.' : v === false ? 'Reassign succeeded; the inventory does not show the new owner yet (can take 5–15 minutes). Check the agent opens in Copilot Studio.' : undefined
-      }
-      record(a, 'done', undefined, note)
+      if (!args.noVerifyDelay) await sleep(2500) // let the change propagate before reading back
+      const r = await verify(a)
+      record(a, r.status, undefined, r.note)
     } catch (e) {
       const m = (e as Error).message
       record(a, 'failed', m)
@@ -114,12 +130,17 @@ export async function runTransfer(args: TransferArgs): Promise<TransferOutcome> 
       hooks.status(a.key, 'running')
       try {
         if (dry) await sleep(60)
-        else { await backend.transfer(a, to, opts); movedKeys.push(a.key) }
-        record(a, dry ? 'dry' : 'done')
+        else {
+          await backend.transfer(a, to, opts)
+          const r = await verify(a)
+          record(a, r.status, undefined, r.note)
+          continue
+        }
+        record(a, 'dry')
       } catch (e) { record(a, 'failed', (e as Error).message) }
     }
   }
   await Promise.all([worker(), worker(), worker()])
 
-  return { entries, movedKeys, prepNotes, halted }
+  return { entries, movedKeys, acceptedKeys, unverifiedKeys, prepNotes, halted }
 }
