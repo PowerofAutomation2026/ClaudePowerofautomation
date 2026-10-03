@@ -165,7 +165,15 @@ foreach ($n in $needed) {
 
 # ---------- 6. build + publish ----------
 Step 'Building'
-Run npm @('run','build')
+# pac sometimes generates TypeScript that does not compile (e.g. parameters named api-version). The app does not
+# use src/generated, so the type-check ignores it; if the strict build still fails, fall back to a plain bundle.
+& npm run build
+if ($LASTEXITCODE -ne 0) {
+  Warn 'Type-checked build failed - retrying with a plain bundle (the app does not import generated code).'
+  Run npx @('vite','build')
+}
+if (-not (Test-Path (Join-Path $root 'dist\index.html'))) { throw 'Build produced no dist\index.html' }
+Ok 'Build OK'
 
 Step 'Publishing to Power Platform'
 Run pac @('code','push')

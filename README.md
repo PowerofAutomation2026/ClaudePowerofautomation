@@ -63,3 +63,5 @@ connection references re-pointed after transfer.
 * **"Connector operation … not found"** → open 🩺 Diagnostics, click *Copy diagnostics*; each connector's real operations are listed.
   Re-run the deploy script to add the missing connector, then redeploy.
 * Re-running the script on an existing folder reuses `power.config.json` (same app, updated in place). Extract new versions *over* the old folder.
+* **Build fails inside `src/generated/...` (e.g. `api-version?: string`)** → a `pac` code-generation bug; the app doesn't use `src/generated`
+  (it reads `.power/schemas/appschemas/dataSourcesInfo.ts`). `tsconfig.json` excludes that folder and the deploy script falls back to a plain `vite build`.
