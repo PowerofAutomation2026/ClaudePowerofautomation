@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Asset, AssetKind, AuditEntry, Backend, Env, ItemStatus, Person, TransferOptions } from './types'
+import type { Asset, AssetKind, AuditEntry, Backend, Env, ItemStatus, Person, ScanNote, TransferOptions } from './types'
 import { hasConnectors, pickBackend } from './services'
 import { ago, assetRows, auditRows, download, powershellFor, risksFor, toCsv } from './util'
 
@@ -21,6 +21,8 @@ export default function App() {
   const [email, setEmail] = useState('')
   const [user, setUser] = useState<Person | null>(null)
   const [assets, setAssets] = useState<Asset[]>([])
+  const [notes, setNotes] = useState<ScanNote[]>([])
+  const [showNotes, setShowNotes] = useState(false)
   const [loading, setLoading] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [prog, setProg] = useState(0)
@@ -52,13 +54,15 @@ export default function App() {
   const search = useCallback(async (em = email) => {
     const target = em.trim()
     if (!target) return
-    setError(null); setLoading('Resolving user…'); setProg(0); setSel(new Set()); setAssets([])
+    setError(null); setLoading('Resolving user…'); setProg(0); setSel(new Set()); setAssets([]); setNotes([])
     try {
       const p = await backend.resolveUser(target)
       setUser(p)
       const scope = envScope.length ? envs.filter((e) => envScope.includes(e.id)) : envs
-      const found = await backend.listAssets(p, scope, (d, t, name) => { setProg(d / t); setLoading(`Scanning ${name} (${d}/${t})`) })
+      const { assets: found, notes: scanNotes } = await backend.listAssets(p, scope, (d, t, name) => { setProg(d / t); setLoading(`Scanning ${name} (${d}/${t})`) })
       setAssets(found)
+      setNotes(scanNotes)
+      setShowNotes(scanNotes.some((n) => n.level !== 'info') || !found.some((a) => a.kind === 'flow'))
       const r = [p.email, ...recent.filter((x) => x !== p.email)].slice(0, 6)
       setRecent(r); ls.set('occ.recent', r)
       flash(`Found ${found.length} item(s) for ${p.name}`)
@@ -106,6 +110,8 @@ export default function App() {
     { label: 'Select all visible', run: selectVisible },
     { label: 'Select all apps', run: () => setSel(new Set(assets.filter((a) => a.kind === 'app').map((a) => a.key))) },
     { label: 'Select all flows', run: () => setSel(new Set(assets.filter((a) => a.kind === 'flow').map((a) => a.key))) },
+    { label: 'Select all Copilot Studio agents', run: () => setSel(new Set(assets.filter((a) => a.kind === 'agent').map((a) => a.key))) },
+    { label: 'Show scan report', run: () => setShowNotes(true) },
     { label: 'Select stale items (no changes in 6 months)', run: () => setSel(new Set(assets.filter((a) => a.modifiedTime && Date.now() - new Date(a.modifiedTime).getTime() > 180 * 864e5).map((a) => a.key))) },
     { label: 'Transfer selected…', run: () => selected.length && setPanel('transfer') },
     { label: 'Transfer EVERYTHING…', run: () => { setSel(new Set(assets.map((a) => a.key))); setPanel('transfer') } },
@@ -118,7 +124,7 @@ export default function App() {
     <div className="app">
       <header className="top">
         <div className="logo">🛡️</div>
-        <div><h1>Ownership Command Center</h1><div className="sub">Find &amp; transfer Power Apps and Flows across every environment · no app registration</div></div>
+        <div><h1>Ownership Command Center</h1><div className="sub">Find &amp; transfer Power Apps, Flows and Copilot Studio agents across every environment · no app registration</div></div>
         <div className="spacer" />
         <span className="pill mut" title="Build running in this tab - if it is old, hard-refresh (Ctrl+Shift+R)">{__BUILD__}</span>
         <span className={`pill ${demo ? 'warn' : 'ok'}`}>{demo ? 'DEMO DATA' : 'LIVE'}</span>
@@ -146,12 +152,29 @@ export default function App() {
         {error && <div className="risk" style={{ marginTop: 10, color: 'var(--bad)' }}>⚠ {error} <button type="button" className="btn sm" onClick={() => setPanel('diag')}>🩺 Open diagnostics</button></div>}
       </section>
 
+      {user && !loading && notes.length > 0 && (
+        <section className="card" style={{ marginTop: 12 }}>
+          <div className="row">
+            <b>Scan report</b>
+            <span className="pill mut">{notes.length} note(s)</span>
+            {notes.some((n) => n.level === 'error') && <span className="pill bad">{notes.filter((n) => n.level === 'error').length} error(s)</span>}
+            {notes.some((n) => n.level === 'warn') && <span className="pill warn">{notes.filter((n) => n.level === 'warn').length} warning(s)</span>}
+            <div className="spacer" />
+            <button className="btn sm" onClick={() => setShowNotes((v) => !v)}>{showNotes ? 'Hide' : 'Show'}</button>
+            <button className="btn sm" onClick={() => navigator.clipboard?.writeText(notes.map((n) => `[${n.level}] ${n.env} / ${n.kind}: ${n.text}`).join('\n')).then(() => flash('Report copied'))}>Copy</button>
+          </div>
+          {showNotes && <div className="col" style={{ marginTop: 10 }}>{notes.map((n, i) => (
+            <div key={i} className="item"><span className={`pill ${n.level === 'error' ? 'bad' : n.level === 'warn' ? 'warn' : 'mut'}`}>{n.level}</span>
+              <div><div className="name">{n.env} · {n.kind}</div><div className="id" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{n.text}</div></div></div>))}</div>}
+        </section>)}
+
       {user && !loading && (
         <>
           <div className="stats">
             <div className="card stat"><div className="n">{assets.length}</div><div className="l">Items owned by {user.name}</div></div>
             <div className="card stat"><div className="n">{assets.filter((a) => a.kind === 'app').length}</div><div className="l">Canvas / model apps</div></div>
             <div className="card stat"><div className="n">{assets.filter((a) => a.kind === 'flow').length}</div><div className="l">Cloud flows</div></div>
+            <div className="card stat"><div className="n">{assets.filter((a) => a.kind === 'agent').length}</div><div className="l">Copilot Studio agents</div></div>
             <div className="card stat"><div className="n">{stale}</div><div className="l">Stale &gt; 6 months</div></div>
             <div className="card" style={{ gridColumn: 'span 2' }}>
               <div className="l sub">BY ENVIRONMENT (click to filter)</div>
@@ -160,7 +183,7 @@ export default function App() {
           </div>
 
           <div className="toolbar">
-            <div className="seg">{(['all', 'app', 'flow'] as const).map((k) => <button key={k} className={kind === k ? 'on' : ''} onClick={() => setKind(k)}>{k === 'all' ? 'All' : k === 'app' ? 'Apps' : 'Flows'}</button>)}</div>
+            <div className="seg">{(['all', 'app', 'flow', 'agent'] as const).map((k) => <button key={k} className={kind === k ? 'on' : ''} onClick={() => setKind(k)}>{k === 'all' ? 'All' : k === 'app' ? 'Apps' : k === 'flow' ? 'Flows' : 'Agents'}</button>)}</div>
             <input placeholder="Filter by name…" value={q} onChange={(e) => setQ(e.target.value)} />
             <select value={envFilter} onChange={(e) => setEnvFilter(e.target.value)}><option value="all">Any environment</option>{byEnv.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select>
             <select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)}><option value="all">Any state</option>{['Started', 'Stopped', 'Suspended', 'Published'].map((s) => <option key={s}>{s}</option>)}</select>
@@ -181,7 +204,7 @@ export default function App() {
                   <tr key={a.key} className={sel.has(a.key) ? 'sel' : ''} onClick={() => toggle(a.key)}>
                     <td><input type="checkbox" checked={sel.has(a.key)} readOnly /></td>
                     <td><div className="name">{a.name}</div><div className="id">{a.id}</div></td>
-                    <td><span className={`pill ${a.kind}`}>{a.kind === 'app' ? 'App' : 'Flow'}</span></td>
+                    <td><span className={`pill ${a.kind}`}>{a.kind === 'app' ? 'App' : a.kind === 'flow' ? 'Flow' : 'Agent'}</span></td>
                     <td>{a.envName}</td>
                     <td><span className={`pill ${a.state === 'Started' || a.state === 'Published' ? 'ok' : a.state === 'Suspended' ? 'bad' : 'mut'}`}>{a.state}</span></td>
                     <td>{ago(a.modifiedTime)}</td>
@@ -284,7 +307,7 @@ function TransferDrawer({ backend, from, items, busyRef, onClose, onAudit, onDon
         <div className="field"><label>New owner email (or Entra object id)</label><input value={toEmail} onChange={(e) => setToEmail(e.target.value)} placeholder="new.owner@contoso.com" disabled={running} /></div>
         <div className="seg">
           <button className={opts.mode === 'replace' ? 'on' : ''} onClick={() => setOpts({ ...opts, mode: 'replace' })}>Replace owner</button>
-          <button className={opts.mode === 'coowner' ? 'on' : ''} onClick={() => setOpts({ ...opts, mode: 'coowner' })}>Add as co-owner (flows)</button>
+          <button className={opts.mode === 'coowner' ? 'on' : ''} onClick={() => setOpts({ ...opts, mode: 'coowner' })}>Add as co-owner (flows only)</button>
         </div>
         {opts.mode === 'replace' && <label className="row"><input type="checkbox" checked={opts.removeOldOwner} onChange={(e) => setOpts({ ...opts, removeOldOwner: e.target.checked })} /> Remove previous owner from flows</label>}
         <label className="row"><input type="checkbox" checked={dry} onChange={(e) => setDry(e.target.checked)} /> <b>Dry run</b> (simulate, change nothing)</label>

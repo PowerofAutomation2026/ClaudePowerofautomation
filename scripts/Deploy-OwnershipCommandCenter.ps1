@@ -13,6 +13,7 @@
     - Power Automate Management    (shared_flowmanagement)          list flows + change flow owner (as admin)
     - Power Automate for Admins    (shared_microsoftflowforadmins)  optional extra flow admin operations
     - Office 365 Users             (shared_office365users)          email -> user
+    - Microsoft Dataverse (legacy) (shared_commondataservice)       optional: Copilot Studio agents
 
 .PARAMETER EnvironmentId   Target environment GUID (the part after /environments/ in the maker portal URL). Prompted if omitted.
 .PARAMETER DisplayName     App display name.
@@ -110,7 +111,8 @@ $needed = @(
   @{ Label = 'Power Platform for Admins'; Apis = @('shared_powerplatformforadmins'); Link = 'shared_powerplatformforadmins' },
   @{ Label = 'Power Automate Management'; Apis = @('shared_flowmanagement');         Link = 'shared_flowmanagement' },
   @{ Label = 'Office 365 Users';          Apis = @('shared_office365users');         Link = 'shared_office365users' },
-  @{ Label = 'Power Automate for Admins (optional)'; Apis = @('shared_microsoftflowforadmins'); Link = 'shared_microsoftflowforadmins'; Optional = $true }
+  @{ Label = 'Power Automate for Admins (optional)'; Apis = @('shared_microsoftflowforadmins'); Link = 'shared_microsoftflowforadmins'; Optional = $true },
+  @{ Label = 'Microsoft Dataverse (legacy) (optional - Copilot Studio agents)'; Apis = @('shared_commondataservice'); Link = 'shared_commondataservice'; Optional = $true }
 )
 
 function Get-Connections {

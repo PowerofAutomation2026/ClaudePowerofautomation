@@ -10,10 +10,11 @@
  *   Power Automate Management  (shared_flowmanagement)          List Flows as Admin / Modify Flow Owners as Admin
  *   Power Automate for Admins  (shared_microsoftflowforadmins)  optional: owner role operations
  *   Office 365 Users           (shared_office365users)          email -> Entra object id
+ *   Microsoft Dataverse (legacy) (shared_commondataservice)     optional: Copilot Studio agents (bots table, any environment via `dataset`)
  */
 import { getClient } from '@microsoft/power-apps/data'
 import { getContext } from '@microsoft/power-apps/app'
-import type { Asset, Backend, Env } from '../types'
+import type { Asset, Backend, Env, ScanNote } from '../types'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const infoModules = import.meta.glob('../../.power/schemas/appschemas/dataSourcesInfo.ts', { eager: true }) as Record<string, any>
@@ -59,6 +60,15 @@ function allOps(): Op[] {
 const bare = (p: string) => p.split('?')[0].replace(/\/+$/, '')
 const pick = (...cands: (Op | undefined)[]) => cands.find(Boolean) ?? null
 
+/** Every operation that can list flows, best first: lists that include the creator, then V2 (ids only). */
+function flowLists(): Op[] {
+  const o = allOps()
+  const v1 = o.filter((x) => x.method === 'GET' && /admin\/environments\/\{[^}/]+\}\/flows$/i.test(bare(x.path)))
+  const named = o.filter((x) => /^(getadminflows?|listflowsasadmin)$/.test(x.norm))
+  const v2 = o.filter((x) => (x.method === 'GET' && /admin\/environments\/\{[^}/]+\}\/v2\/flows$/i.test(bare(x.path))) || /^listflowsasadminv2|listflowsinenvironmentv2asadmin/.test(x.norm))
+  return [...new Set([...v1, ...named, ...v2])]
+}
+
 const OPS = {
   /** Power Platform for Admins: list all environments (no path params). */
   envs: () => { const o = allOps(); return pick(
@@ -71,12 +81,8 @@ const OPS = {
   appOwner: () => { const o = allOps(); return pick(
     o.find((x) => x.norm === 'setadminappowner'),
     o.find((x) => x.method === 'POST' && /modifyAppOwner/i.test(x.path))) },
-  /** Prefer the classic list (includes creator) over V2 (ids only). */
-  flows: () => { const o = allOps(); return pick(
-    o.find((x) => x.method === 'GET' && /admin\/environments\/\{[^}/]+\}\/flows$/i.test(bare(x.path))),
-    o.find((x) => /^(getadminflows?|listflowsasadmin)$/.test(x.norm)),
-    o.find((x) => x.method === 'GET' && /admin\/environments\/\{[^}/]+\}\/v2\/flows$/i.test(bare(x.path))),
-    o.find((x) => /^listflowsasadminv2|listflowsinenvironmentv2asadmin/.test(x.norm))) },
+  /** Kept for diagnostics: the preferred flow-list operation. */
+  flows: () => flowLists()[0] ?? null,
   flowOwner: () => { const o = allOps(); return pick(
     o.find((x) => /^(modifyflowownersasadmin|modifyflowownersadmin)$/.test(x.norm)),
     o.find((x) => x.method === 'POST' && /flows\/\{[^}/]+\}\/modifyPermissions/i.test(x.path)),
@@ -85,12 +91,18 @@ const OPS = {
   flowOwners: () => { const o = allOps(); return pick(
     o.find((x) => /^(getadminflowownerrole|getflowownerroleasadmin)$/.test(x.norm)),
     o.find((x) => x.method === 'GET' && /admin\/environments\/\{[^}/]+\}\/flows\/\{[^}/]+\}\/(owners|permissions)$/i.test(bare(x.path)))) },
+  /** Microsoft Dataverse (legacy): list / patch rows in ANY environment by passing `dataset` (the org host). */
+  dvList: () => { const o = allOps(); return pick(
+    o.find((x) => /commondataservice/i.test(x.ds) && x.method === 'GET' && /datasets\/\{dataset\}\/tables\/\{table\}\/items$/i.test(bare(x.path)))) },
+  dvUpdate: () => { const o = allOps(); return pick(
+    o.find((x) => /commondataservice/i.test(x.ds) && x.method === 'PATCH' && /datasets\/\{dataset\}\/tables\/\{table\}\/items\/\{[^}]+\}$/i.test(bare(x.path)))) },
   user: () => { const o = allOps(); return pick(
     o.find((x) => /office365users/i.test(x.ds) && x.norm === 'userprofilev2'),
     o.find((x) => /office365users/i.test(x.ds) && x.method === 'GET' && /\/users\/\{[^}/]+\}$/i.test(bare(x.path)))) },
 } as const
 type OpKey = keyof typeof OPS
 const REQUIRED: OpKey[] = ['apps', 'appOwner', 'user']
+const NEEDS: Partial<Record<OpKey, string>> = { envs: 'environment list', flows: 'flow list', flowOwner: 'change flow owner', flowOwners: 'flow owners lookup (only if list has no creator)', dvList: 'Copilot Studio agents (read)', dvUpdate: 'Copilot Studio agents (transfer)' }
 
 const need = (k: OpKey): Op => {
   const o = OPS[k]()
@@ -113,7 +125,11 @@ function pickSupportedVersion(message: string): string | null {
   return PREFERRED_VERSIONS.find((v) => versions.includes(v)) ?? versions[Math.max(0, versions.length - 2)]
 }
 
-async function call(o: Op, pathValues: string[] = [], body?: unknown, query: Record<string, unknown> = {}): Promise<any> {
+// One SDK client for the whole session - creating one per call is slow and wastes memory on big scans.
+let cachedClient: ReturnType<typeof getClient> | null = null
+const sdk = () => (cachedClient ??= getClient(dataSourcesInfo as any))
+
+async function call(o: Op, pathValues: string[] = [], body?: unknown, query: Record<string, unknown> = {}, extra: Record<string, unknown> = {}): Promise<any> {
   const cacheKey = `${o.ds}|${o.op}`
   const build = (): Record<string, unknown> => {
     const params: Record<string, unknown> = {}
@@ -126,10 +142,10 @@ async function call(o: Op, pathValues: string[] = [], body?: unknown, query: Rec
         else if (isApiVersionParam(p.name)) params[p.name] = versionCache[cacheKey] ?? defaultApiVersion(o.ds)   // always send, even if "optional"
       } else if (p.in === 'header' && /content-?type/i.test(p.name) && body !== undefined) params[p.name] = 'application/json'
     }
-    return params
+    return { ...params, ...extra }
   }
   const run = async () => {
-    const res: any = await getClient(dataSourcesInfo as any).executeAsync({ connectorOperation: { tableName: o.ds, operationName: o.op, parameters: build() } })
+    const res: any = await sdk().executeAsync({ connectorOperation: { tableName: o.ds, operationName: o.op, parameters: build() } })
     if (!res?.success) {
       const e = res?.error
       const raw = e?.message ?? (typeof e === 'string' ? e : JSON.stringify(e ?? 'Connector call failed'))
@@ -171,7 +187,7 @@ export const liveBackend: Backend = {
     const op = OPS.envs()
     if (op) {
       const rows = asList(await call(op))
-      return rows.map<Env>((e) => ({ id: e.name, name: e.properties?.displayName ?? e.name, isDefault: !!e.properties?.isDefault, region: e.location }))
+      return rows.map<Env>((e) => ({ id: e.name, name: e.properties?.displayName ?? e.name, isDefault: !!e.properties?.isDefault, region: e.location, orgUrl: e.properties?.linkedEnvironmentMetadata?.instanceUrl ?? e.properties?.linkedEnvironmentMetadata?.instanceApiUrl }))
     }
     // No environment connector: fall back to the environment this app runs in.
     const ctx = await getContext()
@@ -187,62 +203,123 @@ export const liveBackend: Backend = {
   },
 
   async listAssets(user, envs, onProgress) {
-    const apps = OPS.apps(); const flows = OPS.flows(); const owners = OPS.flowOwners()
-    if (!apps && !flows) throw new Error('No admin connectors found in this build. Run the deploy script.')
+    const appsOp = OPS.apps()
+    const flowOps = flowLists()
+    const ownersOp = OPS.flowOwners()
+    const dvList = OPS.dvList()
+    const notes: ScanNote[] = []
+    const note = (env: string, kind: ScanNote['kind'], level: ScanNote['level'], text: string) => notes.push({ env, kind, level, text })
+    if (!appsOp) note('(all)', 'app', 'error', 'No "list apps" operation in this build - add the Power Apps for Admins connector.')
+    if (!flowOps.length) note('(all)', 'flow', 'error', 'No "list flows" operation in this build - add the Power Automate Management (or Power Automate for Admins) connector. Flows cannot be discovered without it.')
+    if (!dvList) note('(all)', 'agent', 'info', 'Copilot Studio agents skipped: the optional "Microsoft Dataverse (legacy)" connector is not in this build.')
+
     const out: Asset[] = []
     const mail = user.email.toLowerCase()
-    const errs: string[] = []
+    const MAX_OWNER_LOOKUPS = 400
     let done = 0
+
     for (const env of envs) {
       onProgress(done, envs.length, env.name)
-      const [a, f] = await Promise.allSettled([apps ? call(apps, [env.id]) : [], flows ? call(flows, [env.id]) : []])
 
-      if (a.status === 'fulfilled') for (const x of asList(a.value)) {
-        const o = x.properties?.owner
-        if (!o || (o.id !== user.id && String(o.email ?? o.userPrincipalName ?? '').toLowerCase() !== mail)) continue
-        out.push({
-          key: `app:${env.id}:${x.name}`, id: x.name, kind: 'app', name: x.properties?.displayName ?? x.name, envId: env.id, envName: env.name,
-          ownerId: o.id ?? user.id, ownerName: o.displayName ?? user.name, ownerEmail: o.email ?? user.email, state: 'Published',
-          createdTime: x.properties?.createdTime, modifiedTime: x.properties?.lastModifiedTime,
-          inSolution: !!x.properties?.solutionId, connections: Object.keys(x.properties?.connectionReferences ?? {}).length,
-        })
-      } else errs.push(`apps/${env.name}: ${(a.reason as Error).message}`)
+      // ---- apps ----
+      if (appsOp) {
+        try {
+          const list = asList(await call(appsOp, [env.id]))
+          let mine = 0
+          for (const x of list) {
+            const o = x.properties?.owner
+            if (!o || (o.id !== user.id && String(o.email ?? o.userPrincipalName ?? '').toLowerCase() !== mail)) continue
+            mine++
+            out.push({
+              key: `app:${env.id}:${x.name}`, id: x.name, kind: 'app', name: x.properties?.displayName ?? x.name, envId: env.id, envName: env.name,
+              ownerId: o.id ?? user.id, ownerName: o.displayName ?? user.name, ownerEmail: o.email ?? user.email, state: 'Published',
+              createdTime: x.properties?.createdTime, modifiedTime: x.properties?.lastModifiedTime,
+              inSolution: !!x.properties?.solutionId, connections: Object.keys(x.properties?.connectionReferences ?? {}).length,
+            })
+          }
+          note(env.name, 'app', 'info', `scanned ${list.length} app(s), ${mine} owned by user`)
+        } catch (e) { note(env.name, 'app', 'error', (e as Error).message.slice(0, 300)) }
+      }
 
-      if (f.status === 'fulfilled') {
-        let list = asList(f.value)
-        // V2 lists omit the creator: look up each flow's owners (bounded concurrency).
-        if (list.length && !list.some((x) => x.properties?.creator) && owners) {
-          const checked = await mapLimit(list, 8, async (x) => {
-            try {
-              const roles = asList(await call(owners, [env.id, x.name]))
-              const mine = roles.some((r) => (r.properties?.principal?.id ?? r.principal?.id) === user.id && /owner/i.test(r.properties?.roleName ?? r.roleName ?? ''))
-              return mine ? { ...x, properties: { ...x.properties, creator: { userId: user.id } } } : null
-            } catch { return null }
-          })
-          list = checked.filter(Boolean) as any[]
-        }
-        for (const x of list) {
-          const c = x.properties?.creator
-          if (!c || (c.userId !== user.id && c.objectId !== user.id)) continue
-          out.push({
-            key: `flow:${env.id}:${x.name}`, id: x.name, kind: 'flow', name: x.properties?.displayName ?? x.name, envId: env.id, envName: env.name,
-            ownerId: user.id, ownerName: user.name, ownerEmail: user.email, state: stateOf(x.properties?.state),
-            createdTime: x.properties?.createdTime, modifiedTime: x.properties?.lastModifiedTime,
-            inSolution: !!x.properties?.workflowEntityId, connections: Object.keys(x.properties?.connectionReferences ?? {}).length,
-          })
-        }
-      } else errs.push(`flows/${env.name}: ${(f.reason as Error).message}`)
+      // ---- flows (try each list operation until one works) ----
+      let flowsDone = false
+      for (const op of flowOps) {
+        try {
+          let list = asList(await call(op, [env.id]))
+          const total = list.length
+          let how = 'creator field'
+          if (total && !list.some((x) => x.properties?.creator)) {
+            // V2-style list: no creator, so look up each flow's owners (bounded).
+            if (!ownersOp) { note(env.name, 'flow', 'warn', `${op.op} returned ${total} flow(s) without creator info and no "get flow owners" operation exists - cannot tell who owns them.`); flowsDone = true; break }
+            const subset = list.slice(0, MAX_OWNER_LOOKUPS)
+            if (list.length > MAX_OWNER_LOOKUPS) note(env.name, 'flow', 'warn', `${list.length} flows here; only the first ${MAX_OWNER_LOOKUPS} were checked for ownership. Scan this environment alone and ask for a deeper scan if needed.`)
+            const checked = await mapLimit(subset, 4, async (x) => {
+              try {
+                const roles = asList(await call(ownersOp, [env.id, x.name]))
+                const mine = roles.some((r) => (r.properties?.principal?.id ?? r.principal?.id) === user.id && /owner/i.test(r.properties?.roleName ?? r.roleName ?? ''))
+                return mine ? { ...x, properties: { ...x.properties, creator: { userId: user.id } } } : null
+              } catch { return null }
+            })
+            list = checked.filter(Boolean) as any[]
+            how = 'owner lookups'
+          }
+          let mine = 0
+          for (const x of list) {
+            const c = x.properties?.creator
+            if (!c || (c.userId !== user.id && c.objectId !== user.id)) continue
+            mine++
+            out.push({
+              key: `flow:${env.id}:${x.name}`, id: x.name, kind: 'flow', name: x.properties?.displayName ?? x.name, envId: env.id, envName: env.name,
+              ownerId: user.id, ownerName: user.name, ownerEmail: user.email, state: stateOf(x.properties?.state),
+              createdTime: x.properties?.createdTime, modifiedTime: x.properties?.lastModifiedTime,
+              inSolution: !!x.properties?.workflowEntityId, connections: Object.keys(x.properties?.connectionReferences ?? {}).length,
+            })
+          }
+          note(env.name, 'flow', 'info', `${op.op}: ${total} flow(s) listed, ${mine} owned by user (via ${how})`)
+          flowsDone = true
+          break
+        } catch (e) { note(env.name, 'flow', 'warn', `${op.op} failed: ${(e as Error).message.slice(0, 250)}`) }
+      }
+      if (flowOps.length && !flowsDone) note(env.name, 'flow', 'error', 'All flow list operations failed in this environment (are you an admin there?).')
+
+      // ---- Copilot Studio agents (Dataverse bots table) ----
+      if (dvList && env.orgUrl) {
+        try {
+          const host = new URL(env.orgUrl).host
+          const su = asList(await call(dvList, [], undefined, {}, { dataset: host, table: 'systemusers', '$filter': `azureactivedirectoryobjectid eq ${user.id}`, '$select': 'systemuserid', '$top': 1 }))
+          const sysId = su[0]?.systemuserid
+          if (!sysId) note(env.name, 'agent', 'info', 'user has no Dataverse user record here (no agents)')
+          else {
+            const bots = asList(await call(dvList, [], undefined, {}, { dataset: host, table: 'bots', '$filter': `_ownerid_value eq ${sysId}`, '$select': 'botid,name,statecode,modifiedon,createdon,ismanaged', '$top': 500 }))
+            for (const b of bots) out.push({
+              key: `agent:${env.id}:${b.botid}`, id: b.botid, kind: 'agent', name: b.name ?? b.botid, envId: env.id, envName: env.name,
+              ownerId: user.id, ownerName: user.name, ownerEmail: user.email, state: b.statecode === 0 ? 'Started' : 'Stopped',
+              createdTime: b.createdon, modifiedTime: b.modifiedon, inSolution: !!b.ismanaged, orgHost: host,
+            })
+            note(env.name, 'agent', 'info', `${bots.length} Copilot Studio agent(s) owned by user`)
+          }
+        } catch (e) { note(env.name, 'agent', 'warn', `agents: ${(e as Error).message.slice(0, 250)}`) }
+      } else if (dvList && !env.orgUrl) note(env.name, 'agent', 'info', 'no Dataverse database in this environment')
+
       onProgress(++done, envs.length, env.name)
     }
-    if (errs.length) console.warn('Some scans failed:', errs)
-    if (errs.length && !out.length && errs.length >= envs.length) throw new Error(errs[0])
-    return out
+    return { assets: out, notes }
   },
 
   async transfer(asset, to, opts) {
     if (asset.kind === 'app') {
       // Power Apps have exactly one owner, so co-owner mode does not apply.
       await call(need('appOwner'), [asset.envId, asset.id], { newAppOwner: to.id })
+      return
+    }
+    if (asset.kind === 'agent') {
+      const list = need('dvList'); const upd = need('dvUpdate')
+      const host = asset.orgHost
+      if (!host) throw new Error('Missing Dataverse host for this agent - rescan.')
+      const su = asList(await call(list, [], undefined, {}, { dataset: host, table: 'systemusers', '$filter': `azureactivedirectoryobjectid eq ${to.id}`, '$select': 'systemuserid', '$top': 1 }))
+      const sysId = su[0]?.systemuserid
+      if (!sysId) throw new Error('The new owner has no user record in this environment - add them to the environment first.')
+      await call(upd, [], { 'ownerid@odata.bind': `/systemusers(${sysId})` }, {}, { dataset: host, table: 'bots', id: asset.id })
       return
     }
     const body: Record<string, unknown> = { put: [{ properties: { principal: { id: to.id, type: 'User' }, roleName: 'Owner' } }] }
@@ -254,8 +331,9 @@ export const liveBackend: Backend = {
     const rows: { name: string; ok: boolean; detail: string }[] = (Object.keys(OPS) as OpKey[]).map((k) => {
       const o = OPS[k]()
       const optional = !REQUIRED.includes(k)
-      return { name: k + (optional ? ' (optional)' : ''), ok: !!o, detail: o ? `${o.ds} → ${o.op}  [${o.method} ${o.path}]` : 'not found' }
+      return { name: k + (optional ? ` (optional${NEEDS[k] ? ': ' + NEEDS[k] : ''})` : ''), ok: !!o, detail: o ? `${o.ds} → ${o.op}  [${o.method} ${o.path}]` : 'not found' }
     })
+    rows.push({ name: 'flow list candidates', ok: flowLists().length > 0, detail: flowLists().map((o) => `${o.ds} → ${o.op} [${o.method} ${o.path}]`).join('\n') || 'none' })
     const ops = allOps()
     const sources = [...new Set(ops.map((o) => o.ds))]
     rows.push({ name: 'connectors in this build', ok: sources.length > 0, detail: sources.join(', ') || 'none - run the deploy script' })

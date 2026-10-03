@@ -11,6 +11,7 @@ const ENVS: Env[] = [
 ]
 
 const APP_NAMES = ['Expense Tracker', 'Asset Inspector', 'Visitor Check-in', 'Leave Requests', 'Field Survey', 'Inventory Scanner', 'Onboarding Hub', 'Safety Walkthrough']
+const AGENT_NAMES = ['HR Helpdesk Agent', 'IT Support Copilot', 'Sales Assistant', 'Policy Q&A Bot']
 const FLOW_NAMES = ['Approve invoices', 'Notify on new lead', 'Sync SharePoint to SQL', 'Weekly digest email', 'Teams alert on failure', 'Archive old files', 'New hire provisioning', 'Daily backup', 'Form to Planner task']
 
 let seed = 7
@@ -29,21 +30,23 @@ const people: Person[] = [
 ENVS.forEach((env) => {
   const n = 2 + Math.floor(rnd() * 5)
   for (let i = 0; i < n; i++) {
-    const isApp = rnd() > 0.45
+    const r = rnd()
+    const kind = r > 0.55 ? 'app' : r > 0.15 ? 'flow' : 'agent'
+    const isApp = kind === 'app'
     const owner = rnd() > 0.35 ? people[0] : pick(people)
-    const name = isApp ? pick(APP_NAMES) : pick(FLOW_NAMES)
-    const id = `${env.id}-${isApp ? 'a' : 'f'}${i}`
+    const name = kind === 'app' ? pick(APP_NAMES) : kind === 'flow' ? pick(FLOW_NAMES) : pick(AGENT_NAMES)
+    const id = `${env.id}-${kind[0]}${i}`
     store.push({
-      key: `${isApp ? 'app' : 'flow'}:${env.id}:${id}`,
+      key: `${kind}:${env.id}:${id}`,
       id,
-      kind: isApp ? 'app' : 'flow',
+      kind,
       name,
       envId: env.id,
       envName: env.name,
       ownerId: owner.id,
       ownerName: owner.name,
       ownerEmail: owner.email,
-      state: isApp ? 'Published' : pick(['Started', 'Started', 'Stopped', 'Suspended']),
+      state: isApp ? 'Published' : kind === 'agent' ? pick(['Started', 'Stopped']) : pick(['Started', 'Started', 'Stopped', 'Suspended']),
       createdTime: daysAgo(100 + Math.floor(rnd() * 600)),
       modifiedTime: daysAgo(Math.floor(rnd() * 200)),
       inSolution: rnd() > 0.7,
@@ -71,7 +74,8 @@ export const demoBackend: Backend = {
       await sleep(250)
       onProgress(++i, envs.length, e.name)
     }
-    return store.filter((a) => a.ownerId === user.id && envs.some((e) => e.id === a.envId)).map((a) => ({ ...a }))
+    const assets = store.filter((a) => a.ownerId === user.id && envs.some((e) => e.id === a.envId)).map((a) => ({ ...a }))
+    return { assets, notes: [{ env: '(demo)', kind: 'env' as const, level: 'info' as const, text: `Scanned ${envs.length} sample environments` }] }
   },
   async transfer(asset, to, opts) {
     await sleep(300 + rnd() * 600)

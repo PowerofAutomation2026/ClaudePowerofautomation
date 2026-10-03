@@ -57,7 +57,8 @@ connection references re-pointed after transfer.
 | Power Platform for Admins | `shared_powerplatformforadmins` | list all environments |
 | Power Automate Management | `shared_flowmanagement` | list flows, change flow owner as admin |
 | Office 365 Users | `shared_office365users` | email → user object id |
-| Power Automate for Admins *(optional)* | `shared_microsoftflowforadmins` | extra flow admin operations |
+| Power Automate for Admins *(optional)* | `shared_microsoftflowforadmins` | flow list with creator, flow owner lookups |
+| Microsoft Dataverse (legacy) *(optional)* | `shared_commondataservice` | **Copilot Studio agents** (read + transfer) in any environment |
 
 ## Troubleshooting
 * **"Connector operation … not found"** → open 🩺 Diagnostics, click *Copy diagnostics*; each connector's real operations are listed.
@@ -70,3 +71,15 @@ connection references re-pointed after transfer.
 * **`power.config.json is required to push an app`** → the file was missing/unreadable (a UTF-8 BOM from Windows PowerShell breaks `pac`). The deploy script
   now edits it without a BOM, keeps a copy in `.deploy-state/`, restores it if `pac` removes it, and as a last resort publishes under a new dated name.
 * **`InvalidApiVersion`** → the connectors list `api-version` as optional but the service requires it. The app always sends it and, if rejected, reads the accepted versions from the error and retries.
+
+## Copilot Studio agents (experimental)
+Agents are Dataverse `bot` rows. With the optional *Microsoft Dataverse (legacy)* connector the app finds the user's Dataverse record in each
+environment that has a database, lists `bots` owned by them and transfers ownership with `ownerid@odata.bind`. The new owner must already be a user in
+that environment. Agents have a single owner. Verify with a dry run, then one agent, first.
+
+## Scan report
+After every scan the *Scan report* card lists, per environment, how many apps / flows / agents were listed and how many belong to the user, plus any
+warnings (for example "not an admin in this environment"). Use *Copy* to share it when something looks missing.
+
+* **Browser tab crashes with "Out of Memory"** → fixed in v1.3.0: one SDK client for the whole session, environments scanned one at a time, owner lookups
+  capped (400 flows/environment) and limited to 4 at once. If it still happens, scan one environment at a time (pick it in the dropdown) and close other tabs.

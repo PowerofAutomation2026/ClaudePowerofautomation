@@ -1,10 +1,11 @@
-export type AssetKind = 'app' | 'flow'
+export type AssetKind = 'app' | 'flow' | 'agent'
 
 export interface Env {
   id: string
   name: string
   isDefault?: boolean
   region?: string
+  orgUrl?: string // Dataverse org URL (needed for Copilot Studio agents)
 }
 
 export interface Person {
@@ -28,6 +29,7 @@ export interface Asset {
   modifiedTime?: string
   inSolution?: boolean
   connections?: number
+  orgHost?: string // Dataverse host, for agents
 }
 
 export type TransferMode = 'replace' | 'coowner'
@@ -54,6 +56,18 @@ export interface AuditEntry {
   batch: string
 }
 
+export interface ScanNote {
+  env: string
+  kind: AssetKind | 'env' | 'user'
+  level: 'info' | 'warn' | 'error'
+  text: string
+}
+
+export interface ScanResult {
+  assets: Asset[]
+  notes: ScanNote[]
+}
+
 export interface Backend {
   readonly label: 'Demo' | 'Live'
   listEnvironments(): Promise<Env[]>
@@ -62,7 +76,7 @@ export interface Backend {
     user: Person,
     envs: Env[],
     onProgress: (done: number, total: number, env: string) => void,
-  ): Promise<Asset[]>
+  ): Promise<ScanResult>
   transfer(asset: Asset, to: Person, opts: TransferOptions): Promise<void>
   diagnostics(): Promise<{ name: string; ok: boolean; detail: string }[]>
 }

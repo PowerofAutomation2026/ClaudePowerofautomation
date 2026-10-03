@@ -40,7 +40,8 @@ export function powershellFor(assets: Asset[], to: Person, opts: TransferOptions
     '',
   ]
   for (const a of assets) {
-    if (a.kind === 'app') lines.push(`Set-AdminPowerAppOwner -AppName '${a.id}' -EnvironmentName '${a.envId}' -AppOwner '${to.id}'  # ${a.name}`)
+    if (a.kind === 'agent') lines.push(`# Copilot Studio agent '${a.name}' (${a.envName}): PATCH https://${a.orgHost ?? '<org host>'}/api/data/v9.2/bots(${a.id})  body: { "ownerid@odata.bind": "/systemusers(<new owner's systemuserid in that environment>)" }`)
+    else if (a.kind === 'app') lines.push(`Set-AdminPowerAppOwner -AppName '${a.id}' -EnvironmentName '${a.envId}' -AppOwner '${to.id}'  # ${a.name}`)
     else {
       lines.push(`Set-AdminFlowOwnerRole -EnvironmentName '${a.envId}' -FlowName '${a.id}' -RoleName CanEdit -PrincipalType User -PrincipalObjectId '${to.id}'  # ${a.name}`)
       if (opts.mode === 'replace' && opts.removeOldOwner) lines.push(`Remove-AdminFlowOwnerRole -EnvironmentName '${a.envId}' -FlowName '${a.id}' -RoleId '${a.ownerId}'`)
@@ -56,5 +57,9 @@ export function risksFor(a: Asset): Risk[] {
   if (a.kind === 'flow' && (a.connections ?? 0) > 0) r.push({ level: 'warn', text: `${a.connections} connection(s) use the old owner's credentials - re-authenticate after transfer.` })
   if (a.kind === 'flow' && a.state !== 'Started') r.push({ level: 'info', text: `Flow is ${a.state}.` })
   if (a.kind === 'app') r.push({ level: 'info', text: 'Apps have a single owner; the previous owner keeps no ownership.' })
+  if (a.kind === 'agent') {
+    r.push({ level: 'warn', text: 'Copilot Studio agent: the new owner must exist as a user in that environment. Re-check connections, channels and publishing after transfer.' })
+    r.push({ level: 'info', text: 'Agents have a single owner (co-owner mode does not apply).' })
+  }
   return r
 }

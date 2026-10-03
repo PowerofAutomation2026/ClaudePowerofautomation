@@ -74,3 +74,5 @@ tr:hover td { background: rgba(255,255,255,.03); }
 .sticky { position: sticky; bottom: 14px; margin-top: 14px; display: flex; gap: 10px; align-items: center; padding: 12px 16px; border-radius: 14px; background: var(--bg2); border: 1px solid var(--accent); box-shadow: var(--glow); }
 pre.code { background: var(--bg); border: 1px solid var(--card-b); border-radius: 10px; padding: 10px; font-size: 11px; max-height: 200px; overflow: auto; white-space: pre-wrap; }
 @media (max-width: 700px) { .bar { grid-template-columns: 90px 1fr 24px; } }
+
+.pill.agent { background: rgba(251,191,36,.15); color: var(--warn); }
