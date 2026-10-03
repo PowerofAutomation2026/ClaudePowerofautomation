@@ -67,3 +67,5 @@ connection references re-pointed after transfer.
   (it reads `.power/schemas/appschemas/dataSourcesInfo.ts`). `tsconfig.json` excludes that folder and the deploy script falls back to a plain `vite build`.
 * **`ApplicationDisplayNameIsInUse` on publish** → `power.config.json` was lost/recreated. The deploy script now binds to the existing app automatically
   (sets `appId` in `power.config.json`) and updates it in place. Keep `power.config.json` between runs.
+* **`power.config.json is required to push an app`** → the file was missing/unreadable (a UTF-8 BOM from Windows PowerShell breaks `pac`). The deploy script
+  now edits it without a BOM, keeps a copy in `.deploy-state/`, restores it if `pac` removes it, and as a last resort publishes under a new dated name.

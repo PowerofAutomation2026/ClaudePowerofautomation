@@ -86,9 +86,22 @@ Step 'Installing npm packages'
 Run npm @('install','--no-audit','--no-fund')
 
 Step 'Initialising code app'
-if (-not (Test-Path (Join-Path $root 'power.config.json'))) {
+$cfgPath   = Join-Path $root 'power.config.json'
+$stateDir  = Join-Path $root '.deploy-state'
+$cfgBackup = Join-Path $stateDir 'power.config.json'
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)   # pac (Node) cannot parse a BOM
+
+function Save-ConfigBackup { if (Test-Path $cfgPath) { New-Item -ItemType Directory -Force -Path $stateDir | Out-Null; Copy-Item $cfgPath $cfgBackup -Force } }
+function Restore-ConfigIfMissing { if (-not (Test-Path $cfgPath) -and (Test-Path $cfgBackup)) { Copy-Item $cfgBackup $cfgPath -Force; Warn 'Restored power.config.json from .deploy-state' } }
+
+if (-not (Test-Path $cfgPath) -and (Test-Path $cfgBackup)) {
+  Copy-Item $cfgBackup $cfgPath -Force
+  Ok 'Restored power.config.json from previous deploy (keeps the same app)'
+}
+if (-not (Test-Path $cfgPath)) {
   Run pac @('code','init','--displayName',$DisplayName)
 } else { Ok 'power.config.json exists - reusing' }
+Save-ConfigBackup
 
 # ---------- 5. connectors ----------
 Step 'Wiring connectors (uses YOUR connections - no app registration)'
@@ -185,24 +198,40 @@ function Push-App {
   return $text
 }
 
+$configBefore = if (Test-Path $cfgPath) { [System.IO.File]::ReadAllText($cfgPath) } else { $null }
 $out = Push-App
+if ($configBefore -and -not (Test-Path $cfgPath)) { [System.IO.File]::WriteAllText($cfgPath, $configBefore, $utf8NoBom); Warn 'pac removed power.config.json - restored it' }
 
-# Same app name already exists (e.g. power.config.json was recreated): bind to the existing app and update it in place.
+# Same app name already exists (power.config.json was recreated): bind to the existing app and update it in place.
 if ($out -match 'ApplicationDisplayNameIsInUse' -and $out -match "Existing App: '([0-9a-fA-F-]{36})'") {
   $existing = $Matches[1]
   Warn "An app named '$DisplayName' already exists ($existing). Updating that app instead of creating a new one..."
-  $cfgPath = Join-Path $root 'power.config.json'
-  $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
-  if ($cfg.PSObject.Properties.Name -contains 'appId') { $cfg.appId = $existing }
-  else { $cfg | Add-Member -NotePropertyName appId -NotePropertyValue $existing }
-  ($cfg | ConvertTo-Json -Depth 20) | Set-Content -Path $cfgPath -Encoding UTF8
+  $raw = [System.IO.File]::ReadAllText($cfgPath).TrimStart([char]0xFEFF)
+  if ($raw -match '"appId"\s*:') { $raw = [regex]::Replace($raw, '"appId"\s*:\s*(null|"[^"]*")', '"appId": "' + $existing + '"') }
+  else { $raw = [regex]::Replace($raw, '^\s*\{', '{' + "`n  `"appId`": `"$existing`",", 1) }
+  [System.IO.File]::WriteAllText($cfgPath, $raw, $utf8NoBom)   # no BOM, no re-serialisation
+  Write-Host "    power.config.json now:`n$raw" -ForegroundColor DarkGray
+  $out = Push-App
+  if (-not (Test-Path $cfgPath)) { [System.IO.File]::WriteAllText($cfgPath, $raw, $utf8NoBom) }
+}
+
+# Last resort: binding to the old app did not work - publish under a new, dated name so you still get a working deployment.
+if ($out -notmatch '(?i)pushed successfully' -and $out -match 'ApplicationDisplayNameIsInUse' -and (Test-Path $cfgPath)) {
+  $newName = "$DisplayName " + (Get-Date -Format 'yyMMdd-HHmm')
+  Warn "Could not update the existing app. Publishing as a NEW app named '$newName' (delete the old one later in make.powerapps.com)."
+  $raw = [System.IO.File]::ReadAllText($cfgPath).TrimStart([char]0xFEFF)
+  $raw = [regex]::Replace($raw, '"appId"\s*:\s*"[^"]*"', '"appId": null')
+  $raw = [regex]::Replace($raw, '"appDisplayName"\s*:\s*"[^"]*"', '"appDisplayName": "' + $newName + '"')
+  [System.IO.File]::WriteAllText($cfgPath, $raw, $utf8NoBom)
   $out = Push-App
 }
 
 if ($out -notmatch '(?i)pushed successfully') {
-  throw "Publish failed (see the pac message above). If it says the name is in use, open power.config.json and set `"appId`" to the Existing App id it printed, then re-run."
+  Restore-ConfigIfMissing
+  throw "Publish failed (see the pac message above). Copy everything shown above and send it for diagnosis."
 }
 
+Save-ConfigBackup
 $playUrl = if ($out -match '(https://apps\.powerapps\.com/play/\S+)') { $Matches[1] } else { $null }
 Write-Host "`nDone. App published." -ForegroundColor Green
 if ($playUrl) { Write-Host "Open it: $playUrl" -ForegroundColor Green }

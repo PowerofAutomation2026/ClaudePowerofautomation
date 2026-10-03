@@ -3,3 +3,4 @@ dist
 .deploy-logs
 dist-zip
 .power
+.deploy-state
