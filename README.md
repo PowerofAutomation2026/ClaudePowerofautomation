@@ -58,7 +58,7 @@ connection references re-pointed after transfer.
 | Power Automate Management | `shared_flowmanagement` | list flows, change flow owner as admin |
 | Office 365 Users | `shared_office365users` | email → user object id |
 | Power Automate for Admins *(optional)* | `shared_microsoftflowforadmins` | flow list with creator, flow owner lookups |
-| Microsoft Dataverse (legacy) *(optional)* | `shared_commondataservice` | **Copilot Studio agents** (read + transfer) in any environment |
+| Power Platform for Admins V2 | `shared_powerplatformadminv2` | **Copilot Studio agents**: tenant-wide inventory query + *Reassign the owner of the bot* |
 
 ## Troubleshooting
 * **"Connector operation … not found"** → open 🩺 Diagnostics, click *Copy diagnostics*; each connector's real operations are listed.
@@ -91,3 +91,10 @@ warnings (for example "not an admin in this environment"). Use *Copy* to share i
 * **Agents show 0 although the Dataverse tables were added** → `pac` names the data sources by display name (`agents`, `users`); v1.4.1 identifies them by primary key / entity set instead. 🩺 shows which data source each table mapped to.
 * **Transfer "does nothing"** → the new owner's email must be entered first. v1.5.0 explains this inline, accepts Enter, and shows the result (dry-run or real) in the drawer.
 * **Agents in other environments** → agents are read from the environment the app is deployed in. Run the deploy script again with that environment's ID (state is kept per environment in `.deploy-state/<envId>`).
+
+## Copilot Studio agents (v1.6.0 – tenant-wide)
+Discovery uses the **Power Platform inventory** (action *Query Power Platform resources*, type `microsoft.copilotstudio/agents`, property `ownerId`) so agents in **every environment**
+show up from one deployment. Transfer uses *Reassign the owner of the bot* (`ReassignCopilotAgent`, body `NewOwnerAadUserId`).
+Requirements: the connection's account must be a tenant/Power Platform admin and hold **System Administrator** in the agent's environment; the new owner needs the
+**System Customizer** role there (temporarily) and a Microsoft 365 Copilot licence. Classic chatbots are not supported by the reassign API (HTTP 405).
+If discovery shows 0, open the Scan report: it prints the owner ids it saw so the id format can be compared.

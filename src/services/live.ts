@@ -10,7 +10,8 @@
  *   Power Automate Management  (shared_flowmanagement)          List Flows as Admin / Modify Flow Owners as Admin
  *   Power Automate for Admins  (shared_microsoftflowforadmins)  optional: owner role operations
  *   Office 365 Users           (shared_office365users)          email -> Entra object id
- *   Microsoft Dataverse (legacy) (shared_commondataservice)     optional: Copilot Studio agents (bots table, any environment via `dataset`)
+ *   Power Platform for Admins V2 (shared_powerplatformadminv2)  Copilot Studio agents: tenant-wide inventory query + ReassignCopilotAgent
+ *   (fallbacks for agents: this app's own Dataverse, or the legacy Dataverse connector)
  */
 import { getClient } from '@microsoft/power-apps/data'
 import { getContext } from '@microsoft/power-apps/app'
@@ -91,6 +92,14 @@ const OPS = {
   flowOwners: () => { const o = allOps(); return pick(
     o.find((x) => /^(getadminflowownerrole|getflowownerroleasadmin)$/.test(x.norm)),
     o.find((x) => x.method === 'GET' && /admin\/environments\/\{[^}/]+\}\/flows\/\{[^}/]+\}\/(owners|permissions)$/i.test(bare(x.path)))) },
+  /** Power Platform for Admins V2: tenant-wide inventory ("Query Power Platform resources"). */
+  inventory: () => { const o = allOps(); return pick(
+    o.find((x) => x.method === 'POST' && /resourcequery\/resources\/query/i.test(x.path)),
+    o.find((x) => /^(queryresources?|resourcequery|querypowerplatformresources?|queryresourcesinventory)$/.test(x.norm))) },
+  /** Power Platform for Admins V2: "Reassign the owner of the bot" (ReassignCopilotAgent). */
+  agentReassign: () => { const o = allOps(); return pick(
+    o.find((x) => x.norm === 'reassigncopilotagent'),
+    o.find((x) => x.method === 'POST' && /botAdminOperations\/reassign/i.test(x.path))) },
   /** Microsoft Dataverse (legacy): list / patch rows in ANY environment by passing `dataset` (the org host). */
   dvList: () => { const o = allOps(); return pick(
     o.find((x) => /commondataservice/i.test(x.ds) && x.method === 'GET' && /datasets\/\{dataset\}\/tables\/\{table\}\/items$/i.test(bare(x.path)))) },
@@ -102,7 +111,7 @@ const OPS = {
 } as const
 type OpKey = keyof typeof OPS
 const REQUIRED: OpKey[] = ['apps', 'appOwner', 'user']
-const NEEDS: Partial<Record<OpKey, string>> = { envs: 'environment list', flows: 'flow list', flowOwner: 'change flow owner', flowOwners: 'flow owners lookup (only if list has no creator)', dvList: 'Copilot Studio agents (read)', dvUpdate: 'Copilot Studio agents (transfer)' }
+const NEEDS: Partial<Record<OpKey, string>> = { envs: 'environment list', flows: 'flow list', flowOwner: 'change flow owner', flowOwners: 'flow owners lookup (only if list has no creator)', dvList: 'agents fallback (legacy Dataverse read)', dvUpdate: 'agents fallback (legacy Dataverse write)', inventory: 'Copilot Studio agents - discovery (all environments)', agentReassign: 'Copilot Studio agents - transfer' }
 
 const need = (k: OpKey): Op => {
   const o = OPS[k]()
@@ -112,7 +121,11 @@ const need = (k: OpKey): Op => {
 
 /** The connectors mark api-version as "optional", but the Power Platform services reject calls without one. */
 const API_VERSION: Record<string, string> = { powerapps: '2017-08-01', flow: '2016-11-01', platform: '2020-10-01' }
-const defaultApiVersion = (ds: string) => (/powerplatform/i.test(ds) ? API_VERSION.platform : /flow/i.test(ds) ? API_VERSION.flow : API_VERSION.powerapps)
+const defaultApiVersion = (o: Op) =>
+  /botAdminOperations/i.test(o.path) ? '1'                                  // Copilot Studio admin API
+  : /resourcequery/i.test(o.path) ? '2024-10-01'                            // Power Platform inventory API
+  : /adminv2/i.test(o.ds) ? '2024-10-01'
+  : /powerplatform/i.test(o.ds) ? API_VERSION.platform : /flow/i.test(o.ds) ? API_VERSION.flow : API_VERSION.powerapps
 const PREFERRED_VERSIONS = ['2020-10-01', '2016-11-01', '2017-08-01', '2018-01-01', '2019-05-01', '2020-06-01', '2021-04-01']
 const versionCache: Record<string, string> = {}
 const isApiVersionParam = (name: string) => /^api[-_]?version$/i.test(name)
@@ -139,7 +152,7 @@ async function callRaw(o: Op, pathValues: string[] = [], body?: unknown, query: 
       if (p.in === 'body') params[p.name] = body
       else if (p.in === 'query') {
         if (p.name in query) params[p.name] = query[p.name]
-        else if (isApiVersionParam(p.name)) params[p.name] = versionCache[cacheKey] ?? defaultApiVersion(o.ds)   // always send, even if "optional"
+        else if (isApiVersionParam(p.name)) params[p.name] = versionCache[cacheKey] ?? defaultApiVersion(o)   // always send, even if "optional"
       } else if (p.in === 'header' && /content-?type/i.test(p.name) && body !== undefined) params[p.name] = 'application/json'
     }
     return { ...params, ...extra }
@@ -206,6 +219,34 @@ const asList = (v: any): any[] => (Array.isArray(v) ? v : Array.isArray(v?.value
 const tick = () => new Promise<void>((r) => setTimeout(r, 0)) // yield to the browser so memory can be reclaimed between heavy steps
 
 
+
+// ---- Copilot Studio agents via the tenant-wide Power Platform inventory (works for EVERY environment) ----
+const invProp = (r: any, k: string): any => {
+  let p = r?.properties
+  if (typeof p === 'string') { try { p = JSON.parse(p) } catch { p = undefined } }
+  return p?.[k] ?? r?.[`properties.${k}`] ?? r?.[`properties_${k}`] ?? r?.[k]
+}
+const invRows = (d: any): any[] => (Array.isArray(d?.data) ? d.data : Array.isArray(d?.body?.data) ? d.body.data : Array.isArray(d) ? d : asList(d))
+
+async function inventoryAgents(op: Op, ownerAad: string | null): Promise<{ rows: any[]; total?: number; truncated: boolean }> {
+  const rows: any[] = []
+  let token: string | undefined
+  let total: number | undefined
+  for (let page = 0; page < 20; page++) {
+    const clauses: any[] = [{ $type: 'where', FieldName: 'type', Operator: '==', Values: ["'microsoft.copilotstudio/agents'"] }]
+    if (ownerAad) clauses.push({ $type: 'where', FieldName: 'properties.ownerId', Operator: '==', Values: [`'${ownerAad}'`] })
+    const body = { TableName: 'PowerPlatformResources', Clauses: clauses, Options: { Top: 1000, ...(token ? { SkipToken: token } : {}) } }
+    const d = await callRaw(op, [], body)
+    rows.push(...invRows(d))
+    total = d?.totalRecords ?? d?.body?.totalRecords ?? total
+    token = d?.skipToken ?? d?.body?.skipToken
+    if (!token) return { rows, total, truncated: false }
+    if (rows.length >= 20000) break
+    await tick()
+  }
+  return { rows, total, truncated: true }
+}
+
 // ---- Dataverse of the environment this app runs in (no extra connection needed; added by `pac code add-data-source -a dataverse`) ----
 /**
  * pac names Dataverse data sources by display name (the `bot` table becomes "agents", `systemuser` becomes "users"),
@@ -270,11 +311,49 @@ export const liveBackend: Backend = {
     const note = (env: string, kind: ScanNote['kind'], level: ScanNote['level'], text: string) => notes.push({ env, kind, level, text })
     if (!appsOp) note('(all)', 'app', 'error', 'No "list apps" operation in this build - add the Power Apps for Admins connector.')
     if (!flowOps.length) note('(all)', 'flow', 'error', 'No "list flows" operation in this build - add the Power Automate Management (or Power Automate for Admins) connector. Flows cannot be discovered without it.')
-    if (!dvList && !nativeTable(/^bots?$/i)) note('(all)', 'agent', 'warn', 'Copilot Studio agents cannot be scanned: this build has neither the Dataverse "bot" table nor the Dataverse (legacy) connector. Re-run the deploy script.')
 
     const out: Asset[] = []
     const mail = user.email.toLowerCase()
     const MAX_OWNER_LOOKUPS = 400
+
+    // ---- Copilot Studio agents: tenant-wide inventory (all environments in one call) ----
+    let agentsViaInventory = false
+    const invOp = OPS.inventory()
+    if (invOp) {
+      try {
+        onProgress(0, envs.length, 'agent inventory (tenant-wide)')
+        const inScope = new Set(envs.map((e) => e.id.toLowerCase()))
+        const envName = new Map(envs.map((e) => [e.id.toLowerCase(), e.name]))
+        const mine = (r: any) => String(invProp(r, 'ownerId') ?? '').toLowerCase() === user.id.toLowerCase()
+        let res = await inventoryAgents(invOp, user.id).catch(() => null)     // server-side owner filter first
+        let owned = (res?.rows ?? []).filter(mine)
+        let via = 'server-side owner filter'
+        if (!owned.length) {                                                  // owner id format may differ: fetch all agents and compare here
+          res = await inventoryAgents(invOp, null)
+          owned = res.rows.filter(mine)
+          via = `client-side match over ${res.rows.length} agent(s)`
+          if (!owned.length && res.rows.length) {
+            const sample = [...new Set(res.rows.map((r) => String(invProp(r, 'ownerId') ?? '')))].slice(0, 3).join(', ')
+            note('(all)', 'agent', 'info', `inventory has ${res.rows.length} agent(s) but none with ownerId = ${user.id}. Sample ownerIds seen: ${sample || '(none)'}`)
+          }
+        }
+        let inScopeCount = 0
+        for (const r of owned) {
+          const eid = String(invProp(r, 'environmentId') ?? '')
+          if (!inScope.has(eid.toLowerCase())) continue
+          inScopeCount++
+          const id = String(r.name ?? invProp(r, 'agentId') ?? '')
+          out.push({
+            key: `agent:${eid}:${id}`, id, kind: 'agent', name: invProp(r, 'displayName') ?? id, envId: eid, envName: envName.get(eid.toLowerCase()) ?? eid,
+            ownerId: user.id, ownerName: user.name, ownerEmail: user.email, state: 'Started',
+            createdTime: invProp(r, 'createdAt'), modifiedTime: invProp(r, 'modifiedAt') ?? invProp(r, 'lastModifiedAt'), orgHost: 'inventory',
+          })
+        }
+        agentsViaInventory = true
+        note('(all)', 'agent', 'info', `Copilot Studio inventory: ${owned.length} agent(s) owned by user in the tenant, ${inScopeCount} in the scanned environment(s) (${via}${res?.truncated ? '; list truncated' : ''})`)
+      } catch (e) { note('(all)', 'agent', 'warn', `agent inventory failed: ${(e as Error).message.slice(0, 300)} - falling back to per-environment Dataverse`) }
+    } else note('(all)', 'agent', 'warn', 'No inventory operation in this build - add the "Power Platform for Admins V2" connector to discover Copilot Studio agents in all environments.')
+
     let done = 0
 
     for (const env of envs) {
@@ -346,8 +425,9 @@ export const liveBackend: Backend = {
       }
       if (flowOps.length && !flowsDone) note(env.name, 'flow', 'error', 'All flow list operations failed in this environment (are you an admin there?).')
 
-      // ---- Copilot Studio agents (Dataverse bots table) ----
+      // ---- Copilot Studio agents: per-environment Dataverse fallback (only if the inventory was unavailable) ----
       await tick()
+      if (agentsViaInventory) { onProgress(++done, envs.length, env.name); continue }
       onProgress(done, envs.length, `${env.name} · agents`)
       const botsTable = nativeTable(/^bots?$/i)
       const isHome = botsTable && (await getCurrentEnvId()) === env.id
@@ -401,6 +481,14 @@ export const liveBackend: Backend = {
       // Power Apps have exactly one owner, so co-owner mode does not apply.
       await call(need('appOwner'), [asset.envId, asset.id], { newAppOwner: to.id })
       return
+    }
+    if (asset.kind === 'agent') {
+      const re = OPS.agentReassign()
+      if (re) {
+        // Needs: the connection's account = System Administrator in the target environment; new owner = temporary System Customizer there.
+        await callRaw(re, [asset.envId, asset.id], { NewOwnerAadUserId: to.id })
+        return
+      }
     }
     if (asset.kind === 'agent' && asset.orgHost === 'native') {
       const botsTable = nativeTable(/^bots?$/i)

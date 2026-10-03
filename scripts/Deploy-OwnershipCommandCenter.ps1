@@ -13,7 +13,7 @@
     - Power Automate Management    (shared_flowmanagement)          list flows + change flow owner (as admin)
     - Power Automate for Admins    (shared_microsoftflowforadmins)  optional extra flow admin operations
     - Office 365 Users             (shared_office365users)          email -> user
-    - Microsoft Dataverse (legacy) (shared_commondataservice)       optional: Copilot Studio agents
+    - Power Platform for Admins V2 (shared_powerplatformadminv2)    Copilot Studio agents in ALL environments (inventory + reassign owner)
 
 .PARAMETER EnvironmentId   Target environment GUID (the part after /environments/ in the maker portal URL). Prompted if omitted.
 .PARAMETER DisplayName     App display name.
@@ -126,7 +126,7 @@ $needed = @(
   @{ Label = 'Power Automate Management'; Apis = @('shared_flowmanagement');         Link = 'shared_flowmanagement' },
   @{ Label = 'Office 365 Users';          Apis = @('shared_office365users');         Link = 'shared_office365users' },
   @{ Label = 'Power Automate for Admins (optional)'; Apis = @('shared_microsoftflowforadmins'); Link = 'shared_microsoftflowforadmins'; Optional = $true },
-  @{ Label = 'Microsoft Dataverse (legacy) (optional - Copilot Studio agents)'; Apis = @('shared_commondataservice'); Link = 'shared_commondataservice'; Optional = $true }
+  @{ Label = 'Power Platform for Admins V2 (Copilot Studio agents, all environments)'; Apis = @('shared_powerplatformadminv2'); Link = 'shared_powerplatformadminv2' }
 )
 
 function Get-Connections {
@@ -265,4 +265,4 @@ if ($playUrl) { Write-Host "Open it: $playUrl" -ForegroundColor Green }
 Write-Host "Or from https://make.powerapps.com/environments/$EnvironmentId/apps  (look for '$DisplayName')." -ForegroundColor Green
 Write-Host 'First launch: approve the connector consent prompts. You need Power Platform admin (or Environment admin) rights for the admin connectors to return data.' -ForegroundColor Gray
 Write-Host 'Keep power.config.json - it links this folder to the published app for future updates.' -ForegroundColor Gray
-Write-Host 'Copilot Studio agents are read from the environment the app is deployed in. To scan agents in another environment, run this script again and enter THAT environment ID (you will create its connections once).' -ForegroundColor Gray
+Write-Host 'Copilot Studio agents: discovered tenant-wide through the Power Platform for Admins V2 connector. To TRANSFER an agent your connection account needs System Administrator in the agent environment, and the new owner needs the System Customizer role there (temporarily).' -ForegroundColor Gray

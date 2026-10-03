@@ -58,7 +58,7 @@ export function risksFor(a: Asset): Risk[] {
   if (a.kind === 'flow' && a.state !== 'Started') r.push({ level: 'info', text: `Flow is ${a.state}.` })
   if (a.kind === 'app') r.push({ level: 'info', text: 'Apps have a single owner; the previous owner keeps no ownership.' })
   if (a.kind === 'agent') {
-    r.push({ level: 'warn', text: 'Copilot Studio agent: the new owner must exist as a user in that environment. Re-check connections, channels and publishing after transfer.' })
+    r.push({ level: 'warn', text: 'Copilot Studio agent: your connection account needs System Administrator in that environment, and the new owner needs a Microsoft 365 Copilot licence and (temporarily) the System Customizer role there. Re-check connections, channels and publishing afterwards.' })
     r.push({ level: 'info', text: 'Agents have a single owner (co-owner mode does not apply).' })
   }
   return r
