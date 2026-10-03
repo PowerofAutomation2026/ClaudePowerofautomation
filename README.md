@@ -136,3 +136,7 @@ member (Dataverse user record) of that environment without assigning any securit
 * **History → "↩ Restore to <original owner>"** appears on every failed agent transfer and works after a page reload (the audit log is kept in the browser).
 * Re-running a reassignment for the **same owner** is allowed for agents (repair mode): scan the new owner, select the agent, enter the same email, transfer.
 * Failure tips now include the discriminating test (same agent → a different fully licensed user) and verification (open the agent in Copilot Studio as its owner).
+
+## v1.7.6
+Agent reassign retries once automatically (after 8 s) when the service answers HTTP 502 / "partially updated" – Microsoft's own error text says another reassignment is the repair.
+Advisor findings (see chat): the most likely cause is the **new owner has no Copilot Studio licence / no enabled environment user**; check licence and sign-in first, or reassign to a healthy licensed admin.

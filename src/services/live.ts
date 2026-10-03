@@ -567,7 +567,15 @@ export const liveBackend: Backend = {
           // Needs: the connection's account = System Administrator in the target environment; new owner = temporary System Customizer there.
           await callRaw(re, [asset.envId, asset.id], { NewOwnerAadUserId: to.id })
           return
-        } catch (e) { reassignErr = e as Error }
+        } catch (e) {
+          reassignErr = e as Error
+          // "partially updated" = the service did some steps; the designed repair is another reassignment. Retry ONCE after a pause
+          // (user-record sync after "Add sync user" can take a few seconds).
+          if (/partially updated|not in a json format|HTTP 502/i.test(reassignErr.message)) {
+            await new Promise((r) => setTimeout(r, 8000))
+            try { await callRaw(re, [asset.envId, asset.id], { NewOwnerAadUserId: to.id }); return } catch (e2) { reassignErr = new Error(`${(e2 as Error).message} (after one automatic retry)`) }
+          }
+        }
       }
       // Fallback: plain Dataverse "assign" - only possible for the environment this app runs in.
       const botsTable = nativeTable(/^bots?$/i)
