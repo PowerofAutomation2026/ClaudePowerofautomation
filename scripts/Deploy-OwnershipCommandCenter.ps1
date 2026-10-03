@@ -176,7 +176,36 @@ if (-not (Test-Path (Join-Path $root 'dist\index.html'))) { throw 'Build produce
 Ok 'Build OK'
 
 Step 'Publishing to Power Platform'
-Run pac @('code','push')
+function Push-App {
+  # pac exits 0 even when the service rejects the push, so judge success by its output.
+  $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  $text = (& pac code push 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+  $ErrorActionPreference = $prev
+  Write-Host $text
+  return $text
+}
 
-Write-Host "`nDone. Open it from https://make.powerapps.com/environments/$EnvironmentId/apps  (look for '$DisplayName')." -ForegroundColor Green
+$out = Push-App
+
+# Same app name already exists (e.g. power.config.json was recreated): bind to the existing app and update it in place.
+if ($out -match 'ApplicationDisplayNameIsInUse' -and $out -match "Existing App: '([0-9a-fA-F-]{36})'") {
+  $existing = $Matches[1]
+  Warn "An app named '$DisplayName' already exists ($existing). Updating that app instead of creating a new one..."
+  $cfgPath = Join-Path $root 'power.config.json'
+  $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+  if ($cfg.PSObject.Properties.Name -contains 'appId') { $cfg.appId = $existing }
+  else { $cfg | Add-Member -NotePropertyName appId -NotePropertyValue $existing }
+  ($cfg | ConvertTo-Json -Depth 20) | Set-Content -Path $cfgPath -Encoding UTF8
+  $out = Push-App
+}
+
+if ($out -notmatch '(?i)pushed successfully') {
+  throw "Publish failed (see the pac message above). If it says the name is in use, open power.config.json and set `"appId`" to the Existing App id it printed, then re-run."
+}
+
+$playUrl = if ($out -match '(https://apps\.powerapps\.com/play/\S+)') { $Matches[1] } else { $null }
+Write-Host "`nDone. App published." -ForegroundColor Green
+if ($playUrl) { Write-Host "Open it: $playUrl" -ForegroundColor Green }
+Write-Host "Or from https://make.powerapps.com/environments/$EnvironmentId/apps  (look for '$DisplayName')." -ForegroundColor Green
 Write-Host 'First launch: approve the connector consent prompts. You need Power Platform admin (or Environment admin) rights for the admin connectors to return data.' -ForegroundColor Gray
+Write-Host 'Keep power.config.json - it links this folder to the published app for future updates.' -ForegroundColor Gray
