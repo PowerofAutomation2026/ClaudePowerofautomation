@@ -58,7 +58,7 @@ export function risksFor(a: Asset): Risk[] {
   if (a.kind === 'flow' && a.state !== 'Started') r.push({ level: 'info', text: `Flow is ${a.state}.` })
   if (a.kind === 'app') r.push({ level: 'info', text: 'Apps have a single owner; the previous owner keeps no ownership.' })
   if (a.kind === 'agent') {
-    r.push({ level: 'warn', text: 'Copilot Studio agent: your connection account needs System Administrator in that environment, and the new owner needs a Microsoft 365 Copilot licence and (temporarily) the System Customizer role there. Re-check connections, channels and publishing afterwards.' })
+    r.push({ level: 'warn', text: 'Copilot Studio agent: your connection account needs System Administrator in that environment, and the new owner must be a member of that environment with a Copilot licence. Re-check connections, channels and publishing afterwards.' })
     r.push({ level: 'info', text: 'Agents have a single owner (co-owner mode does not apply).' })
   }
   return r
@@ -73,9 +73,10 @@ export function explainTransferError(err: string, kind: AssetKind): string[] {
   const tips: string[] = []
   if (kind === 'agent' && isPartialUpdate(err)) {
     tips.push('⚠ The service started the reassignment but could not finish ("only partially updated"). The agent may be half-updated and may not work until a reassignment SUCCEEDS. Fix the cause below, then click Retry – or click "Restore original owner".')
-    tips.push('Cause (Microsoft-documented): the NEW owner is missing the System Customizer security role in the agent\'s environment. In that case the API fails with a generic HTTP 502 "The response is not in a JSON format".')
-    tips.push('Fix: Power Platform admin center → Environments → (the agent\'s environment) → Users → select the new owner → Manage security roles → tick System Customizer → Save. Wait ~1-2 minutes, then Retry. Remove the role afterwards if you like.')
-    tips.push('The new owner must also be a member (user) of that environment and hold a Copilot Studio / Microsoft 365 Copilot licence.')
+    tips.push('Microsoft\'s documented requirements for the new owner: (1) a Copilot Studio / Microsoft 365 Copilot licence and (2) being a MEMBER of the agent\'s environment. Note: System Customizer is NOT in Microsoft\'s requirements – it only appears in a community fix, most likely because adding any role creates the user\'s record in the environment.')
+    tips.push('Least-privilege fix: make the new owner a member of the environment first – Power Platform admin center → Environments → (the agent\'s environment) → Users → Add user → add them with the lowest role (e.g. Environment Maker). The reassignment itself then grants Environment Maker automatically. Wait 1-2 minutes and Retry.')
+    tips.push('Only if that still fails: temporarily add System Customizer (what the community report used), retry, then remove it.')
+    tips.push('Generic HTTP 502 "The response is not in a JSON format" is how the connector reports these refusals.')
   }
   if (/405|method not allowed/.test(e) && kind === 'agent') tips.push('HTTP 405: classic (pre-agent) chatbots are not supported by the reassign API. Use Power Apps → Solutions → the agent → Assign, or the admin center.')
   if (/403|forbidden|unauthor|access is denied|privilege|permission/.test(e))
@@ -84,8 +85,7 @@ export function explainTransferError(err: string, kind: AssetKind): string[] {
   if (/managed|solution|locked/.test(e)) tips.push('The item is in a managed solution. Make an unmanaged customization (open it, small edit, save) or change the owner in the Power Platform admin center.')
   if (/not found|does not exist|no user|systemuser|user record/.test(e)) tips.push('The new owner must exist as a user in the item\'s environment (add them to the environment first).')
   if (kind === 'agent') {
-    tips.push('Most common cause for agents: the NEW owner must temporarily hold the System Customizer security role in the agent\'s environment (Power Platform admin center → Environments → that environment → Users → Manage security roles). Add it, retry, then remove it.')
-    tips.push('Also check: the new owner has a Microsoft 365 Copilot licence, and the agent is not a classic chatbot.')
+    tips.push('Agent checklist: the new owner is a member (user) of the agent\'s environment, has a Copilot Studio / Microsoft 365 Copilot licence, and the agent is not a classic chatbot.')
   } else if (kind === 'app') tips.push('The new owner must be a licensed user in the tenant; apps in managed solutions cannot be re-owned.')
   else tips.push('For flows the new owner must have a licence that allows the flow\'s connectors; solution flows may need their connection references re-pointed.')
   return [...new Set(tips)]

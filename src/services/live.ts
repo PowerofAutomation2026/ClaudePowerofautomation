@@ -539,6 +539,12 @@ export const liveBackend: Backend = {
     if (asset.kind === 'agent') {
       const re = OPS.agentReassign()
       let reassignErr: Error | null = null
+      // Pre-flight (only possible in the app's own environment): a new owner with no user record there makes the service fail halfway.
+      if (nativeKey('systemuser') && (await getCurrentEnvId()) === asset.envId) {
+        let sysId: string | null = null
+        try { sysId = await nativeSystemUserId(to.id) } catch { /* cannot check - let the service decide */ sysId = 'unknown' }
+        if (!sysId) throw new Error(`Not attempted: ${to.email} is not a user of this environment yet (no Dataverse user record). Add them as a member in the Power Platform admin center (Environments → this environment → Users → Add user), then retry. Nothing was changed.`)
+      }
       if (re) {
         try {
           // Needs: the connection's account = System Administrator in the target environment; new owner = temporary System Customizer there.

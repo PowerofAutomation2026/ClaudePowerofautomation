@@ -119,3 +119,10 @@ That is the Copilot Studio reassign API refusing to finish. Documented cause: th
 (or isn't a user there / has no licence). The connector only shows a generic *"The response is not in a JSON format"*; the real reason is in `innerError`, which the app now shows.
 1. Admin center → Environments → *(agent's environment)* → Users → new owner → Manage security roles → tick **System Customizer** → Save (wait 1-2 min).
 2. Click **Retry** in the transfer panel. If a failed attempt left the agent half-updated, **↩ Restore original owner** puts it back.
+
+## v1.7.3 – transferring an agent WITHOUT System Customizer
+Microsoft's documented requirements for the new owner of a reassigned agent are only: a **Copilot Studio / Microsoft 365 Copilot licence** and **membership of the agent's environment**; the service
+then grants *Environment Maker* itself. (System Customizer appears only in a community fix, most likely because adding any role creates the environment user record.)
+* Add the new owner as a **member** of the environment first (admin center → Environments → *env* → Users → Add user, lowest role), wait 1-2 min, transfer.
+* The app now asks you to confirm the checklist before a real agent transfer, and for agents in the app's own environment it **checks the new owner's user record first** and stops *before* calling the service (no half-updated agents).
+* Only if it still fails: temporarily add System Customizer, retry, remove.

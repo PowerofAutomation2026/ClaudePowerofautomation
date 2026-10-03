@@ -343,9 +343,11 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
   const [status, setStatus] = useState<Record<string, { s: ItemStatus; err?: string }>>({})
   const [running, setRunning] = useState(false)
   const [confirmText, setConfirmText] = useState('')
+  const [agentOk, setAgentOk] = useState(false)
   const [lastBatch, setLastBatch] = useState<{ id: string; to: Person; keys: string[] } | null>(null)
   const [script, setScript] = useState(false)
   const needsConfirm = !dry && items.length > 5
+  const needsAgentOk = items.some((a) => a.kind === 'agent') && !dry
   const doneCount = Object.values(status).filter((x) => x.s === 'done' || x.s === 'dry').length
   const failed = items.filter((a) => status[a.key]?.s === 'failed')
   const partial = failed.filter((a) => a.kind === 'agent' && isPartialUpdate(status[a.key]?.err ?? ''))
@@ -440,18 +442,20 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
             {partial.length > 0 && <button className="btn sm" style={{ marginRight: 8 }} onClick={restoreOriginal}>↩ Restore original owner ({partial.length})</button>}
             <button className="btn sm" onClick={() => navigator.clipboard?.writeText(failed.map((a) => `${a.kind} ${a.name} (${a.envName}) [${a.id}]: ${status[a.key]?.err}`).join('\n\n')).then(() => flash('Error details copied'))}>Copy error details</button>
           </div>)}
-        {items.some((a) => a.kind === 'agent') && !running && (
+        {needsAgentOk && !running && (
           <div className="card" style={{ padding: 12, fontSize: 12.5 }}>
-            <b>🤖 Before you transfer agents (otherwise it fails with HTTP 502)</b>
-            <ol style={{ margin: '6px 0 0', paddingLeft: 18 }}>
-              <li>The <b>new owner</b> is a user in the agent's environment and has the <b>System Customizer</b> security role there (Power Platform admin center → Environments → the environment → Users → Manage security roles). Temporary is fine.</li>
-              <li>The new owner has a <b>Copilot Studio / Microsoft 365 Copilot</b> licence.</li>
+            <b>🤖 Before you transfer agents</b>
+            <ol style={{ margin: '6px 0 8px', paddingLeft: 18 }}>
+              <li>The <b>new owner is a member (user) of each agent's environment</b> – Power Platform admin center → Environments → the environment → Users → Add user (lowest role is fine; the transfer itself grants Environment Maker). No System Customizer needed unless this fails.</li>
+              <li>The new owner has a <b>Copilot Studio / Microsoft 365 Copilot licence</b>.</li>
               <li>Your connection account is an admin with <b>System Administrator</b> in that environment.</li>
               <li>The agent is not a classic chatbot and not locked in a managed solution.</li>
-            </ol></div>)}
+            </ol>
+            <label className="row"><input type="checkbox" checked={agentOk} onChange={(e) => setAgentOk(e.target.checked)} /> <b>I checked these</b> – a failed attempt can leave an agent half-updated.</label>
+          </div>)}
         {running && <div className="progress"><i style={{ width: `${(doneCount / Math.max(1, items.length)) * 100}%` }} /></div>}
         <div className="row">
-          <button className={`btn ${dry ? 'primary' : 'danger'}`} disabled={running || !items.length || (needsConfirm && confirmText !== `TRANSFER ${items.length}`)} onClick={() => run(items)}>
+          <button className={`btn ${dry ? 'primary' : 'danger'}`} disabled={running || !items.length || (needsAgentOk && !agentOk) || (needsConfirm && confirmText !== `TRANSFER ${items.length}`)} onClick={() => run(items)}>
             {running ? <span className="spin" /> : dry ? '🧪 Simulate' : '🚀 Transfer now'}
           </button>
           {failed.length > 0 && !running && <button className="btn" onClick={() => run(failed)}>↻ Retry {failed.length} failed</button>}
