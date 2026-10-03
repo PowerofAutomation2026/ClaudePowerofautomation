@@ -131,3 +131,8 @@ then grants *Environment Maker* itself. (System Customizer appears only in a com
 Before a real agent transfer the app calls the Power Platform for Admins operation **Add Admin Power Apps Sync User** for each agent environment, which makes the new owner a
 member (Dataverse user record) of that environment without assigning any security role – Microsoft's documented requirement for a reassign. Untick it in the panel to skip. If it fails
 (for example the connection account lacks rights) the error is shown and the transfer still proceeds. Wait ~1 min and Retry if the reassign reports "partially updated".
+
+## v1.7.5 – recovering agents left half-updated
+* **History → "↩ Restore to <original owner>"** appears on every failed agent transfer and works after a page reload (the audit log is kept in the browser).
+* Re-running a reassignment for the **same owner** is allowed for agents (repair mode): scan the new owner, select the agent, enter the same email, transfer.
+* Failure tips now include the discriminating test (same agent → a different fully licensed user) and verification (open the agent in Copilot Studio as its owner).

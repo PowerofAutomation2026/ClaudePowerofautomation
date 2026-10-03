@@ -318,7 +318,7 @@ export default function App() {
           onClose={() => setPanel(null)}
           onAudit={(e) => setAudit((a) => [...a, ...e])}
           onDone={(moved) => { setAssets((all) => all.filter((a) => !moved.includes(a.key))); setSel(new Set()) }} flash={flash} />)}
-      {panel === 'history' && <HistoryDrawer audit={audit} onClose={() => setPanel(null)} onClear={() => setAudit([])} />}
+      {panel === 'history' && <HistoryDrawer audit={audit} backend={backend} onClose={() => setPanel(null)} onClear={() => setAudit([])} flash={flash} />}
       {panel === 'diag' && <DiagDrawer backend={backend} onClose={() => setPanel(null)} />}
       {palette && <Palette commands={commands} onClose={() => setPalette(false)} />}
       {toast && <div className="toast">{toast}</div>}
@@ -375,7 +375,8 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
     try { to = await backend.resolveUser(target) } catch (e) {
       setMsg({ level: 'error', text: `New owner not found: ${(e as Error).message}` }); setRunning(false); busyRef.current = false; return
     }
-    if (to.id === from.id) { setMsg({ level: 'error', text: 'The new owner is the same person as the current owner.' }); setRunning(false); busyRef.current = false; return }
+    if (to.id === from.id && !list.every((a) => a.kind === 'agent')) { setMsg({ level: 'error', text: 'The new owner is the same person as the current owner.' }); setRunning(false); busyRef.current = false; return }
+    // Same owner + agents only = "re-run the reassignment" to finish/repair an agent a previous attempt left half-updated.
     // Agents: make the new owner a member of each agent environment first (no roles) - Microsoft's documented requirement.
     let prepNotes = ''
     const agentEnvs = [...new Map(list.filter((a) => a.kind === 'agent').map((a) => [a.envId, a.envName])).entries()]
@@ -493,8 +494,18 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
   )
 }
 
-function HistoryDrawer({ audit, onClose, onClear }: { audit: AuditEntry[]; onClose: () => void; onClear: () => void }) {
+function HistoryDrawer({ audit, backend, onClose, onClear, flash }: { audit: AuditEntry[]; backend: Backend; onClose: () => void; onClear: () => void; flash: (m: string) => void }) {
   const rows = [...audit].reverse()
+  const [busy, setBusy] = useState<string | null>(null)
+  /** Re-assign a (possibly half-updated) agent back to the owner it had before the failed attempt. */
+  const restore = async (e: AuditEntry) => {
+    const [, envId, ...rest] = e.assetKey.split(':')
+    const stub: Asset = { key: e.assetKey, id: rest.join(':'), kind: e.kind, name: e.name, envId: envId ?? '', envName: e.envName, ownerId: e.to.id, ownerName: e.to.name, ownerEmail: e.to.email, state: 'Unknown' }
+    setBusy(e.assetKey + e.at)
+    try { await backend.transfer(stub, e.from, { mode: 'replace', removeOldOwner: false }); flash(`Restored "${e.name}" to ${e.from.email}`) }
+    catch (err) { flash(`Restore failed: ${(err as Error).message.slice(0, 160)}`) }
+    finally { setBusy(null) }
+  }
   return (
     <Drawer onClose={onClose}>
       <h2>Audit history</h2><div className="sub">Stored in this browser only. Export for your records.</div>
@@ -506,7 +517,10 @@ function HistoryDrawer({ audit, onClose, onClear }: { audit: AuditEntry[]; onClo
         {rows.slice(0, 200).map((e, i) => (
           <div key={i} className="item"><span className={`pill ${e.kind}`}>{e.kind}</span>
             <div><div className="name">{e.name}</div><div className="id">{e.envName} · {e.from.email} → {e.to.email}</div><div className="id">{new Date(e.at).toLocaleString()}{e.error ? ' · ' + e.error : ''}</div></div>
-            <span className={`pill st ${e.status === 'failed' ? 'bad' : e.dryRun ? 'warn' : 'ok'}`}>{e.dryRun ? 'dry run' : e.status}</span></div>))}
+            <div className="col" style={{ alignItems: 'flex-end', marginLeft: 'auto' }}>
+              <span className={`pill st ${e.status === 'failed' ? 'bad' : e.dryRun ? 'warn' : 'ok'}`}>{e.dryRun ? 'dry run' : e.status}</span>
+              {e.status === 'failed' && !e.dryRun && e.kind === 'agent' && <button className="btn sm" disabled={busy !== null} onClick={() => restore(e)}>{busy === e.assetKey + e.at ? <span className="spin" /> : '↩'} Restore to {e.from.name}</button>}
+            </div></div>))}
       </div>
     </Drawer>)
 }
