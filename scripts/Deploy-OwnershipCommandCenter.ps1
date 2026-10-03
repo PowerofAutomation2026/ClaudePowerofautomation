@@ -91,9 +91,9 @@ if (-not (Test-Path (Join-Path $root 'power.config.json'))) {
 # ---------- 5. connectors ----------
 Step 'Wiring connectors (uses YOUR connections - no app registration)'
 $needed = @(
-  @{ Label = 'Power Apps for Admins';     Apis = @('shared_powerappsforadmins') },
-  @{ Label = 'Power Automate for Admins'; Apis = @('shared_flowforadmins','shared_powerautomateforadmins','shared_flowmanagement') },
-  @{ Label = 'Office 365 Users';          Apis = @('shared_office365users') }
+  @{ Label = 'Power Apps for Admins';     Apis = @('shared_powerappsforadmins');                                                   Link = 'shared_powerappsforadmins' },
+  @{ Label = 'Power Automate for Admins'; Apis = @('shared_flowforadmins','shared_powerautomateforadmins','shared_flowmanagement'); Link = $null },
+  @{ Label = 'Office 365 Users';          Apis = @('shared_office365users');                                                       Link = 'shared_office365users' }
 )
 
 function Get-Connections {
@@ -107,24 +107,48 @@ function Get-Connections {
   }
 }
 
-foreach ($n in $needed) {
-  $done = $false
-  while (-not $done) {
-    $conns = @(Get-Connections)
-    $hit = $null; $api = $null
-    foreach ($a in $n.Apis) { $hit = $conns | Where-Object { $_.Api -eq $a } | Select-Object -First 1; if ($hit) { $api = $a; break } }
-    if ($hit) {
-      Run pac @('code','add-data-source','-a',$api,'-c',$hit.Id)
-      Ok "$($n.Label): added ($api)"
-      $done = $true
-    } else {
-      Warn "No '$($n.Label)' connection found in this environment."
-      Warn 'Opening Power Apps > Connections. Click "+ New connection", pick the connector, sign in, then come back.'
-      Start-Process "https://make.powerapps.com/environments/$EnvironmentId/connections"
-      $ans = Read-Host 'Press Enter once the connection is created (or type S to skip this connector)'
-      if ($ans -match '^[sS]') { Warn "Skipped $($n.Label) - related features will show as 'missing' in Diagnostics."; $done = $true }
-    }
+function Find-Connection($n, $conns) {
+  foreach ($a in $n.Apis) {
+    $hit = $conns | Where-Object { $_.Api -eq $a } | Select-Object -First 1
+    if ($hit) { return [pscustomobject]@{ Api = $a; Id = $hit.Id } }
   }
+  return $null
+}
+
+$attempt = 0
+while ($true) {
+  $conns = @(Get-Connections)
+  Write-Host ''
+  $missing = @()
+  foreach ($n in $needed) {
+    if ($n.Skipped) { Write-Host "    [skipped] $($n.Label)" -ForegroundColor DarkGray; continue }
+    if (Find-Connection $n $conns) { Write-Host "    [  OK  ]  $($n.Label)" -ForegroundColor Green }
+    else { Write-Host "    [MISSING] $($n.Label)" -ForegroundColor Red; $missing += $n }
+  }
+  if (-not $missing) { break }
+
+  Write-Host ''
+  Warn 'These connections must be created once (OAuth sign-in cannot be scripted):'
+  $missing | ForEach-Object { Warn "   - $($_.Label)" }
+  Warn 'Opening your browser. For each page: click "Create" / "+ New connection" and sign in with your admin account.'
+  $base = "https://make.powerapps.com/environments/$EnvironmentId/connections"
+  foreach ($n in $missing) {
+    if ($n.Link) { Start-Process "$base/available?apiName=$($n.Link)" }
+  }
+  if ($missing | Where-Object { -not $_.Link }) {
+    Start-Process $base
+    Warn "On the Connections page click '+ New connection' and search for: $((($missing | Where-Object { -not $_.Link }).Label) -join ', ')"
+  }
+
+  $ans = Read-Host 'Press Enter when done to re-check (or type S to skip the missing ones)'
+  if ($ans -match '^[sS]') { $missing | ForEach-Object { $_.Skipped = $true; Warn "Skipped $($_.Label) - related features will show as 'missing' in Diagnostics." }; $attempt = 0; continue }
+  if (++$attempt -ge 10) { throw 'Connections still missing after 10 checks.' }
+}
+
+foreach ($n in $needed) {
+  if ($n.Skipped) { continue }
+  $c = Find-Connection $n (Get-Connections)
+  if ($c) { Run pac @('code','add-data-source','-a',$c.Api,'-c',$c.Id); Ok "$($n.Label): added ($($c.Api))" }
 }
 
 # ---------- 6. build + publish ----------
