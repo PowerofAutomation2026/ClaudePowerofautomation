@@ -9,6 +9,7 @@
  *   5. after success, verify the owner in the inventory (informational: the inventory can lag by minutes).
  * Apps and flows keep light parallelism (3) because their operations are atomic single calls.
  */
+import { log } from './oplog'
 import type { Asset, AuditEntry, Backend, ItemStatus, Person, TransferOptions } from './types'
 
 export interface TransferHooks {
@@ -51,6 +52,7 @@ export async function runTransfer(args: TransferArgs): Promise<TransferOutcome> 
   let halted: string | undefined
 
   const record = (a: Asset, status: ItemStatus, error?: string, note?: string) => {
+    log(`RESULT ${a.kind} "${a.name}" [${a.envName}] → ${status.toUpperCase()}${dry ? ' (dry run, nothing changed)' : ''}${error ? ' – ' + error.slice(0, 300) : ''}${note ? ' – ' + note.slice(0, 160) : ''}`)
     hooks.status(a.key, status, error, note)
     entries.push({ at: new Date().toISOString(), assetKey: a.key, name: a.name, kind: a.kind, envName: a.envName, from: ownerOf(a), to, mode: opts.mode, status, error, dryRun: dry, batch, note })
   }
@@ -70,6 +72,7 @@ export async function runTransfer(args: TransferArgs): Promise<TransferOutcome> 
     return { status: 'done', note: 'Accepted by the service, but the owner could not be read back from here – confirm in the portal (Re-check retries).' }
   }
 
+  log(`=== ${dry ? 'DRY RUN' : 'REAL TRANSFER'} of ${items.length} item(s) to ${to.email} (${to.id}) – batch ${batch}`)
   const agents = items.filter((a) => a.kind === 'agent')
   const others = items.filter((a) => a.kind !== 'agent')
 

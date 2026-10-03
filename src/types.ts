@@ -89,5 +89,6 @@ export interface Backend {
   checkMember?(envId: string, to: Person): Promise<boolean | null>
   /** After a transfer: true = inventory shows `to` as owner, false = not (yet) reflected, null = cannot tell. */
   verifyOwner?(asset: Asset, to: Person): Promise<boolean | null>
+  verifyOwnerRaw?(asset: Asset, to: Person): Promise<boolean | null>
   diagnostics(): Promise<{ name: string; ok: boolean; detail: string }[]>
 }

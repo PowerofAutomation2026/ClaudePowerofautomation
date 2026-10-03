@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { clearLog, getLog, log as opLog, subscribeLog } from './oplog'
 import type { AgentCategory, Asset, AssetKind, AuditEntry, Backend, Env, ItemStatus, Person, ScanNote, TransferOptions } from './types'
 import { hasConnectors, pickBackend } from './services'
 import { runTransfer } from './transferPlan'
@@ -186,6 +187,7 @@ export default function App() {
     { label: 'Export inventory (CSV)', run: () => download('inventory.csv', toCsv(assetRows(visible)), 'text/csv') },
     { label: 'Open history', run: () => setPanel('history') },
     { label: 'Connector diagnostics', run: () => setPanel('diag') },
+    { label: 'Show operation log (real calls)', run: () => setPanel('diag') },
   ]
 
   return (
@@ -294,7 +296,7 @@ export default function App() {
                   <tr key={a.key} className={sel.has(a.key) ? 'sel' : ''} onClick={() => toggle(a.key)}>
                     <td><input type="checkbox" checked={sel.has(a.key)} readOnly /></td>
                     <td><div className="name">{a.name}</div><div className="id">{a.id}</div></td>
-                    <td><span className={`kind k-${a.kind}`}>{KIND_UI[a.kind].icon} {KIND_UI[a.kind].label}</span>{a.kind === 'agent' && a.category && a.category !== 'agent' && <span className="pill warn" style={{ marginLeft: 6 }} title={a.meta ? Object.entries(a.meta).map(([k, v]) => `${k}: ${v}`).join('\n') : ''}>{CAT_LABEL[a.category]}</span>}</td>
+                    <td><span className={`kind k-${a.kind}`}>{KIND_UI[a.kind].icon} {KIND_UI[a.kind].label}</span>{a.kind === 'agent' && a.category && a.category !== 'agent' && <span className="pill warn" style={{ marginLeft: 6 }} title={a.meta ? Object.entries(a.meta).map(([k, v]) => `${k}: ${v}`).join('\n') : ''}>{CAT_LABEL[a.category]}</span>}{a.kind === 'agent' && a.meta?.flavor && <span className="pill" style={{ marginLeft: 6 }}>{a.meta.flavor}</span>}{a.kind === 'agent' && a.meta?.live === 'unverified' && <span className="pill warn" style={{ marginLeft: 6 }} title="The tenant inventory can still list deleted agents. This app could not confirm it exists (no Dataverse access to this environment). Deploy the app into this environment to live-check.">⚠ not live-checked</span>}{a.kind === 'agent' && a.meta?.live === 'verified' && <span className="pill ok" style={{ marginLeft: 6 }} title="Confirmed to exist in Dataverse just now">✓ live</span>}</td>
                     <td>{a.envName}</td>
                     <td><span className="state"><i className={`dot ${a.state === 'Started' || a.state === 'Published' ? 'on' : a.state === 'Suspended' ? 'bad' : 'off'}`} />{a.state}</span></td>
                     <td>{ago(a.modifiedTime)}</td>
@@ -318,7 +320,7 @@ export default function App() {
         <TransferDrawer backend={backend} from={user} items={selected} busyRef={busyRef}
           onClose={() => setPanel(null)}
           onAudit={(e) => setAudit((a) => [...a, ...e])}
-          onDone={(moved) => { setAssets((all) => all.filter((a) => !moved.includes(a.key))); setSel(new Set()) }} flash={flash} />)}
+          onDone={(moved) => { setAssets((all) => all.filter((a) => !moved.includes(a.key))); setSel(new Set()) }} onRefresh={() => { void search(user.email) }} flash={flash} />)}
       {panel === 'history' && <HistoryDrawer audit={audit} backend={backend} onClose={() => setPanel(null)} onClear={() => setAudit([])} onAudit={(e) => setAudit((a) => [...a, ...e])} flash={flash} />}
       {panel === 'diag' && <DiagDrawer backend={backend} onClose={() => setPanel(null)} />}
       {palette && <Palette commands={commands} onClose={() => setPalette(false)} />}
@@ -331,9 +333,24 @@ function Drawer({ children, onClose }: { children: React.ReactNode; onClose: () 
   return (<><div className="drawer-bg" onClick={onClose} /><aside className="drawer">{children}</aside></>)
 }
 
-function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAudit, onDone, flash }: {
+/** Real operation log: every connector call, pre-flight, transfer and read-back with timestamps. */
+function OpLog() {
+  const lines = useSyncExternalStore(subscribeLog, getLog)
+  return (
+    <details className="card" style={{ padding: 12 }} open={lines.length > 0 && lines.length < 40}>
+      <summary><b>Operation log</b> – {lines.length} real call(s) recorded</summary>
+      <div className="row" style={{ margin: '8px 0' }}>
+        <button className="btn sm" onClick={() => navigator.clipboard?.writeText(lines.join('\n'))}>Copy log</button>
+        <button className="btn sm" onClick={clearLog}>Clear</button>
+      </div>
+      <pre style={{ maxHeight: 260, overflow: 'auto', fontSize: 11, whiteSpace: 'pre-wrap', margin: 0 }}>{lines.join('\n') || '(nothing yet)'}</pre>
+    </details>
+  )
+}
+
+function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAudit, onDone, onRefresh, flash }: {
   backend: Backend; from: Person; items: Asset[]; busyRef: React.MutableRefObject<boolean>
-  onClose: () => void; onAudit: (e: AuditEntry[]) => void; onDone: (keys: string[]) => void; flash: (m: string) => void
+  onClose: () => void; onAudit: (e: AuditEntry[]) => void; onDone: (keys: string[]) => void; onRefresh: () => void; flash: (m: string) => void
 }) {
   const [items] = useState(itemsIn) // snapshot: results and errors must stay visible even if the table behind changes
   const [toEmail, setToEmail] = useState('')
@@ -407,6 +424,7 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
       ? `Dry run finished: ${nOk} OK, ${nFail} would fail. NOTHING was changed. Untick "Dry run" and click "Transfer now" to really move ownership to ${to.name}.${out.entries.filter((e) => e.status === 'failed' && /^Not attempted/.test(e.error ?? '')).map((e) => `\n• ${e.name}: ${e.error}`).join('')}`
       : `Transfer finished: ${nOk} accepted by the service for ${to.name} (${nConfirmed} CONFIRMED at the source${nUnverified ? `, ⚠ ${nUnverified} NOT confirmed yet – see below` : ''}), ${nFail} failed${skipped ? `, ${skipped} skipped (batch stopped to protect them)` : ''}.${firstErr ? `\n\nError from the service:\n${firstErr}` : ''}${out.halted ? '\n\nThe batch was STOPPED at the first agent failure so the remaining agents were not touched.' : ''}${out.prepNotes}` })
     flash(dry ? 'Dry run complete – nothing changed' : `${nConfirmed} confirmed, ${nUnverified} unverified, ${nFail} failed`)
+    if (!dry && out.acceptedKeys.length) { opLog('auto-refresh: re-reading live data in 5 s'); setTimeout(onRefresh, 5000) }
     setRunning(false); busyRef.current = false
   }
 
@@ -460,6 +478,7 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
         {needsConfirm && <div className="field"><label>Type <b>TRANSFER {items.length}</b> to confirm</label><input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} /></div>}
         {dry && <div className="risk info">Dry run is ON – nothing will be changed. Untick it to really transfer.</div>}
         {msg && <div className={`banner`} style={msg.level === 'error' ? { borderColor: 'var(--bad)', color: 'var(--bad)', background: 'rgba(251,113,133,.08)' } : msg.level === 'ok' ? { borderColor: 'var(--ok)', color: 'var(--ok)', background: 'rgba(52,211,153,.08)' } : { borderColor: 'var(--accent)', color: 'var(--accent2)', background: 'rgba(124,92,255,.08)' }}><span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.text}</span></div>}
+        <OpLog />
         {failed.length > 0 && !running && (
           <div className="card" style={{ padding: 12 }}>
             <b>{partial.length ? '⚠ Agent left half-updated – what to do' : 'Why this usually fails'}</b>
@@ -549,6 +568,7 @@ function DiagDrawer({ backend, onClose }: { backend: Backend; onClose: () => voi
     <Drawer onClose={onClose}>
       <h2>Connector diagnostics</h2><div className="sub">Operations are discovered from the connectors by REST path. If one is missing, the connector was not added or its path differs.</div>
       <div className="row" style={{ marginTop: 10 }}><button className="btn sm" disabled={!rows} onClick={() => navigator.clipboard?.writeText((rows ?? []).map((r) => `${r.ok ? 'OK ' : 'MISSING '}${r.name}\n${r.detail}`).join('\n\n'))}>Copy diagnostics</button></div>
+      <div style={{ marginTop: 10 }}><OpLog /></div>
       <div className="col" style={{ marginTop: 12 }}>{!rows ? <span className="spin" /> : rows.map((r) => (
         <div key={r.name} className="item"><span className={`pill ${r.ok ? 'ok' : 'bad'}`}>{r.ok ? 'bound' : 'missing'}</span><div><div className="name">{r.name}</div><div className="id" style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{r.detail}</div></div></div>))}</div>
     </Drawer>)

@@ -161,3 +161,10 @@ apps: Get Admin App; flows: owner roles) and each row shows **Verified at the so
 
 ## v1.9.1 – live agent count (deleted agents no longer listed)
 The tenant inventory keeps showing deleted agents for a while. After the inventory read, every agent is now checked against the Dataverse `bot` table of its own environment: deleted agents and agents whose owner already changed are dropped, name/state are refreshed. The Scan report says how many were confirmed, how many deleted ones were removed, and how many could not be live-checked (environments this app cannot reach).
+
+## v1.9.2 – accurate live agents, real operation log, auto-refresh
+- **CLI / GitHub-Copilot-powered agents** (e.g. `copilotowner26`, `TESTOWNERTRANSFER`) are real Copilot Studio agents and are now listed (tagged "GitHub Copilot") instead of hidden.
+- **Live check**: agents are confirmed against Dataverse; rows show `✓ live` or `⚠ not live-checked`. The inventory can still list DELETED agents, so for the exact count deploy the app into the agents' environment (e.g. `-EnvironmentId Default-<tenantId>`) or add the optional Microsoft Dataverse connector (the deploy script now offers it).
+- **Agent pre-flight**: before reassigning, the agent must still exist in Dataverse, otherwise nothing is sent.
+- **Operation log** (Transfer drawer and Diagnostics): every connector call, pre-flight, transfer, read-back result with timestamps; Copy log button.
+- **Auto-refresh**: 5 s after a real transfer the user is re-scanned so the table shows live data.

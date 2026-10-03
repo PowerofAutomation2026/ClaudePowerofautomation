@@ -13,6 +13,7 @@
  *   Power Platform for Admins V2 (shared_powerplatformadminv2)  Copilot Studio agents: tenant-wide inventory query + ReassignCopilotAgent
  *   (fallbacks for agents: this app's own Dataverse, or the legacy Dataverse connector)
  */
+import { log } from '../oplog'
 import { getClient } from '@microsoft/power-apps/data'
 import { getContext } from '@microsoft/power-apps/app'
 import type { AgentCategory, Asset, Backend, Env, ScanNote } from '../types'
@@ -166,7 +167,11 @@ async function callRaw(o: Op, pathValues: string[] = [], body?: unknown, query: 
     return { ...params, ...extra }
   }
   const run = async () => {
-    const res: any = await sdk().executeAsync({ connectorOperation: { tableName: o.ds, operationName: o.op, parameters: build() } })
+    const t0 = Date.now()
+    const built = build()
+    log(`→ ${o.ds}.${o.op} ${JSON.stringify(Object.fromEntries(Object.entries(built).map(([k, v]) => [k, typeof v === 'object' ? JSON.stringify(v).slice(0, 160) : String(v).slice(0, 80)])))}`)
+    const res: any = await sdk().executeAsync({ connectorOperation: { tableName: o.ds, operationName: o.op, parameters: built } })
+    log(`← ${o.op} ${res?.success ? 'OK' : 'FAILED'} in ${Date.now() - t0} ms${res?.success ? '' : ' – ' + String(res?.error?.message ?? res?.error ?? '').slice(0, 220)}`)
     if (!res?.success) {
       const e = res?.error
       const st = e?.status ?? e?.statusCode ?? res?.status
@@ -275,7 +280,7 @@ function classifyAgent(r: any): { category: AgentCategory; meta: Record<string, 
   void name
   const createdIn = String(meta.createdIn ?? '').toLowerCase()
   let category: AgentCategory = 'agent'
-  if (String(meta.isCLIAgent ?? '').toLowerCase() === 'true') category = 'cli'
+  if (String(meta.isCLIAgent ?? '').toLowerCase() === 'true') meta.flavor = 'GitHub Copilot'   // shown in Copilot Studio's agent list, so it IS an agent
   else if (/(^|[^a-z0-9])mcp([^a-z0-9]|$)|model[ -]context[ -]protocol/i.test(hay)) category = 'mcp'
   else if (/(^|[^a-z0-9])(tool|tools|connector action|plugin)([^a-z0-9]|$)/i.test(hay)) category = 'tool'
   else if (/agent ?builder|m365 ?copilot|microsoft ?365|copilot ?chat|word|excel|powerpoint|outlook|sharepoint|teams ?toolkit/i.test(createdIn)) category = 'agentbuilder'
@@ -558,7 +563,7 @@ export const liveBackend: Backend = {
         const env = envs.find((e) => e.id.toLowerCase() === eid.toLowerCase())
         const useNative = !!botsTable && homeId?.toLowerCase() === eid.toLowerCase()
         const host = !useNative && dvList && env?.orgUrl ? new URL(env.orgUrl).host : null
-        if (!useNative && !host) { unchecked += list.length; continue }
+        if (!useNative && !host) { unchecked += list.length; list.forEach((a) => { a.meta = { ...(a.meta ?? {}), live: 'unverified' } }); continue }
         try {
           const found = new Map<string, any>()
           const sysId = await (async () => {
@@ -577,6 +582,7 @@ export const liveBackend: Backend = {
               const rows = asList(await call(dvList!, [], undefined, {}, { dataset: host, table: 'bots', '$filter': filter, '$select': 'botid,name,statecode,_ownerid_value,modifiedon', '$top': 100 }))
               for (const b of rows) found.set(String(b.botid).toLowerCase(), b)
             }
+            log(`live check ${env?.name ?? eid}: asked Dataverse for ${chunk.length} bot id(s), ${chunk.filter((x) => found.has(x.id.toLowerCase())).length} exist`)
             await tick()
           }
           for (const a of list) {
@@ -589,14 +595,14 @@ export const liveBackend: Backend = {
             a.meta = { ...(a.meta ?? {}), live: 'verified' }
             live++
           }
-        } catch (e) { unchecked += list.length; note(env?.name ?? eid, 'agent', 'warn', `live check of agents failed: ${(e as Error).message.slice(0, 250)} - showing inventory data unverified`) }
+        } catch (e) { unchecked += list.length; list.forEach((a) => { a.meta = { ...(a.meta ?? {}), live: 'unverified' } }); note(env?.name ?? eid, 'agent', 'warn', `live check of agents failed: ${(e as Error).message.slice(0, 250)} - showing inventory data unverified`) }
       }
       for (let i = out.length - 1; i >= 0; i--) if (drop.has(out[i]!)) out.splice(i, 1)
       note('(all)', 'agent', gone || moved || unchecked ? 'warn' : 'info',
         `Live check against Dataverse: ${live} agent(s) confirmed existing and owned by the user` +
         (gone ? `; ${gone} DELETED agent(s) removed from the list (the inventory still lists them for a while)` : '') +
         (moved ? `; ${moved} removed because Dataverse shows a different owner now` : '') +
-        (unchecked ? `; ${unchecked} could not be live-checked (no Dataverse access to their environment) and are shown from the inventory only` : ''))
+        (unchecked ? `; ⚠ ${unchecked} could NOT be live-checked (this app has no Dataverse access to their environment) - they come from the tenant inventory, which can still list DELETED agents. Fix: deploy this app into the agents' environment (run the deploy script with -EnvironmentId <that environment>) or add the optional "Microsoft Dataverse" connector.` : ''))
     }
 
     return { assets: out, notes }
@@ -610,6 +616,12 @@ export const liveBackend: Backend = {
 
   /** Read the owner back from the SOURCE after a transfer. true = confirmed, false = NOT changed (yet), null = cannot tell. */
   async verifyOwner(asset, to) {
+    const r = await liveBackend.verifyOwnerRaw!(asset, to)
+    log(`READ-BACK ${asset.kind} "${asset.name}": new owner ${r === true ? 'CONFIRMED' : r === false ? 'NOT showing yet' : 'could not be read'}`)
+    return r
+  },
+
+  async verifyOwnerRaw(asset, to) {
     try {
       if (asset.kind === 'app') {
         const op = OPS.appGet()
@@ -660,6 +672,7 @@ export const liveBackend: Backend = {
   },
 
   async transfer(asset, to, opts) {
+    log(`TRANSFER ${asset.kind} "${asset.name}" [${asset.id}] in ${asset.envName}: ${asset.ownerEmail} → ${to.email} (${to.id})`)
     if (asset.kind === 'app') {
       // Power Apps have exactly one owner, so co-owner mode does not apply.
       await call(need('appOwner'), [asset.envId, asset.id], { newAppOwner: to.id })
@@ -668,6 +681,12 @@ export const liveBackend: Backend = {
     if (asset.kind === 'agent') {
       // Never send tool / MCP / Agent Builder / CLI inventory rows to the Copilot Studio reassign API.
       if (asset.category && asset.category !== 'agent') throw new Error(`Not attempted: "${asset.name}" is a ${asset.category}, not a Copilot Studio agent – nothing was changed.`)
+      // Pre-flight: the inventory can list deleted agents - make sure it still exists (and is still owned by the expected user) where Dataverse is reachable.
+      if (nativeKey('bot') && (await getCurrentEnvId())?.toLowerCase() === asset.envId.toLowerCase()) {
+        const r: any = await sdk().retrieveMultipleRecordsAsync<any>(nativeKey('bot')!, { filter: `botid eq ${asset.id}`, select: ['botid', 'name', '_ownerid_value'], top: 1 })
+        log(`pre-flight Dataverse bot ${asset.id}: ${r?.success ? (r.data?.[0] ? 'exists, owner row ' + r.data[0]._ownerid_value : 'NOT FOUND') : 'query failed'}`)
+        if (r?.success && !r.data?.[0]) throw new Error('Not attempted: this agent no longer exists in Dataverse (it was deleted; the tenant inventory is stale). Nothing was changed. Re-scan.')
+      }
       const re = OPS.agentReassign()
       if (re) {
         // ONE attempt, no automatic retry and NO fallback: a retry or a Dataverse "assign" after a half-finished reassign

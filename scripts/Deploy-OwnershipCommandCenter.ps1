@@ -126,7 +126,8 @@ $needed = @(
   @{ Label = 'Power Automate Management'; Apis = @('shared_flowmanagement');         Link = 'shared_flowmanagement' },
   @{ Label = 'Office 365 Users';          Apis = @('shared_office365users');         Link = 'shared_office365users' },
   @{ Label = 'Power Automate for Admins (optional)'; Apis = @('shared_microsoftflowforadmins'); Link = 'shared_microsoftflowforadmins'; Optional = $true },
-  @{ Label = 'Power Platform for Admins V2 (Copilot Studio agents, all environments)'; Apis = @('shared_powerplatformadminv2'); Link = 'shared_powerplatformadminv2' }
+  @{ Label = 'Power Platform for Admins V2 (Copilot Studio agents, all environments)'; Apis = @('shared_powerplatformadminv2'); Link = 'shared_powerplatformadminv2' },
+  @{ Label = 'Microsoft Dataverse (optional: live-check agents in other environments)'; Apis = @('shared_commondataserviceforapps'); Link = 'shared_commondataserviceforapps'; Optional = $true }
 )
 
 function Get-Connections {
