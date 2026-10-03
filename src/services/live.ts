@@ -207,8 +207,24 @@ const tick = () => new Promise<void>((r) => setTimeout(r, 0)) // yield to the br
 
 
 // ---- Dataverse of the environment this app runs in (no extra connection needed; added by `pac code add-data-source -a dataverse`) ----
-const nativeTable = (re: RegExp): string | null =>
-  Object.keys(dataSourcesInfo).find((k) => re.test(k) && /dataverse/i.test(String(dataSourcesInfo[k]?.dataSourceType ?? 'dataverse'))) ?? null
+/**
+ * pac names Dataverse data sources by display name (the `bot` table becomes "agents", `systemuser` becomes "users"),
+ * so identify them by what they ARE: primary key / entity set / logical name, with the key name as a last resort.
+ */
+const DV_TABLES = {
+  bot: { pk: 'botid', entitySet: 'bots', logical: 'bot', names: /^(bots?|agents?|copilots?|chatbots?)$/i },
+  systemuser: { pk: 'systemuserid', entitySet: 'systemusers', logical: 'systemuser', names: /^(systemusers?|users?)$/i },
+} as const
+function nativeKey(t: keyof typeof DV_TABLES): string | null {
+  const d = DV_TABLES[t]
+  const entries = Object.entries<any>(dataSourcesInfo).filter(([, info]) => /dataverse/i.test(String(info?.dataSourceType ?? '')) || Object.keys(info?.apis ?? {}).length === 0)
+  const hit =
+    entries.find(([, i]) => i?.primaryKey === d.pk) ??
+    entries.find(([, i]) => i?.entitySetName === d.entitySet || i?.logicalName === d.logical) ??
+    entries.find(([k]) => d.names.test(k))
+  return hit?.[0] ?? null
+}
+const nativeTable = (re: RegExp): string | null => (re.test('bot') ? nativeKey('bot') : nativeKey('systemuser'))
 let currentEnvId: string | null | undefined
 async function getCurrentEnvId(): Promise<string | null> {
   if (currentEnvId !== undefined) return currentEnvId
@@ -412,7 +428,7 @@ export const liveBackend: Backend = {
       const optional = !REQUIRED.includes(k)
       return { name: k + (optional ? ` (optional${NEEDS[k] ? ': ' + NEEDS[k] : ''})` : ''), ok: !!o, detail: o ? `${o.ds} → ${o.op}  [${o.method} ${o.path}]` : 'not found' }
     })
-    rows.push({ name: 'native Dataverse tables (agents in this app\'s own environment)', ok: !!nativeTable(/^bots?$/i) && !!nativeTable(/^systemusers?$/i), detail: `bots: ${nativeTable(/^bots?$/i) ?? 'missing'}, systemusers: ${nativeTable(/^systemusers?$/i) ?? 'missing'}` })
+    rows.push({ name: 'native Dataverse tables (agents in this app\'s own environment)', ok: !!nativeTable(/^bots?$/i) && !!nativeTable(/^systemusers?$/i), detail: `bot table → data source "${nativeKey('bot') ?? 'missing'}", systemuser table → "${nativeKey('systemuser') ?? 'missing'}"; all data sources: ${Object.keys(dataSourcesInfo).join(', ')}` })
     rows.push({ name: 'flow list candidates', ok: flowLists().length > 0, detail: flowLists().map((o) => `${o.ds} → ${o.op} [${o.method} ${o.path}]`).join('\n') || 'none' })
     const ops = allOps()
     const sources = [...new Set(ops.map((o) => o.ds))]
