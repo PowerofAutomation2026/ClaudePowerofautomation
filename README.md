@@ -140,3 +140,13 @@ member (Dataverse user record) of that environment without assigning any securit
 ## v1.7.6
 Agent reassign retries once automatically (after 8 s) when the service answers HTTP 502 / "partially updated" – Microsoft's own error text says another reassignment is the repair.
 Advisor findings (see chat): the most likely cause is the **new owner has no Copilot Studio licence / no enabled environment user**; check licence and sign-in first, or reassign to a healthy licensed admin.
+
+## v1.8.0 – safe agent transfer protocol (no more corrupted agents from a batch)
+Found by code review + an independent advisor review + a simulated Copilot Studio service (9 scenarios, `src/transferPlan.ts`):
+* **Pilot / stop-on-first-failure:** agents are reassigned strictly one at a time; the first service failure STOPS the batch (remaining agents are `skipped`, untouched). Before, 3 parallel workers kept going and one click could half-update every selected agent.
+* **Membership gate:** the new owner is added to each environment (Add Admin Power Apps Sync User) and, where checkable, confirmed; any failure blocks that environment's agents ("Not attempted – nothing was changed"). "user does not exist" is no longer mistaken for "already a member".
+* **No automatic retry, no Dataverse fallback after a failed reassign** (both could worsen/hide a half-updated agent). Retry is manual, after fixing the cause.
+* **Only real Copilot Studio agents** can be sent to the reassign API; tool / MCP / Agent Builder / CLI rows are refused. Classification no longer looks at display names.
+* **Verification:** after a successful reassign the inventory is queried; the result is shown per agent (inventory may lag 5–15 min).
+* **Restore / Undo** are audited, appear only for genuine "partially updated" failures, stop at the first failure, and use the options of the original batch.
+Residual risk: the app cannot read licences. An unlicensed new owner can still half-update the *first* (pilot) agent – check the licence first; use History → Restore if it happens.

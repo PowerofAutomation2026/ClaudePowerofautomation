@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentCategory, Asset, AssetKind, AuditEntry, Backend, Env, ItemStatus, Person, ScanNote, TransferOptions } from './types'
 import { hasConnectors, pickBackend } from './services'
+import { runTransfer } from './transferPlan'
 import { ago, assetRows, auditRows, download, explainTransferError, isPartialUpdate, powershellFor, risksFor, toCsv } from './util'
 
 const ls = {
@@ -318,7 +319,7 @@ export default function App() {
           onClose={() => setPanel(null)}
           onAudit={(e) => setAudit((a) => [...a, ...e])}
           onDone={(moved) => { setAssets((all) => all.filter((a) => !moved.includes(a.key))); setSel(new Set()) }} flash={flash} />)}
-      {panel === 'history' && <HistoryDrawer audit={audit} backend={backend} onClose={() => setPanel(null)} onClear={() => setAudit([])} flash={flash} />}
+      {panel === 'history' && <HistoryDrawer audit={audit} backend={backend} onClose={() => setPanel(null)} onClear={() => setAudit([])} onAudit={(e) => setAudit((a) => [...a, ...e])} flash={flash} />}
       {panel === 'diag' && <DiagDrawer backend={backend} onClose={() => setPanel(null)} />}
       {palette && <Palette commands={commands} onClose={() => setPalette(false)} />}
       {toast && <div className="toast">{toast}</div>}
@@ -340,12 +341,12 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
   const ownerRef = useRef<HTMLInputElement>(null)
   const [opts, setOpts] = useState<TransferOptions>({ mode: 'replace', removeOldOwner: true })
   const [dry, setDry] = useState(true)
-  const [status, setStatus] = useState<Record<string, { s: ItemStatus; err?: string }>>({})
+  const [status, setStatus] = useState<Record<string, { s: ItemStatus; err?: string; note?: string }>>({})
   const [running, setRunning] = useState(false)
   const [confirmText, setConfirmText] = useState('')
   const [agentOk, setAgentOk] = useState(false)
   const [prepare, setPrepare] = useState(true)
-  const [lastBatch, setLastBatch] = useState<{ id: string; to: Person; keys: string[] } | null>(null)
+  const [lastBatch, setLastBatch] = useState<{ id: string; to: Person; keys: string[]; opts: TransferOptions } | null>(null)
   const [script, setScript] = useState(false)
   const needsConfirm = !dry && items.length > 5
   const needsAgentOk = items.some((a) => a.kind === 'agent') && !dry
@@ -356,11 +357,16 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
   /** Put failed (possibly half-updated) agents back on their original owner. */
   const restoreOriginal = async () => {
     setRunning(true); busyRef.current = true
-    let okN = 0; const errs: string[] = []
+    let okN = 0; const errs: string[] = []; const entries: AuditEntry[] = []
     for (const a of partial) {
-      try { await backend.transfer(a, { id: a.ownerId, name: a.ownerName, email: a.ownerEmail }, { mode: 'replace', removeOldOwner: false }); okN++ }
-      catch (e) { errs.push(`${a.name}: ${(e as Error).message}`) }
+      const orig = { id: a.ownerId, name: a.ownerName, email: a.ownerEmail }
+      let st: ItemStatus = 'done'; let err: string | undefined
+      try { await backend.transfer(a, orig, { mode: 'replace', removeOldOwner: false }); okN++ }
+      catch (e) { st = 'failed'; err = (e as Error).message; errs.push(`${a.name}: ${err}`) }
+      entries.push({ at: new Date().toISOString(), assetKey: a.key, name: a.name, kind: a.kind, envName: a.envName, from: { id: '', name: toEmail, email: toEmail }, to: orig, mode: 'replace', status: st, error: err, dryRun: false, batch: 'restore', note: 'Restore original owner after a partial transfer' })
+      if (st === 'failed') break // one at a time; stop at the first failure
     }
+    onAudit(entries)
     setMsg({ level: errs.length ? 'error' : 'ok', text: `Restore original owner: ${okN}/${partial.length} restored.${errs.length ? '\n' + errs.join('\n') : ' Check the agents in Copilot Studio.'}` })
     setRunning(false); busyRef.current = false
   }
@@ -377,47 +383,25 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
     }
     if (to.id === from.id && !list.every((a) => a.kind === 'agent')) { setMsg({ level: 'error', text: 'The new owner is the same person as the current owner.' }); setRunning(false); busyRef.current = false; return }
     // Same owner + agents only = "re-run the reassignment" to finish/repair an agent a previous attempt left half-updated.
-    // Agents: make the new owner a member of each agent environment first (no roles) - Microsoft's documented requirement.
-    let prepNotes = ''
-    const agentEnvs = [...new Map(list.filter((a) => a.kind === 'agent').map((a) => [a.envId, a.envName])).entries()]
-    if (!dry && prepare && backend.prepareOwner && agentEnvs.length) {
-      setMsg({ level: 'info', text: `Adding ${to.email} as a member of ${agentEnvs.length} environment(s)…` })
-      const lines: string[] = []
-      for (const [eid, ename] of agentEnvs) {
-        try { lines.push(`✔ ${ename}: ${await backend.prepareOwner(eid, to)}`) } catch (e) { lines.push(`✖ ${ename}: could not add as member – ${(e as Error).message}`) }
-      }
-      prepNotes = '\n\nEnvironment membership step:\n' + lines.join('\n')
-      await new Promise((r) => setTimeout(r, 4000)) // let the user record sync before reassigning
-    }
-    setMsg({ level: 'info', text: `${dry ? 'Simulating' : 'Transferring'} ${list.length} item(s) to ${to.name} (${to.email})…${prepNotes}` })
     const batch = new Date().toISOString()
-    const entries: AuditEntry[] = []
-    const ok: string[] = []
-    const queue = [...list]
-    const worker = async () => {
-      for (let a = queue.shift(); a; a = queue.shift()) {
-        setStatus((s) => ({ ...s, [a.key]: { s: 'running' } }))
-        let st: ItemStatus = dry ? 'dry' : 'done'; let err: string | undefined
-        try {
-          if (dry) await new Promise((r) => setTimeout(r, 120))
-          else await backend.transfer(a, to, opts)
-          if (!dry) ok.push(a.key)
-        } catch (e) { st = 'failed'; err = (e as Error).message }
-        setStatus((s) => ({ ...s, [a.key]: { s: st, err } }))
-        entries.push({ at: new Date().toISOString(), assetKey: a.key, name: a.name, kind: a.kind, envName: a.envName, from: { id: a.ownerId, name: a.ownerName, email: a.ownerEmail }, to, mode: opts.mode, status: st, error: err, dryRun: dry, batch })
-      }
-    }
-    await Promise.all([worker(), worker(), worker()]) // light concurrency to stay under connector throttling
-    onAudit(entries)
-    if (!dry && ok.length) { onDone(ok); setLastBatch({ id: batch, to, keys: ok }) }
-    const failedEntries = entries.filter((e) => e.status === 'failed')
+    const out = await runTransfer({
+      backend, items: list, to, opts, dry, prepare, batch,
+      hooks: {
+        status: (key, st, err, note) => setStatus((m) => ({ ...m, [key]: { s: st, err, note } })),
+        message: (text) => setMsg({ level: 'info', text }),
+      },
+    })
+    onAudit(out.entries)
+    if (!dry && out.movedKeys.length) { onDone(out.movedKeys); setLastBatch({ id: batch, to, keys: out.movedKeys, opts: { ...opts } }) }
+    const failedEntries = out.entries.filter((e) => e.status === 'failed')
+    const skipped = out.entries.filter((e) => e.status === 'skipped').length
     const nFail = failedEntries.length
-    const nOk = entries.length - nFail
+    const nOk = out.entries.filter((e) => e.status === 'done' || e.status === 'dry').length
     const firstErr = failedEntries[0]?.error
     setMsg({ level: nFail ? 'error' : 'ok', text: dry
-      ? `Dry run finished: ${nOk} OK, ${nFail} would fail. NOTHING was changed. Untick "Dry run" and click "Transfer now" to really move ownership to ${to.name}.`
-      : `Transfer finished: ${nOk} moved to ${to.name}, ${nFail} failed.${firstErr ? `\n\nError from the service:\n${firstErr}` : ''}${prepNotes}` })
-    flash(dry ? 'Dry run complete – nothing changed' : `Transferred ${ok.length}/${list.length}`)
+      ? `Dry run finished: ${nOk} OK, ${nFail} would fail. NOTHING was changed. Untick "Dry run" and click "Transfer now" to really move ownership to ${to.name}.${out.entries.filter((e) => e.status === 'failed' && /^Not attempted/.test(e.error ?? '')).map((e) => `\n• ${e.name}: ${e.error}`).join('')}`
+      : `Transfer finished: ${nOk} moved to ${to.name}, ${nFail} failed${skipped ? `, ${skipped} skipped (batch stopped to protect them)` : ''}.${firstErr ? `\n\nError from the service:\n${firstErr}` : ''}${out.halted ? '\n\nThe batch was STOPPED at the first agent failure so the remaining agents were not touched.' : ''}${out.prepNotes}` })
+    flash(dry ? 'Dry run complete – nothing changed' : `Transferred ${out.movedKeys.length}/${list.length}`)
     setRunning(false); busyRef.current = false
   }
 
@@ -425,10 +409,17 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
     if (!lastBatch) return
     setRunning(true); busyRef.current = true
     let n = 0
+    const entries: AuditEntry[] = []
     for (const a of items.filter((x) => lastBatch.keys.includes(x.key))) {
-      try { await backend.transfer({ ...a, ownerId: lastBatch.to.id }, from, opts); n++ } catch { /* reported by count */ }
+      let st: ItemStatus = 'done'; let err: string | undefined
+      try { await backend.transfer({ ...a, ownerId: lastBatch.to.id, ownerName: lastBatch.to.name, ownerEmail: lastBatch.to.email }, from, lastBatch.opts); n++ }
+      catch (e) { st = 'failed'; err = (e as Error).message }
+      entries.push({ at: new Date().toISOString(), assetKey: a.key, name: a.name, kind: a.kind, envName: a.envName, from: lastBatch.to, to: from, mode: lastBatch.opts.mode, status: st, error: err, dryRun: false, batch: 'undo ' + lastBatch.id, note: 'Undo of the previous batch' })
+      if (st === 'failed' && a.kind === 'agent') break // protect the remaining agents
     }
-    flash(`Rolled back ${n}/${lastBatch.keys.length} – rescan to refresh`)
+    onAudit(entries)
+    const firstErr = entries.find((e) => e.error)?.error
+    setMsg({ level: firstErr ? 'error' : 'ok', text: `Rolled back ${n}/${lastBatch.keys.length}.${firstErr ? `\n${firstErr}` : ''} Rescan to refresh.` })
     setLastBatch(null); setRunning(false); busyRef.current = false
   }
 
@@ -485,8 +476,9 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
           return (<div key={a.key} className="item"><span className={`pill ${a.kind}`}>{a.kind}</span>
             <div><div className="name">{a.name}</div><div className="id">{a.envName}</div>
               {rs.map((r, i) => <div key={i} className={`risk ${r.level}`}>{r.level === 'warn' ? '⚠' : 'ℹ'} {r.text}</div>)}
-              {s?.err && <div className="risk" style={{ color: 'var(--bad)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{s.err}</div>}</div>
-            <span className="st">{!s ? <span className="pill mut">queued</span> : s.s === 'running' ? <span className="spin" /> : <span className={`pill ${s.s === 'failed' ? 'bad' : 'ok'}`}>{s.s === 'dry' ? 'ok (dry)' : s.s}</span>}</span></div>)
+              {s?.err && <div className="risk" style={{ color: 'var(--bad)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{s.err}</div>}
+              {s?.note && <div className="risk info" style={{ whiteSpace: 'pre-wrap' }}>{s.note}</div>}</div>
+            <span className="st">{!s ? <span className="pill mut">queued</span> : s.s === 'running' ? <span className="spin" /> : <span className={`pill ${s.s === 'failed' ? 'bad' : s.s === 'skipped' ? 'warn' : 'ok'}`}>{s.s === 'dry' ? 'ok (dry)' : s.s}</span>}</span></div>)
         })}
       </div>
       <div className="row" style={{ marginTop: 16 }}><button className="btn" disabled={running} onClick={onClose}>Close</button></div>
@@ -494,7 +486,7 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
   )
 }
 
-function HistoryDrawer({ audit, backend, onClose, onClear, flash }: { audit: AuditEntry[]; backend: Backend; onClose: () => void; onClear: () => void; flash: (m: string) => void }) {
+function HistoryDrawer({ audit, backend, onClose, onClear, onAudit, flash }: { audit: AuditEntry[]; backend: Backend; onClose: () => void; onClear: () => void; onAudit: (e: AuditEntry[]) => void; flash: (m: string) => void }) {
   const rows = [...audit].reverse()
   const [busy, setBusy] = useState<string | null>(null)
   /** Re-assign a (possibly half-updated) agent back to the owner it had before the failed attempt. */
@@ -502,9 +494,11 @@ function HistoryDrawer({ audit, backend, onClose, onClear, flash }: { audit: Aud
     const [, envId, ...rest] = e.assetKey.split(':')
     const stub: Asset = { key: e.assetKey, id: rest.join(':'), kind: e.kind, name: e.name, envId: envId ?? '', envName: e.envName, ownerId: e.to.id, ownerName: e.to.name, ownerEmail: e.to.email, state: 'Unknown' }
     setBusy(e.assetKey + e.at)
+    let st: ItemStatus = 'done'; let err: string | undefined
     try { await backend.transfer(stub, e.from, { mode: 'replace', removeOldOwner: false }); flash(`Restored "${e.name}" to ${e.from.email}`) }
-    catch (err) { flash(`Restore failed: ${(err as Error).message.slice(0, 160)}`) }
+    catch (x) { st = 'failed'; err = (x as Error).message; flash(`Restore failed: ${err.slice(0, 160)}`) }
     finally { setBusy(null) }
+    onAudit([{ at: new Date().toISOString(), assetKey: e.assetKey, name: e.name, kind: e.kind, envName: e.envName, from: e.to, to: e.from, mode: 'replace', status: st, error: err, dryRun: false, batch: 'restore', note: 'Restore after a failed/partial transfer' }])
   }
   return (
     <Drawer onClose={onClose}>
@@ -519,7 +513,7 @@ function HistoryDrawer({ audit, backend, onClose, onClear, flash }: { audit: Aud
             <div><div className="name">{e.name}</div><div className="id">{e.envName} · {e.from.email} → {e.to.email}</div><div className="id">{new Date(e.at).toLocaleString()}{e.error ? ' · ' + e.error : ''}</div></div>
             <div className="col" style={{ alignItems: 'flex-end', marginLeft: 'auto' }}>
               <span className={`pill st ${e.status === 'failed' ? 'bad' : e.dryRun ? 'warn' : 'ok'}`}>{e.dryRun ? 'dry run' : e.status}</span>
-              {e.status === 'failed' && !e.dryRun && e.kind === 'agent' && <button className="btn sm" disabled={busy !== null} onClick={() => restore(e)}>{busy === e.assetKey + e.at ? <span className="spin" /> : '↩'} Restore to {e.from.name}</button>}
+              {e.status === 'failed' && !e.dryRun && e.kind === 'agent' && isPartialUpdate(e.error ?? '') && <button className="btn sm" disabled={busy !== null} onClick={() => restore(e)}>{busy === e.assetKey + e.at ? <span className="spin" /> : '↩'} Restore to {e.from.name}</button>}
             </div></div>))}
       </div>
     </Drawer>)

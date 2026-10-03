@@ -43,7 +43,7 @@ export interface TransferOptions {
   removeOldOwner: boolean
 }
 
-export type ItemStatus = 'pending' | 'running' | 'done' | 'failed' | 'dry'
+export type ItemStatus = 'pending' | 'running' | 'done' | 'failed' | 'dry' | 'skipped'
 
 export interface AuditEntry {
   at: string
@@ -58,6 +58,7 @@ export interface AuditEntry {
   error?: string
   dryRun: boolean
   batch: string
+  note?: string
 }
 
 export interface ScanNote {
@@ -84,5 +85,9 @@ export interface Backend {
   transfer(asset: Asset, to: Person, opts: TransferOptions): Promise<void>
   /** Make `to` a member (Dataverse user) of an environment WITHOUT assigning security roles. Returns a short status. */
   prepareOwner?(envId: string, to: Person): Promise<string>
+  /** true = the user is a member of the environment, false = definitely not, null = cannot tell from here. */
+  checkMember?(envId: string, to: Person): Promise<boolean | null>
+  /** After a transfer: true = inventory shows `to` as owner, false = not (yet) reflected, null = cannot tell. */
+  verifyOwner?(asset: Asset, to: Person): Promise<boolean | null>
   diagnostics(): Promise<{ name: string; ok: boolean; detail: string }[]>
 }

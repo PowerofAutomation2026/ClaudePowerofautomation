@@ -40,7 +40,7 @@ export function powershellFor(assets: Asset[], to: Person, opts: TransferOptions
     '',
   ]
   for (const a of assets) {
-    if (a.kind === 'agent') lines.push(`# Copilot Studio agent '${a.name}' (${a.envName}): PATCH https://${a.orgHost ?? '<org host>'}/api/data/v9.2/bots(${a.id})  body: { "ownerid@odata.bind": "/systemusers(<new owner's systemuserid in that environment>)" }`)
+    if (a.kind === 'agent') lines.push(`# Copilot Studio agent '${a.name}' (${a.envName}): PATCH https://${a.orgHost && !['inventory', 'native'].includes(a.orgHost) ? a.orgHost : '<org host>'}/api/data/v9.2/bots(${a.id})  body: { "ownerid@odata.bind": "/systemusers(<new owner's systemuserid in that environment>)" }`)
     else if (a.kind === 'app') lines.push(`Set-AdminPowerAppOwner -AppName '${a.id}' -EnvironmentName '${a.envId}' -AppOwner '${to.id}'  # ${a.name}`)
     else {
       lines.push(`Set-AdminFlowOwnerRole -EnvironmentName '${a.envId}' -FlowName '${a.id}' -RoleName CanEdit -PrincipalType User -PrincipalObjectId '${to.id}'  # ${a.name}`)
@@ -65,7 +65,7 @@ export function risksFor(a: Asset): Risk[] {
 }
 
 /** True when the service says an agent reassignment started but did not finish (agent may be half-updated). */
-export const isPartialUpdate = (err: string) => /partially updated|only partially|not in a json format/i.test(err)
+export const isPartialUpdate = (err: string) => /partially updated|only partially/i.test(err) || (/HTTP 502/i.test(err) && /not in a json format/i.test(err))
 
 /** Turn a raw connector error into plain-language likely causes (shown under a failed transfer). */
 export function explainTransferError(err: string, kind: AssetKind): string[] {

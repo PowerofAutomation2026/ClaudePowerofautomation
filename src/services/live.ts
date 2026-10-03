@@ -266,7 +266,9 @@ function invMeta(r: any): Record<string, string> {
 function classifyAgent(r: any): { category: AgentCategory; meta: Record<string, string> } {
   const meta = invMeta(r)
   const name = String(invProp(r, 'displayName') ?? r?.name ?? '')
-  const hay = `${name} ${Object.entries(meta).filter(([k]) => /type|kind|categor|template|schema|source|origin|harness|createdIn|name/i.test(k)).map(([, v]) => v).join(' ')}`
+  // Structural properties only - NEVER the display name, otherwise a real agent called e.g. "IT Tool Desk" would be hidden as a tool.
+  const hay = Object.entries(meta).filter(([k]) => /type|kind|categor|template|schema|source|origin|harness|createdIn/i.test(k)).map(([, v]) => v).join(' ')
+  void name
   const createdIn = String(meta.createdIn ?? '').toLowerCase()
   let category: AgentCategory = 'agent'
   if (String(meta.isCLIAgent ?? '').toLowerCase() === 'true') category = 'cli'
@@ -534,6 +536,26 @@ export const liveBackend: Backend = {
     return { assets: out, notes }
   },
 
+  async checkMember(envId, to) {
+    // Only decidable for the environment this app runs in (its own Dataverse); elsewhere we cannot tell.
+    if (!nativeKey('systemuser') || (await getCurrentEnvId()) !== envId) return null
+    try { return !!(await nativeSystemUserId(to.id)) } catch { return null }
+  },
+
+  async verifyOwner(asset, to) {
+    const op = OPS.inventory()
+    if (!op || asset.kind !== 'agent') return null
+    try {
+      const body = { TableName: 'PowerPlatformResources', Clauses: [
+        { $type: 'where', FieldName: 'type', Operator: '==', Values: ["'microsoft.copilotstudio/agents'"] },
+        { $type: 'where', FieldName: 'name', Operator: '==', Values: [`'${asset.id}'`] },
+      ], Options: { Top: 5 } }
+      const rows = invRows(await callRaw(op, [], body))
+      if (!rows.length) return null
+      return rows.some((r) => String(invProp(r, 'ownerId') ?? '').toLowerCase() === to.id.toLowerCase())
+    } catch { return null }
+  },
+
   async prepareOwner(envId, to) {
     const op = OPS.syncUser()
     if (!op) return 'skipped: "Add Admin Power Apps Sync User" operation is not in this build (Power Platform for Admins connector)'
@@ -542,7 +564,8 @@ export const liveBackend: Backend = {
       return 'added as an environment member (or already was)'
     } catch (e) {
       const m = (e as Error).message
-      if (/already|exists|conflict|409/i.test(m)) return 'already a member'
+      // Only an explicit 'already a member / already exists' counts as success. "user does not exist" must NOT match.
+      if (/already (a )?member|already exists|user already|HTTP 409/i.test(m) && !/not exist|does not|doesn't/i.test(m)) return 'already a member'
       throw new Error(m)
     }
   },
@@ -554,62 +577,26 @@ export const liveBackend: Backend = {
       return
     }
     if (asset.kind === 'agent') {
+      // Never send tool / MCP / Agent Builder / CLI inventory rows to the Copilot Studio reassign API.
+      if (asset.category && asset.category !== 'agent') throw new Error(`Not attempted: "${asset.name}" is a ${asset.category}, not a Copilot Studio agent – nothing was changed.`)
       const re = OPS.agentReassign()
-      let reassignErr: Error | null = null
-      // Pre-flight (only possible in the app's own environment): a new owner with no user record there makes the service fail halfway.
-      if (nativeKey('systemuser') && (await getCurrentEnvId()) === asset.envId) {
-        let sysId: string | null = null
-        try { sysId = await nativeSystemUserId(to.id) } catch { /* cannot check - let the service decide */ sysId = 'unknown' }
-        if (!sysId) throw new Error(`Not attempted: ${to.email} is not a user of this environment yet (no Dataverse user record). Add them as a member in the Power Platform admin center (Environments → this environment → Users → Add user), then retry. Nothing was changed.`)
-      }
       if (re) {
-        try {
-          // Needs: the connection's account = System Administrator in the target environment; new owner = temporary System Customizer there.
-          await callRaw(re, [asset.envId, asset.id], { NewOwnerAadUserId: to.id })
-          return
-        } catch (e) {
-          reassignErr = e as Error
-          // "partially updated" = the service did some steps; the designed repair is another reassignment. Retry ONCE after a pause
-          // (user-record sync after "Add sync user" can take a few seconds).
-          if (/partially updated|not in a json format|HTTP 502/i.test(reassignErr.message)) {
-            await new Promise((r) => setTimeout(r, 8000))
-            try { await callRaw(re, [asset.envId, asset.id], { NewOwnerAadUserId: to.id }); return } catch (e2) { reassignErr = new Error(`${(e2 as Error).message} (after one automatic retry)`) }
-          }
-        }
+        // ONE attempt, no automatic retry and NO fallback: a retry or a Dataverse "assign" after a half-finished reassign
+        // can make the inconsistency worse and hide it. Needs: connection account = System Administrator in the target
+        // environment; new owner = environment member with a Copilot Studio licence.
+        await callRaw(re, [asset.envId, asset.id], { NewOwnerAadUserId: to.id })
+        return
       }
-      // Fallback: plain Dataverse "assign" - only possible for the environment this app runs in.
+      // Only when the reassign operation is not in this build at all: plain Dataverse assign in this app's own environment.
       const botsTable = nativeTable(/^bots?$/i)
       if (botsTable && (await getCurrentEnvId()) === asset.envId) {
-        try {
-          const sysId = await nativeSystemUserId(to.id)
-          if (!sysId) throw new Error('the new owner has no user record in this environment')
-          const r: any = await sdk().updateRecordAsync<any, any>(botsTable, asset.id, { 'ownerid@odata.bind': `/systemusers(${sysId})` })
-          if (!r?.success) throw new Error(r?.error?.message ?? 'update failed')
-          return
-        } catch (e2) {
-          throw new Error(`${reassignErr ? `Reassign API failed → ${reassignErr.message}\n\n` : ''}Dataverse assign fallback also failed → ${(e2 as Error).message}`)
-        }
+        const sysId = await nativeSystemUserId(to.id)
+        if (!sysId) throw new Error('Not attempted: the new owner has no user record in this environment. Nothing was changed.')
+        const r: any = await sdk().updateRecordAsync<any, any>(botsTable, asset.id, { 'ownerid@odata.bind': `/systemusers(${sysId})` })
+        if (!r?.success) throw new Error(r?.error?.message ?? 'Dataverse update failed')
+        return
       }
-      if (reassignErr) throw reassignErr
-    }
-    if (asset.kind === 'agent' && asset.orgHost === 'native') {
-      const botsTable = nativeTable(/^bots?$/i)
-      if (!botsTable) throw new Error('Dataverse "bot" table is not in this build - re-run the deploy script.')
-      const sysId = await nativeSystemUserId(to.id)
-      if (!sysId) throw new Error('The new owner has no user record in this environment - add them to the environment first.')
-      const r: any = await sdk().updateRecordAsync<any, any>(botsTable, asset.id, { 'ownerid@odata.bind': `/systemusers(${sysId})` })
-      if (!r?.success) throw new Error(r?.error?.message ?? 'Dataverse update failed')
-      return
-    }
-    if (asset.kind === 'agent') {
-      const list = need('dvList'); const upd = need('dvUpdate')
-      const host = asset.orgHost
-      if (!host) throw new Error('Missing Dataverse host for this agent - rescan.')
-      const su = asList(await call(list, [], undefined, {}, { dataset: host, table: 'systemusers', '$filter': `azureactivedirectoryobjectid eq ${to.id}`, '$select': 'systemuserid', '$top': 1 }))
-      const sysId = su[0]?.systemuserid
-      if (!sysId) throw new Error('The new owner has no user record in this environment - add them to the environment first.')
-      await call(upd, [], { 'ownerid@odata.bind': `/systemusers(${sysId})` }, {}, { dataset: host, table: 'bots', id: asset.id })
-      return
+      throw new Error('Not attempted: neither the Power Platform for Admins V2 reassign operation nor a usable Dataverse path is available for this agent.')
     }
     const body: Record<string, unknown> = { put: [{ properties: { principal: { id: to.id, type: 'User' }, roleName: 'Owner' } }] }
     if (opts.mode === 'replace' && opts.removeOldOwner) body.delete = [{ id: asset.ownerId }]
