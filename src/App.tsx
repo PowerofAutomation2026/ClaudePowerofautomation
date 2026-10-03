@@ -338,8 +338,9 @@ function DiagDrawer({ backend, onClose }: { backend: Backend; onClose: () => voi
   return (
     <Drawer onClose={onClose}>
       <h2>Connector diagnostics</h2><div className="sub">Operations are discovered from the connectors by REST path. If one is missing, the connector was not added or its path differs.</div>
+      <div className="row" style={{ marginTop: 10 }}><button className="btn sm" disabled={!rows} onClick={() => navigator.clipboard?.writeText((rows ?? []).map((r) => `${r.ok ? 'OK ' : 'MISSING '}${r.name}\n${r.detail}`).join('\n\n'))}>Copy diagnostics</button></div>
       <div className="col" style={{ marginTop: 12 }}>{!rows ? <span className="spin" /> : rows.map((r) => (
-        <div key={r.name} className="item"><span className={`pill ${r.ok ? 'ok' : 'bad'}`}>{r.ok ? 'bound' : 'missing'}</span><div><div className="name">{r.name}</div><div className="id">{r.detail}</div></div></div>))}</div>
+        <div key={r.name} className="item"><span className={`pill ${r.ok ? 'ok' : 'bad'}`}>{r.ok ? 'bound' : 'missing'}</span><div><div className="name">{r.name}</div><div className="id" style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{r.detail}</div></div></div>))}</div>
     </Drawer>)
 }
 

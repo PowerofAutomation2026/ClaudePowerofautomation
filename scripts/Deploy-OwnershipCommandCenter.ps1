@@ -8,9 +8,11 @@
   NO Azure app registration is used: the app runs with the signed-in admin's own connections.
 
   Connectors wired up:
-    - Power Apps for Admins        (shared_powerappsforadmins)
-    - Power Automate for Admins    (shared_flowforadmins / shared_powerautomateforadmins / shared_flowmanagement)
-    - Office 365 Users             (shared_office365users)
+    - Power Apps for Admins        (shared_powerappsforadmins)      apps + change app owner
+    - Power Platform for Admins    (shared_powerplatformforadmins)  list all environments
+    - Power Automate Management    (shared_flowmanagement)          list flows + change flow owner (as admin)
+    - Power Automate for Admins    (shared_microsoftflowforadmins)  optional extra flow admin operations
+    - Office 365 Users             (shared_office365users)          email -> user
 
 .PARAMETER EnvironmentId   Target environment GUID (the part after /environments/ in the maker portal URL). Prompted if omitted.
 .PARAMETER DisplayName     App display name.
@@ -91,9 +93,11 @@ if (-not (Test-Path (Join-Path $root 'power.config.json'))) {
 # ---------- 5. connectors ----------
 Step 'Wiring connectors (uses YOUR connections - no app registration)'
 $needed = @(
-  @{ Label = 'Power Apps for Admins';     Apis = @('shared_powerappsforadmins');                                                   Link = 'shared_powerappsforadmins' },
-  @{ Label = 'Power Automate for Admins'; Apis = @('shared_flowforadmins','shared_powerautomateforadmins','shared_flowmanagement'); Link = $null },
-  @{ Label = 'Office 365 Users';          Apis = @('shared_office365users');                                                       Link = 'shared_office365users' }
+  @{ Label = 'Power Apps for Admins';     Apis = @('shared_powerappsforadmins');     Link = 'shared_powerappsforadmins' },
+  @{ Label = 'Power Platform for Admins'; Apis = @('shared_powerplatformforadmins'); Link = 'shared_powerplatformforadmins' },
+  @{ Label = 'Power Automate Management'; Apis = @('shared_flowmanagement');         Link = 'shared_flowmanagement' },
+  @{ Label = 'Office 365 Users';          Apis = @('shared_office365users');         Link = 'shared_office365users' },
+  @{ Label = 'Power Automate for Admins (optional)'; Apis = @('shared_microsoftflowforadmins'); Link = 'shared_microsoftflowforadmins'; Optional = $true }
 )
 
 function Get-Connections {
@@ -123,6 +127,7 @@ while ($true) {
   foreach ($n in $needed) {
     if ($n.Skipped) { Write-Host "    [skipped] $($n.Label)" -ForegroundColor DarkGray; continue }
     if (Find-Connection $n $conns) { Write-Host "    [  OK  ]  $($n.Label)" -ForegroundColor Green }
+    elseif ($n.Optional) { Write-Host "    [  --  ]  $($n.Label) - not created (fine to skip)" -ForegroundColor DarkGray }
     else { Write-Host "    [MISSING] $($n.Label)" -ForegroundColor Red; $missing += $n }
   }
   if (-not $missing) { break }
@@ -148,7 +153,14 @@ while ($true) {
 foreach ($n in $needed) {
   if ($n.Skipped) { continue }
   $c = Find-Connection $n (Get-Connections)
-  if ($c) { Run pac @('code','add-data-source','-a',$c.Api,'-c',$c.Id); Ok "$($n.Label): added ($($c.Api))" }
+  if ($c) {
+    $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    $out = (& pac code add-data-source -a $c.Api -c $c.Id 2>&1) | Out-String
+    $ErrorActionPreference = $prev
+    if ($LASTEXITCODE -eq 0) { Ok "$($n.Label): added ($($c.Api))" }
+    elseif ($out -match '(?i)already') { Ok "$($n.Label): already added" }
+    else { Warn "$($n.Label): could not add - $($out.Trim())" }
+  }
 }
 
 # ---------- 6. build + publish ----------

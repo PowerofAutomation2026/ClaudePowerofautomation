@@ -5,7 +5,7 @@ enter a user's email → see every canvas/model app and cloud flow they own **ac
 transfer ownership of selected items, or everything, to a new owner.
 
 **No Azure app registration.** It runs on the signed-in admin's own connector connections:
-Power Apps for Admins, Power Automate for Admins, Office 365 Users.
+Power Apps for Admins, Power Platform for Admins, Power Automate Management (+ optional Power Automate for Admins), Office 365 Users.
 
 ## Deploy (zero touch)
 
@@ -49,3 +49,17 @@ against a live tenant while building, so treat the first Live run as a pilot: us
 
 Notes: Power Apps have a single owner (co-owner mode applies to flows only). Solution flows may need their
 connection references re-pointed after transfer.
+
+## Connectors needed (create each once in the target environment)
+| Connector | Id | Used for |
+|---|---|---|
+| Power Apps for Admins | `shared_powerappsforadmins` | list apps, change app owner |
+| Power Platform for Admins | `shared_powerplatformforadmins` | list all environments |
+| Power Automate Management | `shared_flowmanagement` | list flows, change flow owner as admin |
+| Office 365 Users | `shared_office365users` | email → user object id |
+| Power Automate for Admins *(optional)* | `shared_microsoftflowforadmins` | extra flow admin operations |
+
+## Troubleshooting
+* **"Connector operation … not found"** → open 🩺 Diagnostics, click *Copy diagnostics*; each connector's real operations are listed.
+  Re-run the deploy script to add the missing connector, then redeploy.
+* Re-running the script on an existing folder reuses `power.config.json` (same app, updated in place). Extract new versions *over* the old folder.
