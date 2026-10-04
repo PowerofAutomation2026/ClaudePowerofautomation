@@ -92,6 +92,10 @@ export interface Backend {
   /** After a transfer: true = inventory shows `to` as owner, false = not (yet) reflected, null = cannot tell. */
   verifyOwner?(asset: Asset, to: Person): Promise<boolean | null>
   verifyOwnerRaw?(asset: Asset, to: Person): Promise<boolean | null>
+  /** Manager of a user (Office 365 Users), or null. */
+  getManager?(userId: string): Promise<Person | null>
+  /** Send an email as the signed-in admin (Office 365 Outlook connector). */
+  sendMail?(msg: MailMessage): Promise<void>
   /** Which solutions contain the given items (apps, flows, agents). Needs the Dataverse connector. */
   listSolutions?(assets: Asset[]): Promise<SolutionGroup[]>
   diagnostics(): Promise<{ name: string; ok: boolean; detail: string }[]>
@@ -108,4 +112,11 @@ export interface SolutionGroup {
   managed: boolean
   assetKeys: string[] // the user's apps / flows / agents inside this solution (these are what a transfer can move)
   totalComponents: number // everything in the solution (tables, roles, connection references... are not owner-transferable here)
+}
+
+export interface MailMessage {
+  to: string // one or more addresses separated by ; or ,
+  subject: string
+  html: string
+  attachments?: { name: string; contentBase64: string }[]
 }

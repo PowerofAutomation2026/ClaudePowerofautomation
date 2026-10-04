@@ -209,3 +209,16 @@ The flow permission API rejected `roleName: "Owner"` (HTTP 400: accepted values 
 
 ## v1.9.13 – flow "replace owner" removes the previous owner correctly
 The previous owner is removed by ROLE id (looked up from the flow's owner list) after the new CanEdit owner was added first. Solution-aware flows are also owned in Dataverse; that record owner is not changed by this step.
+
+## v1.10.0 – enterprise pack: email reports, schedules, notifications
+Based on what admins ask for most (offboarding checklists, bulk reassign, orphan detection, telling the right people):
+- **✉ Email this report** (📄 Report): recipients + CSV/PDF attachments + an HTML summary, sent from the signed-in admin's own mailbox through the **Office 365 Outlook** connector (the deploy script adds it as an optional connector; approve it on first launch).
+- **⏰ Schedules**: save report definitions (users, apps/flows/agents, recipients, daily / weekly / monthly at an hour). They run **while the app is open** and catch up when it is opened after a missed run ("Run now" any time). A code app has no server, so nothing runs when nobody has it open.
+- **✉ Email the new owner** (and optionally the previous owner's manager, looked up in Office 365 Users) after a transfer, with a per-item result table.
+
+### Unattended reports (fully automatic, nobody has the app open)
+Use a scheduled Power Automate cloud flow owned by an admin or service account (premium licence for the admin connectors):
+1. Power Automate → Create → **Scheduled cloud flow** (e.g. weekly Monday 08:00).
+2. Add **Power Apps for Admins - Get Apps as Admin** (per environment), **Power Automate Management - List Flows as Admin**, filter by the user's id, and **Create CSV table**.
+3. Add **Office 365 Outlook - Send an email (V2)** with the CSV as attachment.
+4. Put the flow in a solution with connection references so it can be reassigned later (this app can do that).

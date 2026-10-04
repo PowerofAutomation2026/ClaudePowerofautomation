@@ -130,3 +130,68 @@ export function saveBlob(name: string, data: BlobPart, type: string) {
   const a = document.createElement('a'); a.href = url; a.download = name; a.click()
   setTimeout(() => URL.revokeObjectURL(url), 2000)
 }
+
+export function toBase64(bytes: Uint8Array): string {
+  let s = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  return btoa(s)
+}
+export const textToBase64 = (t: string) => toBase64(new TextEncoder().encode(t))
+
+const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+/** Email body: summary tiles + per-user tables (inline styles only - mail clients ignore <style>). */
+export function reportHtml(groups: ReportGroup[], title: string, build: string): string {
+  const sections = groups.map((g) => ({ user: g.user, rows: reportRows(g.assets) }))
+  const n = (k: string) => sections.reduce((a, s) => a + s.rows.filter((r) => r.Type === k).length, 0)
+  const tile = (label: string, v: number, c: string) => `<td style="padding:0 6px 0 0"><div style="background:${c};color:#fff;border-radius:10px;padding:10px 16px;min-width:90px"><div style="font-size:24px;font-weight:700">${v}</div><div style="font-size:11px;letter-spacing:.06em">${label}</div></div></td>`
+  const tables = sections.map((s) => `
+    <h3 style="margin:22px 0 6px;color:#2b2373">${esc(s.user.name)} <span style="font-weight:400;color:#6b6f85;font-size:13px">&lt;${esc(s.user.email)}&gt;</span></h3>
+    ${s.rows.length ? `<table cellpadding="6" cellspacing="0" style="border-collapse:collapse;width:100%;font-size:12px">
+      <tr style="background:#ecebfa;text-align:left"><th>Type</th><th>Name</th><th>Created</th><th>Environment</th></tr>
+      ${s.rows.map((r, i) => `<tr style="background:${i % 2 ? '#f7f7fc' : '#fff'}"><td>${esc(r.Type)}</td><td><b>${esc(r.Name)}</b><br><span style="color:#8a8ea5;font-size:10px">${esc(r.Id)}</span></td><td>${esc(r.Created)}</td><td>${esc(r.Environment)}<br><span style="color:#8a8ea5;font-size:10px">${esc(r.EnvironmentId)}</span></td></tr>`).join('')}
+    </table>` : '<p style="color:#6b6f85">No items.</p>'}`).join('')
+  return `<div style="font-family:Segoe UI,Arial,sans-serif;color:#1c1f33;max-width:900px">
+    <div style="background:#2b2373;color:#fff;border-radius:12px;padding:18px 22px"><div style="font-size:20px;font-weight:700">${esc(title)}</div>
+    <div style="opacity:.8;font-size:12px;margin-top:4px">Generated ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC &middot; Ownership Command Center ${esc(build)}</div></div>
+    <table style="margin:14px 0"><tr>${tile('APPS', n('App'), '#3987e5')}${tile('CLOUD FLOWS', n('Cloud flow'), '#d95926')}${tile('AGENTS', n('Agent'), '#199e70')}</tr></table>
+    ${tables}
+    <p style="color:#8a8ea5;font-size:11px;margin-top:24px">Full details are attached as CSV / PDF when selected. Sent from the Ownership Command Center by the signed-in administrator.</p></div>`
+}
+
+// ---- Schedules (run by the open app; there is no server) ----
+export interface Schedule {
+  id: string; name: string; users: string[]; kinds: AssetKind[]; to: string
+  freq: 'daily' | 'weekly' | 'monthly'; hour: number; dow: number
+  csv: boolean; pdf: boolean; enabled: boolean; lastRun?: string; lastResult?: string
+}
+/** The most recent moment this schedule should have run, at or before `now`. */
+export function lastDue(s: Schedule, now = new Date()): Date {
+  const d = new Date(now)
+  d.setMinutes(0, 0, 0); d.setHours(s.hour)
+  if (s.freq === 'daily') { if (d > now) d.setDate(d.getDate() - 1) }
+  else if (s.freq === 'weekly') { d.setDate(d.getDate() - ((d.getDay() - s.dow + 7) % 7)); if (d > now) d.setDate(d.getDate() - 7) }
+  else { d.setDate(1); if (d > now) d.setMonth(d.getMonth() - 1) }
+  return d
+}
+export const isDue = (s: Schedule, now = new Date()) => s.enabled && (!s.lastRun || new Date(s.lastRun) < lastDue(s, now))
+export function nextRun(s: Schedule, now = new Date()): Date {
+  const d = lastDue(s, now)
+  if (s.freq === 'daily') d.setDate(d.getDate() + 1); else if (s.freq === 'weekly') d.setDate(d.getDate() + 7); else d.setMonth(d.getMonth() + 1)
+  return d
+}
+
+/** Build the report and mail it with the signed-in admin's own mailbox. */
+export async function emailReport(
+  backend: { sendMail?: (m: import('./types').MailMessage) => Promise<void> },
+  groups: ReportGroup[], to: string, subject: string, csv: boolean, pdf: boolean,
+): Promise<number> {
+  if (!backend.sendMail) throw new Error('This build cannot send email (add the Office 365 Outlook connector and re-run the deploy script).')
+  const all = groups.flatMap((g) => g.assets)
+  const stamp = new Date().toISOString().slice(0, 10)
+  const attachments: { name: string; contentBase64: string }[] = []
+  if (csv) attachments.push({ name: `ownership-report-${stamp}.csv`, contentBase64: textToBase64(reportCsv(all)) })
+  if (pdf) attachments.push({ name: `ownership-report-${stamp}.pdf`, contentBase64: toBase64(reportPdfMulti(groups, __BUILD__)) })
+  await backend.sendMail({ to, subject, html: reportHtml(groups, subject, __BUILD__), attachments })
+  return all.length
+}

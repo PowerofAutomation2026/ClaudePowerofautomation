@@ -69,6 +69,8 @@ export const demoBackend: Backend = {
     if (!q.includes('@')) throw new Error('No user found')
     return { id: 'u-' + q.length + q.charCodeAt(0), name: q.split('@')[0].replace(/[._]/g, ' '), email: q }
   },
+  async getManager() { return { id: 'mgr', name: 'Demo Manager', email: 'manager@contoso.com' } },
+  async sendMail(msg) { await sleep(500); console.info('[demo] mail to', msg.to, msg.subject, msg.attachments?.map((a) => a.name)) },
   async listSolutions(assets) {
     await sleep(400)
     const picks = assets.slice(0, 3)

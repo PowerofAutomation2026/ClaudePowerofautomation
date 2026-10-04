@@ -122,13 +122,22 @@ const OPS = {
     o.find((x) => /commondataservice/i.test(x.ds) && x.method === 'GET' && /\/items$/i.test(bare(x.path)) && x.pathNames.length >= 1)) },
   dvUpdate: () => { const o = allOps(); return pick(
     o.find((x) => /commondataservice/i.test(x.ds) && x.method === 'PATCH' && /datasets\/\{dataset\}\/tables\/\{table\}\/items\/\{[^}]+\}$/i.test(bare(x.path)))) },
+  /** Office 365 Users: manager of a user. */
+  manager: () => { const o = allOps(); return pick(
+    o.find((x) => /office365users/i.test(x.ds) && x.norm === 'managerv2'),
+    o.find((x) => /office365users/i.test(x.ds) && x.method === 'GET' && /\/users\/\{[^}/]+\}\/manager$/i.test(bare(x.path)))) },
+  /** Office 365 Outlook: Send an email (V2) as the signed-in user. */
+  mail: () => { const o = allOps(); return pick(
+    o.find((x) => /^office365$/i.test(x.ds) && x.norm === 'sendemailv2'),
+    o.find((x) => /office365(?!users|groups)/i.test(x.ds) && x.norm === 'sendemailv2'),
+    o.find((x) => /office365(?!users|groups)/i.test(x.ds) && x.method === 'POST' && /\/v2\/Mail$/i.test(bare(x.path)))) },
   user: () => { const o = allOps(); return pick(
     o.find((x) => /office365users/i.test(x.ds) && x.norm === 'userprofilev2'),
     o.find((x) => /office365users/i.test(x.ds) && x.method === 'GET' && /\/users\/\{[^}/]+\}$/i.test(bare(x.path)))) },
 } as const
 type OpKey = keyof typeof OPS
 const REQUIRED: OpKey[] = ['apps', 'appOwner', 'user']
-const NEEDS: Partial<Record<OpKey, string>> = { envs: 'environment list', flows: 'flow list', flowOwner: 'change flow owner', flowOwners: 'flow owners lookup (only if list has no creator)', dvList: 'agents fallback (legacy Dataverse read)', dvUpdate: 'agents fallback (legacy Dataverse write)', inventory: 'Copilot Studio agents - discovery (all environments)', agentReassign: 'Copilot Studio agents - transfer', appGet: 'read an app back to verify its owner', syncUser: 'add new owner to an environment (membership, no roles)' }
+const NEEDS: Partial<Record<OpKey, string>> = { envs: 'environment list', flows: 'flow list', flowOwner: 'change flow owner', flowOwners: 'flow owners lookup (only if list has no creator)', dvList: 'agents fallback (legacy Dataverse read)', dvUpdate: 'agents fallback (legacy Dataverse write)', inventory: 'Copilot Studio agents - discovery (all environments)', mail: 'email reports / notifications (Office 365 Outlook connector, optional)', agentReassign: 'Copilot Studio agents - transfer', appGet: 'read an app back to verify its owner', syncUser: 'add new owner to an environment (membership, no roles)' }
 
 const need = (k: OpKey): Op => {
   const o = OPS[k]()
@@ -658,6 +667,22 @@ export const liveBackend: Backend = {
     }
 
     return { assets: out, notes }
+  },
+
+  async getManager(userId) {
+    const op = OPS.manager()
+    if (!op) return null
+    try { const m = await call(op, [userId]); return m?.id ? { id: m.id, name: m.displayName ?? m.mail, email: m.mail ?? m.userPrincipalName ?? '' } : null } catch { return null }
+  },
+
+  async sendMail(msg) {
+    const op = need('mail')
+    const body: Record<string, unknown> = {
+      To: msg.to.replace(/,/g, ';'), Subject: msg.subject, Body: msg.html, Importance: 'Normal',
+      ...(msg.attachments?.length ? { Attachments: msg.attachments.map((a) => ({ Name: a.name, ContentBytes: a.contentBase64 })) } : {}),
+    }
+    log(`MAIL to ${msg.to}: "${msg.subject}" (${msg.attachments?.length ?? 0} attachment(s))`)
+    await callRaw(op, [], body)
   },
 
   async listSolutions(assets) {

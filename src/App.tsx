@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { reportCsv, reportPdfMulti, reportRows, saveBlob } from './report'
-import type { ReportGroup } from './report'
+import { emailReport, isDue, nextRun, reportCsv, reportPdfMulti, reportRows, saveBlob } from './report'
+import type { ReportGroup, Schedule } from './report'
 import { clearLog, getLog, log as opLog, subscribeLog } from './oplog'
 import type { AgentCategory, Asset, SolutionGroup, AssetKind, AuditEntry, Backend, Env, ItemStatus, Person, ScanNote, TransferOptions } from './types'
 import { hasConnectors, pickBackend } from './services'
@@ -19,7 +19,7 @@ const crumb = {
 }
 
 type SortKey = 'name' | 'kind' | 'envName' | 'state' | 'modifiedTime'
-type Panel = null | 'transfer' | 'history' | 'diag' | 'solutions' | 'report'
+type Panel = null | 'transfer' | 'history' | 'diag' | 'solutions' | 'report' | 'schedules'
 
 
 const KIND_UI: Record<AssetKind, { label: string; plural: string; icon: string }> = {
@@ -94,6 +94,9 @@ export default function App() {
   const [sel, setSel] = useState<Set<string>>(new Set())
 
   const [panel, setPanel] = useState<Panel>(null)
+  const [schedules, setSchedules] = useState<Schedule[]>(() => ls.get<Schedule[]>('occ.schedules', []))
+  useEffect(() => { ls.set('occ.schedules', schedules) }, [schedules])
+  const [runningSched, setRunningSched] = useState<string | null>(null)
   const [audit, setAudit] = useState<AuditEntry[]>(() => ls.get('occ.audit', []))
   const [toast, setToast] = useState<string | null>(null)
   const [palette, setPalette] = useState(false)
@@ -138,6 +141,36 @@ export default function App() {
     const { assets: found } = await backend.listAssets(p, scope, () => {})
     return { user: p, assets: found.filter((a) => a.kind !== 'agent' || !a.category || a.category === 'agent') }
   }, [backend, envs, envScope])
+
+  /** Run one saved report schedule now: scan its users, build the report, mail it. */
+  const runSchedule = useCallback(async (s: Schedule) => {
+    setRunningSched(s.id)
+    let result: string
+    try {
+      const groups: ReportGroup[] = []
+      for (const em of s.users) { const g = await scanOne(em); groups.push({ user: g.user, assets: g.assets.filter((x) => s.kinds.includes(x.kind)) }) }
+      const n = await emailReport(backend, groups, s.to, s.name, s.csv, s.pdf)
+      result = `Sent ${n} item(s) for ${groups.length} user(s) to ${s.to}`
+    } catch (e) { result = `FAILED: ${(e as Error).message.slice(0, 220)}` }
+    setSchedules((all) => all.map((x) => (x.id === s.id ? { ...x, lastRun: new Date().toISOString(), lastResult: result } : x)))
+    setRunningSched(null)
+    flash(result.startsWith('FAILED') ? 'Scheduled report failed - see Schedules' : 'Scheduled report sent')
+  }, [backend, scanOne, flash])
+  // The app is a browser page: schedules run while it is open (and catch up when it is opened).
+  const schedRef = useRef({ schedules, runningSched, runSchedule })
+  schedRef.current = { schedules, runningSched, runSchedule }
+  useEffect(() => {
+    if (!envs.length) return
+    const tick = () => {
+      const { schedules: list, runningSched: busy, runSchedule: run } = schedRef.current
+      if (busy || busyRef.current) return
+      const due = list.find((s) => isDue(s))
+      if (due) void run(due)
+    }
+    const first = setTimeout(tick, 4000)
+    const id = setInterval(tick, 60000)
+    return () => { clearTimeout(first); clearInterval(id) }
+  }, [envs.length])
 
   // Only real Copilot Studio agents by default; tools / MCP / Agent Builder / CLI items sit behind a toggle.
   const assets = useMemo(() => allAssets.filter((a) => showOthers || a.kind !== 'agent' || !a.category || a.category === 'agent'), [allAssets, showOthers])
@@ -195,6 +228,7 @@ export default function App() {
     { label: 'Transfer selected…', run: () => selected.length && setPanel('transfer') },
     { label: 'Transfer EVERYTHING…', run: () => { setSel(new Set(assets.map((a) => a.key))); setPanel('transfer') } },
     { label: 'Export inventory (CSV)', run: () => download('inventory.csv', toCsv(assetRows(visible)), 'text/csv') },
+    { label: 'Schedules: email reports automatically', run: () => setPanel('schedules') },
     { label: 'Report: export CSV / PDF for this user', run: () => assets.length && setPanel('report') },
     { label: 'Transfer a whole solution…', run: () => assets.length && setPanel('solutions') },
     { label: 'Open history', run: () => setPanel('history') },
@@ -213,6 +247,7 @@ export default function App() {
         <span className={`pill ${demo ? 'warn' : 'ok'}`}>{demo ? 'DEMO DATA' : 'LIVE'}</span>
         <button className="btn sm" onClick={() => setPalette(true)}>⌘ <kbd>Ctrl K</kbd></button>
         <button className="btn sm" disabled={!assets.length} onClick={() => setPanel('report')}>📄 Report</button>
+        <button className="btn sm" onClick={() => setPanel('schedules')}>⏰ Schedules{schedules.some((s) => s.enabled) ? ` (${schedules.filter((s) => s.enabled).length})` : ''}</button>
         <button className="btn sm" disabled={!assets.length} onClick={() => setPanel('solutions')}>📦 Solutions</button>
         <button className="btn sm" onClick={() => setPanel('history')}>🕘 History ({audit.filter((a) => !a.dryRun).length})</button>
         <button className="btn sm" onClick={() => setPanel('diag')}>🩺</button>
@@ -341,7 +376,8 @@ export default function App() {
           onClose={() => setPanel(null)}
           onAudit={(e) => setAudit((a) => [...a, ...e])}
           onDone={(moved) => { setAssets((all) => all.filter((a) => !moved.includes(a.key))); setSel(new Set()) }} onRefresh={() => { void search(user.email) }} flash={flash} />)}
-      {panel === 'report' && user && <ReportDrawer user={user} assets={assets} selected={selected} scanOne={scanOne} onClose={() => setPanel(null)} flash={flash} />}
+      {panel === 'schedules' && <ScheduleDrawer schedules={schedules} setSchedules={setSchedules} runningSched={runningSched} onRun={(s) => void runSchedule(s)} canMail={!!backend.sendMail} defaultTo={user?.email ?? ''} defaultUsers={user ? [user.email] : []} onClose={() => setPanel(null)} />}
+      {panel === 'report' && user && <ReportDrawer backend={backend} user={user} assets={assets} selected={selected} scanOne={scanOne} onClose={() => setPanel(null)} flash={flash} />}
       {panel === 'solutions' && <SolutionsDrawer backend={backend} assets={assets} onClose={() => setPanel(null)} onPick={(keys) => { setSel(new Set(keys)); setPanel('transfer') }} />}
       {panel === 'history' && <HistoryDrawer audit={audit} backend={backend} onClose={() => setPanel(null)} onClear={() => setAudit([])} onAudit={(e) => setAudit((a) => [...a, ...e])} flash={flash} />}
       {panel === 'diag' && <DiagDrawer backend={backend} onClose={() => setPanel(null)} />}
@@ -387,6 +423,8 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
   const [agentOk, setAgentOk] = useState(false)
   const [lastTo, setLastTo] = useState<Person | null>(null)
   const [prepare, setPrepare] = useState(true)
+  const [notify, setNotify] = useState(false)
+  const [notifyMgr, setNotifyMgr] = useState(false)
   const [lastBatch, setLastBatch] = useState<{ id: string; to: Person; keys: string[]; opts: TransferOptions } | null>(null)
   const [script, setScript] = useState(false)
   const needsConfirm = !dry && items.length > 5
@@ -434,6 +472,11 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
     })
     onAudit(out.entries)
     setLastTo(to)
+    if (!dry && notify && backend.sendMail && out.entries.some((e) => e.status === 'done')) {
+      const rows = out.entries.filter((e) => e.status === 'done' || e.status === 'failed').map((e) => `<tr><td style="padding:4px 8px">${e.kind}</td><td style="padding:4px 8px"><b>${e.name.replace(/</g, '&lt;')}</b></td><td style="padding:4px 8px">${e.envName}</td><td style="padding:4px 8px">${e.status === 'done' ? (/^Verified/.test(e.note ?? '') ? 'transferred &#10003;' : 'accepted - please verify') : 'failed'}</td></tr>`).join('')
+      void (async () => { const mgr = notifyMgr && backend.getManager ? await backend.getManager(from.id).catch(() => null) : null; await backend.sendMail!({ to: [to.email, mgr?.email].filter(Boolean).join(';'), subject: `Ownership transferred to you: ${out.entries.filter((e) => e.status === 'done').length} item(s) from ${from.name}`, html: `<div style="font-family:Segoe UI,Arial,sans-serif"><p>Hello ${to.name},</p><p>An administrator transferred ownership of the following items from <b>${from.name}</b> (${from.email}) to you:</p><table cellspacing="0" style="border-collapse:collapse;font-size:13px"><tr style="background:#ecebfa"><th>Type</th><th>Name</th><th>Environment</th><th>Result</th></tr>${rows}</table><p>Please open each item once and check its connections and settings. Flows keep using the previous owner's connections until you re-bind them.</p></div>` }) })()
+        .then(() => flash(`Summary emailed to ${to.email}`)).catch((e) => flash(`Could not email ${to.email}: ${(e as Error).message.slice(0, 120)}`))
+    }
     if (!dry && out.movedKeys.length) onDone(out.movedKeys) // only CONFIRMED rows leave the table
     if (!dry && out.acceptedKeys.length) setLastBatch({ id: batch, to, keys: out.acceptedKeys, opts: { ...opts } })
     const failedEntries = out.entries.filter((e) => e.status === 'failed')
@@ -498,6 +541,8 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
         </div>
         {opts.mode === 'replace' && <label className="row"><input type="checkbox" checked={opts.removeOldOwner} onChange={(e) => setOpts({ ...opts, removeOldOwner: e.target.checked })} /> Remove previous owner from flows</label>}
         <label className="row"><input type="checkbox" checked={dry} onChange={(e) => setDry(e.target.checked)} /> <b>Dry run</b> (simulate, change nothing)</label>
+        {backend.sendMail && <label className="row"><input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} /> <b>✉ Email the new owner</b> a summary of what was transferred (from your mailbox)</label>}
+        {backend.sendMail && notify && backend.getManager && <label className="row"><input type="checkbox" checked={notifyMgr} onChange={(e) => setNotifyMgr(e.target.checked)} /> also copy <b>{from.name}'s manager</b> (looked up in Office 365 Users)</label>}
         {needsConfirm && <div className="field"><label>Type <b>TRANSFER {items.length}</b> to confirm</label><input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} /></div>}
         {dry && <div className="risk info">Dry run is ON – nothing will be changed. Untick it to really transfer.</div>}
         {msg && <div className={`banner`} style={msg.level === 'error' ? { borderColor: 'var(--bad)', color: 'var(--bad)', background: 'rgba(251,113,133,.08)' } : msg.level === 'ok' ? { borderColor: 'var(--ok)', color: 'var(--ok)', background: 'rgba(52,211,153,.08)' } : { borderColor: 'var(--accent)', color: 'var(--accent2)', background: 'rgba(124,92,255,.08)' }}><span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.text}</span></div>}
@@ -551,8 +596,60 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
   )
 }
 
+/** Saved report schedules: emailed automatically while the app is open (it catches up when opened). */
+function ScheduleDrawer({ schedules, setSchedules, runningSched, onRun, canMail, defaultTo, defaultUsers, onClose }: {
+  schedules: Schedule[]; setSchedules: React.Dispatch<React.SetStateAction<Schedule[]>>; runningSched: string | null; onRun: (s: Schedule) => void
+  canMail: boolean; defaultTo: string; defaultUsers: string[]; onClose: () => void
+}) {
+  const blank = (): Schedule => ({ id: String(Date.now()), name: 'Weekly ownership report', users: defaultUsers, kinds: ['app', 'flow', 'agent'], to: defaultTo, freq: 'weekly', hour: 8, dow: 1, csv: true, pdf: true, enabled: true })
+  const [f, setF] = useState<Schedule>(blank())
+  const [usersText, setUsersText] = useState(defaultUsers.join(', '))
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+  const add = () => {
+    const users = usersText.split(/[\s,;]+/).filter(Boolean)
+    if (!users.length || !f.to.trim()) return
+    setSchedules((s) => [...s, { ...f, users, id: String(Date.now()) }]); setF(blank())
+  }
+  return (
+    <Drawer onClose={onClose}>
+      <div className="row"><h2 style={{ margin: 0 }}>⏰ Scheduled reports</h2><div className="spacer" /><button className="btn sm" onClick={onClose}>Close</button></div>
+      <div className="banner" style={{ borderColor: 'var(--warn)', margin: '10px 0' }}>
+        ⚠ A code app has no server: schedules run <b>while this app is open in a browser tab</b> and catch up when someone opens it after a run was missed. For fully unattended delivery use a scheduled Power Automate flow (see the README, "Unattended reports").
+      </div>
+      {!canMail && <div className="banner" style={{ borderColor: 'var(--bad)', color: 'var(--bad)' }}>Email is not available in this build: add the Office 365 Outlook connector (re-run the deploy script).</div>}
+      {schedules.map((s) => (
+        <div className="card" key={s.id} style={{ padding: 12, marginBottom: 8, opacity: s.enabled ? 1 : .6 }}>
+          <div className="row"><b>{s.name}</b><span className="pill mut">{s.freq}{s.freq === 'weekly' ? ` ${days[s.dow]}` : ''} {String(s.hour).padStart(2, '0')}:00</span><div className="spacer" />
+            <button className="btn sm" disabled={!!runningSched} onClick={() => onRun(s)}>{runningSched === s.id ? 'Running…' : '▶ Run now'}</button>
+            <button className="btn sm" onClick={() => setSchedules((all) => all.map((x) => (x.id === s.id ? { ...x, enabled: !x.enabled } : x)))}>{s.enabled ? 'Pause' : 'Resume'}</button>
+            <button className="btn sm" onClick={() => setSchedules((all) => all.filter((x) => x.id !== s.id))}>✕</button></div>
+          <div className="sub">Users: {s.users.join(', ')} · To: {s.to} · {s.kinds.join('/')} · {[s.csv && 'CSV', s.pdf && 'PDF'].filter(Boolean).join(' + ') || 'no attachments'}</div>
+          <div className="sub">Next: {s.enabled ? nextRun(s).toLocaleString() : 'paused'}{s.lastRun ? ` · Last: ${new Date(s.lastRun).toLocaleString()} - ${s.lastResult ?? ''}` : ' · never run'}</div>
+        </div>
+      ))}
+      <div className="card" style={{ padding: 12 }}>
+        <b>➕ New schedule</b>
+        <input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="Name (also the email subject)" style={{ width: '100%', margin: '6px 0' }} />
+        <textarea value={usersText} onChange={(e) => setUsersText(e.target.value)} rows={2} placeholder="Users to report on (emails)" style={{ width: '100%' }} />
+        <input value={f.to} onChange={(e) => setF({ ...f, to: e.target.value })} placeholder="Send to (emails, separated by ;)" style={{ width: '100%', margin: '6px 0' }} />
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+          <select value={f.freq} onChange={(e) => setF({ ...f, freq: e.target.value as Schedule['freq'] })}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly (1st)</option></select>
+          {f.freq === 'weekly' && <select value={f.dow} onChange={(e) => setF({ ...f, dow: +e.target.value })}>{days.map((d, i) => <option key={d} value={i}>{d}</option>)}</select>}
+          <select value={f.hour} onChange={(e) => setF({ ...f, hour: +e.target.value })}>{Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}</select>
+        </div>
+        <div className="row" style={{ gap: 12, margin: '8px 0', flexWrap: 'wrap' }}>
+          {(['app', 'flow', 'agent'] as AssetKind[]).map((k) => <label key={k} className="sub"><input type="checkbox" checked={f.kinds.includes(k)} onChange={(e) => setF({ ...f, kinds: e.target.checked ? [...f.kinds, k] : f.kinds.filter((x) => x !== k) })} /> {KIND_UI[k].plural}</label>)}
+          <label className="sub"><input type="checkbox" checked={f.csv} onChange={(e) => setF({ ...f, csv: e.target.checked })} /> CSV</label>
+          <label className="sub"><input type="checkbox" checked={f.pdf} onChange={(e) => setF({ ...f, pdf: e.target.checked })} /> PDF</label>
+        </div>
+        <button className="btn primary sm" onClick={add}>Save schedule</button>
+      </div>
+    </Drawer>
+  )
+}
+
 /** Report studio: pick what to include, add more users, preview, download CSV (Excel) or PDF (one section per user). */
-function ReportDrawer({ user, assets, selected, scanOne, onClose, flash }: { user: Person; assets: Asset[]; selected: Asset[]; scanOne: (email: string) => Promise<ReportGroup>; onClose: () => void; flash: (m: string) => void }) {
+function ReportDrawer({ backend, user, assets, selected, scanOne, onClose, flash }: { backend: Backend; user: Person; assets: Asset[]; selected: Asset[]; scanOne: (email: string) => Promise<ReportGroup>; onClose: () => void; flash: (m: string) => void }) {
   const [inc, setInc] = useState<Record<AssetKind, boolean>>({ app: true, flow: true, agent: true })
   const [onlySel, setOnlySel] = useState(false)
   const [extra, setExtra] = useState<ReportGroup[]>([])
@@ -566,6 +663,19 @@ function ReportDrawer({ user, assets, selected, scanOne, onClose, flash }: { use
   const stamp = new Date().toISOString().slice(0, 10)
   const slug = groups.length === 1 ? user.email.replace(/[^a-z0-9]+/gi, '_') : `${groups.length}_users`
   const tone = { app: '#3987e5', flow: '#d95926', agent: '#199e70' } as const
+  const [mailTo, setMailTo] = useState('')
+  const [mailCsv, setMailCsv] = useState(true)
+  const [mailPdf, setMailPdf] = useState(true)
+  const [mailBusy, setMailBusy] = useState(false)
+  const [mailMsg, setMailMsg] = useState<string | null>(null)
+  const sendNow = async () => {
+    setMailBusy(true); setMailMsg(null)
+    try {
+      const n = await emailReport(backend, groups, mailTo.trim(), `Ownership report - ${groups.length === 1 ? user.email : `${groups.length} users`}`, mailCsv, mailPdf)
+      setMailMsg(`✔ Sent ${n} item(s) to ${mailTo.trim()}`)
+    } catch (e) { setMailMsg(`✖ ${(e as Error).message}`) }
+    setMailBusy(false)
+  }
   const addUsers = async () => {
     const list = emails.split(/[\s,;]+/).map((x) => x.trim()).filter((x) => x && !extra.some((g) => g.user.email.toLowerCase() === x.toLowerCase()) && x.toLowerCase() !== user.email.toLowerCase())
     if (!list.length) return
@@ -605,6 +715,18 @@ function ReportDrawer({ user, assets, selected, scanOne, onClose, flash }: { use
       <div className="row" style={{ gap: 8, marginBottom: 10 }}>
         <button className="btn primary" disabled={!rows.length} onClick={() => { saveBlob(`ownership-report-${slug}-${stamp}.csv`, reportCsv(all), 'text/csv;charset=utf-8'); flash('CSV report downloaded') }}>⬇ CSV (Excel)</button>
         <button className="btn primary" disabled={!rows.length} onClick={() => { saveBlob(`ownership-report-${slug}-${stamp}.pdf`, reportPdfMulti(groups, __BUILD__), 'application/pdf'); flash('PDF report downloaded') }}>⬇ PDF</button>
+      </div>
+      <div className="card" style={{ padding: 12, marginBottom: 10 }}>
+        <b>✉ Email this report</b>
+        <div className="sub">Sent from your own mailbox through the Office 365 Outlook connector. Separate several recipients with a semicolon.</div>
+        <input value={mailTo} onChange={(e) => setMailTo(e.target.value)} placeholder="admin@contoso.com; auditor@contoso.com" style={{ width: '100%', margin: '6px 0' }} />
+        <div className="row" style={{ gap: 12 }}>
+          <label className="sub"><input type="checkbox" checked={mailCsv} onChange={(e) => setMailCsv(e.target.checked)} /> attach CSV</label>
+          <label className="sub"><input type="checkbox" checked={mailPdf} onChange={(e) => setMailPdf(e.target.checked)} /> attach PDF</label>
+          <div className="spacer" />
+          <button className="btn sm primary" disabled={!rows.length || !mailTo.trim() || mailBusy} onClick={sendNow}>{mailBusy ? 'Sending…' : 'Send now'}</button>
+        </div>
+        {mailMsg && <div className="sub" style={{ marginTop: 6, color: mailMsg.startsWith('✔') ? 'var(--ok)' : 'var(--bad)' }}>{mailMsg}</div>}
       </div>
       <div className="card" style={{ padding: 0, overflow: 'auto', maxHeight: 340 }}>
         <table><thead><tr><th>Type</th><th>Name</th><th>Created</th><th>Environment</th></tr></thead>
