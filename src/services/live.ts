@@ -608,6 +608,17 @@ export const liveBackend: Backend = {
     return { assets: out, notes }
   },
 
+  async preflightTarget(envId, to) {
+    if (!nativeKey('systemuser') || (await getCurrentEnvId())?.toLowerCase() !== envId.toLowerCase()) return null
+    const r: any = await sdk().retrieveMultipleRecordsAsync<any>(nativeKey('systemuser')!, { filter: `azureactivedirectoryobjectid eq ${to.id}`, select: ['systemuserid', 'isdisabled', 'accessmode'], top: 1 })
+    const u = r?.success ? r.data?.[0] : null
+    log(`pre-flight target user in Dataverse: ${u ? `isdisabled=${u.isdisabled} accessmode=${u.accessmode}` : 'no row'}`)
+    if (!u) return null
+    if (u.isdisabled) return `${to.email} is DISABLED in this environment - enable the user first. Nothing was changed.`
+    if (u.accessmode === 3 || u.accessmode === 4) return `${to.email} has access mode "${u.accessmode === 4 ? 'Non-interactive' : 'Support user'}" in this environment and cannot own agents. Nothing was changed.`
+    return null
+  },
+
   async checkMember(envId, to) {
     // Only decidable for the environment this app runs in (its own Dataverse); elsewhere we cannot tell.
     if (!nativeKey('systemuser') || (await getCurrentEnvId()) !== envId) return null
@@ -683,8 +694,8 @@ export const liveBackend: Backend = {
       if (asset.category && asset.category !== 'agent') throw new Error(`Not attempted: "${asset.name}" is a ${asset.category}, not a Copilot Studio agent – nothing was changed.`)
       // Pre-flight: the inventory can list deleted agents - make sure it still exists (and is still owned by the expected user) where Dataverse is reachable.
       if (nativeKey('bot') && (await getCurrentEnvId())?.toLowerCase() === asset.envId.toLowerCase()) {
-        const r: any = await sdk().retrieveMultipleRecordsAsync<any>(nativeKey('bot')!, { filter: `botid eq ${asset.id}`, select: ['botid', 'name', '_ownerid_value'], top: 1 })
-        log(`pre-flight Dataverse bot ${asset.id}: ${r?.success ? (r.data?.[0] ? 'exists, owner row ' + r.data[0]._ownerid_value : 'NOT FOUND') : 'query failed'}`)
+        const r: any = await sdk().retrieveMultipleRecordsAsync<any>(nativeKey('bot')!, { filter: `botid eq ${asset.id}`, select: ['botid', 'name', '_ownerid_value', 'ismanaged'], top: 1 })
+        log(`pre-flight Dataverse bot ${asset.id}: ${r?.success ? (r.data?.[0] ? 'exists, owner row ' + r.data[0]._ownerid_value + (r.data[0].ismanaged ? ' - MANAGED (reassign may be blocked)' : '') : 'NOT FOUND') : 'query failed'}`)
         if (r?.success && !r.data?.[0]) throw new Error('Not attempted: this agent no longer exists in Dataverse (it was deleted; the tenant inventory is stale). Nothing was changed. Re-scan.')
       }
       const re = OPS.agentReassign()

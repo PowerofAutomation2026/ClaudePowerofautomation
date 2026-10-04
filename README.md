@@ -168,3 +168,8 @@ The tenant inventory keeps showing deleted agents for a while. After the invento
 - **Agent pre-flight**: before reassigning, the agent must still exist in Dataverse, otherwise nothing is sent.
 - **Operation log** (Transfer drawer and Diagnostics): every connector call, pre-flight, transfer, read-back result with timestamps; Copy log button.
 - **Auto-refresh**: 5 s after a real transfer the user is re-scanned so the table shows live data.
+
+## v1.9.4 – a failed agent transfer never takes the agent from the original user
+- When the reassign fails half-way (HTTP 502 "partially updated") the app first READS the owner at the source: if the new owner is already confirmed it says so; if the original owner is still confirmed it says "nothing changed"; only otherwise it reassigns back to the original owner automatically (one attempt) and reads back again. The batch still stops at the first failure.
+- New pre-flight: a disabled or non-interactive target user in the agent's environment blocks the transfer before anything is sent (environment this app runs in).
+- If it still fails with the target a licensed environment member, the usual cause is the target's Copilot Studio licence/service plan - test by signing in as that user in Copilot Studio.

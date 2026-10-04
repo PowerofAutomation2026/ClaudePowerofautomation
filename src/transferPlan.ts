@@ -98,6 +98,11 @@ export async function runTransfer(args: TransferArgs): Promise<TransferOutcome> 
         try { lines.push(`✔ ${ename}: ${await backend.prepareOwner(eid, to)}`) }
         catch (e) { const m = (e as Error).message; lines.push(`✖ ${ename}: ${m}`); envBlocked.set(eid, `could not add ${to.email} to this environment (${m})`); continue }
       }
+      if (backend.preflightTarget) {
+        const problem = await backend.preflightTarget(eid, to).catch(() => null)
+        if (problem) { lines.push(`✖ ${ename}: ${problem}`); envBlocked.set(eid, problem); continue }
+        lines.push(`✔ ${ename}: ${to.email} passed the user checks (enabled, interactive)`)
+      }
       if (backend.checkMember) {
         const member = await backend.checkMember(eid, to).catch(() => null)
         if (member === false) { lines.push(`✖ ${ename}: ${to.email} has no user record in this environment`); envBlocked.set(eid, `${to.email} is not a user of this environment`) }
@@ -126,6 +131,19 @@ export async function runTransfer(args: TransferArgs): Promise<TransferOutcome> 
       // A partial-update failure can leave the agent half-moved. Documented recovery = reassign again: put it back with the ORIGINAL owner, then read back.
       if (isPartialUpdate(m)) {
         const orig = ownerOf(a)
+        // Read first, never roll back blindly: the 502 can be a parse error after the change already went through.
+        const nowNew = backend.verifyOwner ? await backend.verifyOwner(a, to).catch(() => null) : null
+        const stillOld = nowNew === true ? false : backend.verifyOwner ? await backend.verifyOwner(a, orig).catch(() => null) : null
+        log(`post-failure read: new owner ${nowNew}, original owner ${stillOld}`)
+        if (nowNew === true) {
+          acceptedKeys.push(a.key); movedKeys.push(a.key)
+          record(a, 'done', undefined, `⚠ The service reported an error, but the read-back shows ${to.email} IS the owner now (CONFIRMED). The agent may still be partly updated - open it in Copilot Studio as the new owner and test it; if it misbehaves run the transfer again (a second reassignment completes it).`)
+          continue
+        }
+        if (stillOld === true) {
+          record(a, 'failed', m, `Nothing changed: ${orig.email} is still the owner (CONFIRMED at the source). The agent was not taken from the original user.`)
+          continue
+        }
         log(`AUTO-ROLLBACK "${a.name}": reassigning back to ${orig.email}`)
         hooks.message(`"${a.name}" failed half-way - restoring ${orig.email} as owner automatically…`)
         let note: string
