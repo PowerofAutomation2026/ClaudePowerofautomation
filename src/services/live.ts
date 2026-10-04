@@ -111,7 +111,10 @@ const OPS = {
     o.find((x) => x.method === 'POST' && /\/(addUser|syncUser|addsyncuser)\b/i.test(x.path))) },
   /** Microsoft Dataverse (legacy): list / patch rows in ANY environment by passing `dataset` (the org host). */
   dvList: () => { const o = allOps(); return pick(
-    o.find((x) => /commondataservice/i.test(x.ds) && x.method === 'GET' && /datasets\/\{dataset\}\/tables\/\{table\}\/items$/i.test(bare(x.path)))) },
+    o.find((x) => /commondataservice/i.test(x.ds) && x.method === 'GET' && /datasets\/\{dataset\}\/tables\/\{table\}\/items$/i.test(bare(x.path))),
+    o.find((x) => /commondataservice/i.test(x.ds) && x.method === 'GET' && /datasets\/\{[^}]+\}\/tables\/\{[^}]+\}\/items$/i.test(bare(x.path))),
+    o.find((x) => /commondataservice/i.test(x.ds) && /^(listrecords|listrecordswithorganization|getitems|listrows)$/.test(x.norm)),
+    o.find((x) => /commondataservice/i.test(x.ds) && x.method === 'GET' && /\/items$/i.test(bare(x.path)) && x.pathNames.length >= 1)) },
   dvUpdate: () => { const o = allOps(); return pick(
     o.find((x) => /commondataservice/i.test(x.ds) && x.method === 'PATCH' && /datasets\/\{dataset\}\/tables\/\{table\}\/items\/\{[^}]+\}$/i.test(bare(x.path)))) },
   user: () => { const o = allOps(); return pick(
@@ -798,6 +801,20 @@ export const liveBackend: Backend = {
     })
     rows.push({ name: 'native Dataverse tables (agents in this app\'s own environment)', ok: !!nativeTable(/^bots?$/i) && !!nativeTable(/^systemusers?$/i), detail: `bot table → data source "${nativeKey('bot') ?? 'missing'}", systemuser table → "${nativeKey('systemuser') ?? 'missing'}"; all data sources: ${Object.keys(dataSourcesInfo).join(', ')}` })
     rows.push({ name: 'flow list candidates', ok: flowLists().length > 0, detail: flowLists().map((o) => `${o.ds} → ${o.op} [${o.method} ${o.path}]`).join('\n') || 'none' })
+    // Real test of the live Dataverse source per environment (this is what makes brand-new agents visible immediately)
+    const tested: string[] = []
+    const homeId = (await getCurrentEnvId())?.toLowerCase()
+    const ids = [...new Set([...(homeId ? [homeId] : []), ...orgHosts.keys()])].slice(0, 8)
+    for (const id of ids) {
+      try {
+        const dv = await dvFor(id)
+        if (!dv) { tested.push(`✖ ${id}: no route (Dataverse connector missing or environment has no database)`); continue }
+        const t0 = Date.now()
+        const rows = await dv('bots', 'statecode eq 0', ['botid'], 1)
+        tested.push(`✔ ${id}: reads agents live (${Date.now() - t0} ms, ${rows.length ? 'has agents' : 'no rows'})${id === homeId ? ' [this app\'s own environment]' : ' [via Dataverse connector]'}`)
+      } catch (e) { tested.push(`✖ ${id}: ${(e as Error).message.slice(0, 220)}`) }
+    }
+    rows.push({ name: 'Live Dataverse test (agents appear immediately only where this is ✔)', ok: tested.length > 0 && tested.every((t) => t.startsWith('✔')), detail: tested.join('\n') || 'no environments tested' })
     const ops = allOps()
     const sources = [...new Set(ops.map((o) => o.ds))]
     rows.push({ name: 'connectors in this build', ok: sources.length > 0, detail: sources.join(', ') || 'none - run the deploy script' })

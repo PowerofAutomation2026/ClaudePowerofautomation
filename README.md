@@ -189,3 +189,8 @@ Limits (by design): a solution itself has no owner; tables, security roles, plug
 
 ## v1.9.8 – Report studio (CSV + PDF)
 `📄 Report` (or Ctrl K → "Report") opens a report for the scanned user: choose apps / flows / agents (or only the selected items), preview, then download a CSV (UTF-8 with BOM, opens in Excel) or a PDF (built in the browser, no libraries). Columns: type, name, id, created time, environment name, environment id, owner, state.
+
+## v1.9.9 – new agents appear immediately, multi-user PDF report, agent 502 polling
+- **Live source**: 🩺 Diagnostics now has a real "Live Dataverse test" per environment (✔ = agents are read live there, so a brand-new agent shows up on the next scan). If the live source is unavailable for some environments the main screen shows an amber banner with "↻ Re-scan now" instead of silently listing a stale inventory.
+- **Agent transfer**: when the service answers 502 "partially updated", the app now polls the REAL owner for ~50 s (Copilot Studio often finishes the change after answering with an error) before deciding; only then does the read-before-rollback logic run.
+- **Report studio**: add more users (emails, comma/space/new line); each is scanned across all environments; one CSV (all rows, Owner column) and one PDF with a section per user. Filter apps / flows / agents with the three count buttons.

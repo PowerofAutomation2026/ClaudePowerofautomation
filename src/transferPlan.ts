@@ -133,7 +133,13 @@ export async function runTransfer(args: TransferArgs): Promise<TransferOutcome> 
       if (isPartialUpdate(m)) {
         const orig = ownerOf(a)
         // Read first, never roll back blindly: the 502 can be a parse error after the change already went through.
-        const nowNew = backend.verifyOwner ? await backend.verifyOwner(a, to).catch(() => null) : null
+        // Copilot Studio can finish the reassignment after answering 502: poll the REAL owner for up to ~50 s before judging.
+        let nowNew: boolean | null = null
+        for (const wait of args.noVerifyDelay ? [0] : [0, 6000, 15000, 30000]) {
+          if (wait) { hooks.message(`"${a.name}": the service answered with an error - checking the real owner again…`); await sleep(wait) }
+          nowNew = backend.verifyOwner ? await backend.verifyOwner(a, to).catch(() => null) : null
+          if (nowNew !== false) break               // true = it did go through, null = cannot read from here (waiting will not help)
+        }
         const stillOld = nowNew === true ? false : backend.verifyOwner ? await backend.verifyOwner(a, orig).catch(() => null) : null
         log(`post-failure read: new owner ${nowNew}, original owner ${stillOld}`)
         if (nowNew === true) {

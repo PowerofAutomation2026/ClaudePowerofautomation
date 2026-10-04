@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { reportCsv, reportPdf, reportRows, saveBlob } from './report'
+import { reportCsv, reportPdfMulti, reportRows, saveBlob } from './report'
+import type { ReportGroup } from './report'
 import { clearLog, getLog, log as opLog, subscribeLog } from './oplog'
 import type { AgentCategory, Asset, SolutionGroup, AssetKind, AuditEntry, Backend, Env, ItemStatus, Person, ScanNote, TransferOptions } from './types'
 import { hasConnectors, pickBackend } from './services'
@@ -129,6 +130,14 @@ export default function App() {
     } catch (e) { setError((e as Error).message); setUser(null) }
     finally { setLoading(null); crumb.clear() }
   }, [backend, email, envs, envScope, recent, flash])
+
+  /** Scan one more user (used by the multi-user report). */
+  const scanOne = useCallback(async (em: string): Promise<ReportGroup> => {
+    const p = await backend.resolveUser(em.trim())
+    const scope = envScope.length ? envs.filter((e) => envScope.includes(e.id)) : envs
+    const { assets: found } = await backend.listAssets(p, scope, () => {})
+    return { user: p, assets: found.filter((a) => a.kind !== 'agent' || !a.category || a.category === 'agent') }
+  }, [backend, envs, envScope])
 
   // Only real Copilot Studio agents by default; tools / MCP / Agent Builder / CLI items sit behind a toggle.
   const assets = useMemo(() => allAssets.filter((a) => showOthers || a.kind !== 'agent' || !a.category || a.category === 'agent'), [allAssets, showOthers])
@@ -272,6 +281,12 @@ export default function App() {
             </div>
           </div>
 
+          {notes.some((n) => /could NOT be live-checked/.test(n.text)) && (
+            <div className="banner" style={{ borderColor: 'var(--warn)' }}>
+              ⚠ <b>Live agent check is not available for some environments.</b> Agents you created in the last 5–15 minutes may be missing, and deleted ones may still be listed (the tenant inventory lags).
+              Open <b>🩺 Diagnostics → "Live Dataverse test"</b> to see why, then <button className="btn sm" onClick={() => void search(user?.email ?? email)}>↻ Re-scan now</button>
+            </div>
+          )}
           {hiddenCount > 0 && (
             <div className="banner hidden-note">
               🛈 <b>{hiddenCount}</b> other inventory item(s) are {showOthers ? 'shown' : 'hidden'} because they are <b>not Copilot Studio agents</b>
@@ -326,7 +341,7 @@ export default function App() {
           onClose={() => setPanel(null)}
           onAudit={(e) => setAudit((a) => [...a, ...e])}
           onDone={(moved) => { setAssets((all) => all.filter((a) => !moved.includes(a.key))); setSel(new Set()) }} onRefresh={() => { void search(user.email) }} flash={flash} />)}
-      {panel === 'report' && user && <ReportDrawer user={user} assets={assets} selected={selected} onClose={() => setPanel(null)} flash={flash} />}
+      {panel === 'report' && user && <ReportDrawer user={user} assets={assets} selected={selected} scanOne={scanOne} onClose={() => setPanel(null)} flash={flash} />}
       {panel === 'solutions' && <SolutionsDrawer backend={backend} assets={assets} onClose={() => setPanel(null)} onPick={(keys) => { setSel(new Set(keys)); setPanel('transfer') }} />}
       {panel === 'history' && <HistoryDrawer audit={audit} backend={backend} onClose={() => setPanel(null)} onClear={() => setAudit([])} onAudit={(e) => setAudit((a) => [...a, ...e])} flash={flash} />}
       {panel === 'diag' && <DiagDrawer backend={backend} onClose={() => setPanel(null)} />}
@@ -536,40 +551,64 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
   )
 }
 
-/** Report studio: pick what to include, preview, download CSV (Excel) or PDF. */
-function ReportDrawer({ user, assets, selected, onClose, flash }: { user: Person; assets: Asset[]; selected: Asset[]; onClose: () => void; flash: (m: string) => void }) {
+/** Report studio: pick what to include, add more users, preview, download CSV (Excel) or PDF (one section per user). */
+function ReportDrawer({ user, assets, selected, scanOne, onClose, flash }: { user: Person; assets: Asset[]; selected: Asset[]; scanOne: (email: string) => Promise<ReportGroup>; onClose: () => void; flash: (m: string) => void }) {
   const [inc, setInc] = useState<Record<AssetKind, boolean>>({ app: true, flow: true, agent: true })
   const [onlySel, setOnlySel] = useState(false)
-  const base = onlySel && selected.length ? selected : assets
-  const list = base.filter((a) => inc[a.kind])
-  const rows = reportRows(list)
+  const [extra, setExtra] = useState<ReportGroup[]>([])
+  const [emails, setEmails] = useState('')
+  const [scanning, setScanning] = useState<string | null>(null)
+  const [scanErr, setScanErr] = useState<string | null>(null)
+  const first: ReportGroup = { user, assets: onlySel && selected.length ? selected : assets }
+  const groups = [first, ...extra].map((g) => ({ user: g.user, assets: g.assets.filter((a) => inc[a.kind]) }))
+  const all = groups.flatMap((g) => g.assets)
+  const rows = reportRows(all)
   const stamp = new Date().toISOString().slice(0, 10)
-  const slug = user.email.replace(/[^a-z0-9]+/gi, '_')
+  const slug = groups.length === 1 ? user.email.replace(/[^a-z0-9]+/gi, '_') : `${groups.length}_users`
   const tone = { app: '#3987e5', flow: '#d95926', agent: '#199e70' } as const
+  const addUsers = async () => {
+    const list = emails.split(/[\s,;]+/).map((x) => x.trim()).filter((x) => x && !extra.some((g) => g.user.email.toLowerCase() === x.toLowerCase()) && x.toLowerCase() !== user.email.toLowerCase())
+    if (!list.length) return
+    setScanErr(null)
+    for (const em of list) {
+      setScanning(em)
+      try { const g = await scanOne(em); setExtra((x) => [...x, g]) }
+      catch (e) { setScanErr(`${em}: ${(e as Error).message}`) }
+    }
+    setScanning(null); setEmails('')
+  }
   return (
     <Drawer onClose={onClose}>
       <div className="row"><h2 style={{ margin: 0 }}>📄 Report studio</h2><div className="spacer" /><button className="btn sm" onClick={onClose}>Close</button></div>
       <div className="card" style={{ padding: 16, marginTop: 10, background: 'linear-gradient(135deg, rgba(99,86,255,.28), rgba(25,158,112,.18))' }}>
         <div style={{ fontSize: 12, opacity: .8 }}>INVENTORY REPORT FOR</div>
-        <div style={{ fontSize: 20, fontWeight: 700 }}>{user.name}</div>
-        <div className="sub">{user.email}</div>
+        <div style={{ fontSize: 20, fontWeight: 700 }}>{groups.length === 1 ? user.name : `${groups.length} users`}</div>
+        <div className="sub">{groups.map((g) => g.user.email).join(' · ')}</div>
         <div className="row" style={{ marginTop: 12, gap: 8 }}>
           {(['app', 'flow', 'agent'] as AssetKind[]).map((k) => (
-            <button key={k} className="btn sm" onClick={() => setInc((s) => ({ ...s, [k]: !s[k] }))} style={{ borderColor: tone[k], opacity: inc[k] ? 1 : .4, minWidth: 110 }}>
-              <b style={{ color: tone[k], fontSize: 18 }}>{base.filter((a) => a.kind === k).length}</b> {KIND_UI[k].plural}
+            <button key={k} className="btn sm" onClick={() => setInc((s) => ({ ...s, [k]: !s[k] }))} style={{ borderColor: tone[k], opacity: inc[k] ? 1 : .4, minWidth: 110 }} title="Click to include / exclude">
+              <b style={{ color: tone[k], fontSize: 18 }}>{[first, ...extra].flatMap((g) => g.assets).filter((a) => a.kind === k).length}</b> {KIND_UI[k].plural}
             </button>
           ))}
         </div>
-        {selected.length > 0 && <label className="sub" style={{ display: 'block', marginTop: 10 }}><input type="checkbox" checked={onlySel} onChange={(e) => setOnlySel(e.target.checked)} /> Only the {selected.length} selected item(s)</label>}
+        {selected.length > 0 && <label className="sub" style={{ display: 'block', marginTop: 10 }}><input type="checkbox" checked={onlySel} onChange={(e) => setOnlySel(e.target.checked)} /> First user: only the {selected.length} selected item(s)</label>}
+      </div>
+      <div className="card" style={{ padding: 12, marginTop: 10 }}>
+        <b>➕ Add more users to this report</b>
+        <div className="sub">Emails separated by comma, space or new line. Each user is scanned across all environments and gets their own section in the PDF.</div>
+        <textarea value={emails} onChange={(e) => setEmails(e.target.value)} rows={2} placeholder="alex@contoso.com, sam@contoso.com" style={{ width: '100%', margin: '6px 0' }} disabled={!!scanning} />
+        <div className="row"><button className="btn sm" disabled={!!scanning || !emails.trim()} onClick={addUsers}>{scanning ? `Scanning ${scanning}…` : 'Scan & add'}</button>
+          {extra.map((g) => <span key={g.user.email} className="chip" onClick={() => setExtra((x) => x.filter((y) => y !== g))} title="Click to remove">{g.user.email} ✕</span>)}</div>
+        {scanErr && <div className="sub" style={{ color: 'var(--bad)', marginTop: 6 }}>{scanErr}</div>}
       </div>
       <p className="sub" style={{ margin: '10px 0 6px' }}>Columns: type, name, id, created time, environment name, environment id, owner, state · {rows.length} row(s)</p>
       <div className="row" style={{ gap: 8, marginBottom: 10 }}>
-        <button className="btn primary" disabled={!rows.length} onClick={() => { saveBlob(`ownership-report-${slug}-${stamp}.csv`, reportCsv(list), 'text/csv;charset=utf-8'); flash('CSV report downloaded') }}>⬇ CSV (Excel)</button>
-        <button className="btn primary" disabled={!rows.length} onClick={() => { saveBlob(`ownership-report-${slug}-${stamp}.pdf`, reportPdf(user, list, __BUILD__), 'application/pdf'); flash('PDF report downloaded') }}>⬇ PDF</button>
+        <button className="btn primary" disabled={!rows.length} onClick={() => { saveBlob(`ownership-report-${slug}-${stamp}.csv`, reportCsv(all), 'text/csv;charset=utf-8'); flash('CSV report downloaded') }}>⬇ CSV (Excel)</button>
+        <button className="btn primary" disabled={!rows.length} onClick={() => { saveBlob(`ownership-report-${slug}-${stamp}.pdf`, reportPdfMulti(groups, __BUILD__), 'application/pdf'); flash('PDF report downloaded') }}>⬇ PDF</button>
       </div>
-      <div className="card" style={{ padding: 0, overflow: 'auto', maxHeight: 360 }}>
+      <div className="card" style={{ padding: 0, overflow: 'auto', maxHeight: 340 }}>
         <table><thead><tr><th>Type</th><th>Name</th><th>Created</th><th>Environment</th></tr></thead>
-          <tbody>{rows.slice(0, 40).map((r) => <tr key={r.Id + r.EnvironmentId}><td><span className="pill" style={{ borderColor: tone[(r.Type === 'App' ? 'app' : r.Type === 'Agent' ? 'agent' : 'flow')] }}>{r.Type}</span></td><td><div className="name">{r.Name}</div><div className="id">{r.Id}</div></td><td>{r.Created || '—'}</td><td>{r.Environment}<div className="id">{r.EnvironmentId}</div></td></tr>)}</tbody></table>
+          <tbody>{rows.slice(0, 40).map((r) => <tr key={r.Owner + r.Id + r.EnvironmentId}><td><span className="pill" style={{ borderColor: tone[(r.Type === 'App' ? 'app' : r.Type === 'Agent' ? 'agent' : 'flow')] }}>{r.Type}</span></td><td><div className="name">{r.Name}</div><div className="id">{r.Id}{groups.length > 1 ? ` · ${r.Owner}` : ''}</div></td><td>{r.Created || '—'}</td><td>{r.Environment}<div className="id">{r.EnvironmentId}</div></td></tr>)}</tbody></table>
         {rows.length > 40 && <div className="sub" style={{ padding: 8 }}>… and {rows.length - 40} more in the file</div>}
       </div>
     </Drawer>
