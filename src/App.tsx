@@ -539,7 +539,7 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
         {items.map((a) => {
           const s = status[a.key]; const rs = risksFor(a)
           return (<div key={a.key} className="item"><span className={`pill ${a.kind}`}>{a.kind}</span>
-            <div><div className="name">{a.name}</div><div className="id">{a.envName}</div>
+            <div><div className="name">{a.name} <a href={portalUrl(a)} target="_blank" rel="noreferrer" style={{ fontSize: 11 }}>↗ check the Owner in its portal</a></div><div className="id">{a.envName}</div>
               {rs.map((r, i) => <div key={i} className={`risk ${r.level}`}>{r.level === 'warn' ? '⚠' : 'ℹ'} {r.text}</div>)}
               {s?.err && <div className="risk" style={{ color: 'var(--bad)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{s.err}</div>}
               {s?.note && <div className="risk info" style={{ whiteSpace: 'pre-wrap' }}>{s.note}</div>}</div>

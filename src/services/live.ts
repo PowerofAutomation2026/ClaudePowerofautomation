@@ -93,6 +93,10 @@ const OPS = {
   flowOwners: () => { const o = allOps(); return pick(
     o.find((x) => /^(getadminflowownerrole|getflowownerroleasadmin)$/.test(x.norm)),
     o.find((x) => x.method === 'GET' && /admin\/environments\/\{[^}/]+\}\/flows\/\{[^}/]+\}\/(owners|permissions)$/i.test(bare(x.path)))) },
+  /** Power Platform for Admins: read ONE environment (returns linkedEnvironmentMetadata = the Dataverse org URL). */
+  envGet: () => { const o = allOps(); return pick(
+    o.find((x) => x.method === 'GET' && /scopes\/admin\/environments\/\{[^}/]+\}$/i.test(bare(x.path)) && x.pathNames.length === 1),
+    o.find((x) => /^(getadminenvironment|getenvironmentasadmin)$/.test(x.norm) && x.pathNames.length === 1)) },
   /** Power Apps for Admins: read one app back (used to verify an owner change at the source). */
   appGet: () => { const o = allOps(); return pick(
     o.find((x) => x.norm === 'getadminapp'),
@@ -361,8 +365,15 @@ async function dvConnectorRows(host: string, table: string, filter: string, sele
       else if (k === 'top') extra[p.name] = top
     }
   }
-  return asList(await callRaw(op, [], undefined, {}, extra))
+  const withOrg = (v: string) => { const e = { ...extra }; for (const k of Object.keys(e)) if (e[k] === host) e[k] = v; return e }
+  const forms = orgForm === 'url' ? [`https://${host}`, host] : [host, `https://${host}`]
+  let lastErr: unknown
+  for (const f of forms) {
+    try { const rows = asList(await callRaw(op, [], undefined, {}, withOrg(f))); orgForm = f.startsWith('https') ? 'url' : 'host'; return rows } catch (e) { lastErr = e }
+  }
+  throw lastErr
 }
+let orgForm: 'host' | 'url' = 'host'
 async function dvFor(envId: string): Promise<DvQuery | null> {
   const home = (await getCurrentEnvId())?.toLowerCase() === envId.toLowerCase()
   const host = orgHosts.get(envId.toLowerCase())
@@ -388,9 +399,18 @@ export const liveBackend: Backend = {
   async listEnvironments() {
     const op = OPS.envs()
     if (op) {
-      const rows = asList(await call(op))
-      rows.forEach((e) => { const u = e.properties?.linkedEnvironmentMetadata?.instanceUrl ?? e.properties?.linkedEnvironmentMetadata?.instanceApiUrl; if (u) { try { orgHosts.set(String(e.name).toLowerCase(), new URL(u).host) } catch { /* ignore */ } } })
-      return rows.map<Env>((e) => ({ id: e.name, name: e.properties?.displayName ?? e.name, isDefault: !!e.properties?.isDefault, region: e.location, orgUrl: e.properties?.linkedEnvironmentMetadata?.instanceUrl ?? e.properties?.linkedEnvironmentMetadata?.instanceApiUrl }))
+      const expand = op.params.find((p) => p.in === 'query' && /^\$?expand$/i.test(p.name))?.name
+      const rows = asList(await call(op, [], undefined, expand ? { [expand]: 'properties.linkedEnvironmentMetadata' } : {}))
+      const urlOf = (e: any): string | undefined => e?.properties?.linkedEnvironmentMetadata?.instanceUrl ?? e?.properties?.linkedEnvironmentMetadata?.instanceApiUrl
+      // The list call often omits the Dataverse address: read each such environment individually (needed to read agents live in other environments).
+      const one = OPS.envGet()
+      if (one) for (const e of rows) {
+        if (urlOf(e)) continue
+        try { const full = await call(one, [e.name]); const u = urlOf(full); if (u) e.properties = { ...(e.properties ?? {}), linkedEnvironmentMetadata: full.properties.linkedEnvironmentMetadata } } catch { /* environment without Dataverse or no access */ }
+      }
+      rows.forEach((e) => { const u = urlOf(e); if (u) { try { orgHosts.set(String(e.name).toLowerCase(), new URL(u).host) } catch { /* ignore */ } } })
+      log(`environments: ${rows.length}, with a Dataverse address: ${rows.filter((e) => urlOf(e)).length}`)
+      return rows.map<Env>((e) => ({ id: e.name, name: e.properties?.displayName ?? e.name, isDefault: !!e.properties?.isDefault, region: e.location, orgUrl: urlOf(e) }))
     }
     // No environment connector: fall back to the environment this app runs in.
     const ctx = await getContext()

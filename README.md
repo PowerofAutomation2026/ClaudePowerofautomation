@@ -194,3 +194,9 @@ Limits (by design): a solution itself has no owner; tables, security roles, plug
 - **Live source**: 🩺 Diagnostics now has a real "Live Dataverse test" per environment (✔ = agents are read live there, so a brand-new agent shows up on the next scan). If the live source is unavailable for some environments the main screen shows an amber banner with "↻ Re-scan now" instead of silently listing a stale inventory.
 - **Agent transfer**: when the service answers 502 "partially updated", the app now polls the REAL owner for ~50 s (Copilot Studio often finishes the change after answering with an error) before deciding; only then does the read-before-rollback logic run.
 - **Report studio**: add more users (emails, comma/space/new line); each is scanned across all environments; one CSV (all rows, Owner column) and one PDF with a section per user. Filter apps / flows / agents with the three count buttons.
+
+## v1.9.10 – make the live Dataverse source reachable for other environments
+- The environment list often omits each environment's Dataverse address, which silently disabled the live agent check outside the app's own environment. Missing addresses are now read per environment (and `$expand=properties.linkedEnvironmentMetadata` is requested when supported).
+- The Dataverse connector is called with the organisation as `host` and, if that fails, as `https://host` (the working form is remembered).
+- Transfer drawer: every item has a link to check its Owner in its own portal.
+- **Most reliable setup**: deploy the app INTO the environment that holds the agents (`-EnvironmentId e6c360d6-57a5-473e-9188-3bfac0e3250e` for "microsoft (default)"). There the app reads and verifies agents natively, with no connector guesswork.
