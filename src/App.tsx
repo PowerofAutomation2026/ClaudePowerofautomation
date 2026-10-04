@@ -370,7 +370,7 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
   const needsAgentOk = items.some((a) => a.kind === 'agent') && !dry
   const doneCount = Object.values(status).filter((x) => x.s === 'done' || x.s === 'dry').length
   const failed = items.filter((a) => status[a.key]?.s === 'failed')
-  const partial = failed.filter((a) => a.kind === 'agent' && isPartialUpdate(status[a.key]?.err ?? ''))
+  const partial = failed.filter((a) => a.kind === 'agent' && isPartialUpdate(status[a.key]?.err ?? '') && !/^Rolled back automatically/.test(status[a.key]?.note ?? ''))
 
   /** Put failed (possibly half-updated) agents back on their original owner. */
   const restoreOriginal = async () => {
@@ -424,7 +424,7 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
       ? `Dry run finished: ${nOk} OK, ${nFail} would fail. NOTHING was changed. Untick "Dry run" and click "Transfer now" to really move ownership to ${to.name}.${out.entries.filter((e) => e.status === 'failed' && /^Not attempted/.test(e.error ?? '')).map((e) => `\n• ${e.name}: ${e.error}`).join('')}`
       : `Transfer finished: ${nOk} accepted by the service for ${to.name} (${nConfirmed} CONFIRMED at the source${nUnverified ? `, ⚠ ${nUnverified} NOT confirmed yet – see below` : ''}), ${nFail} failed${skipped ? `, ${skipped} skipped (batch stopped to protect them)` : ''}.${firstErr ? `\n\nError from the service:\n${firstErr}` : ''}${out.halted ? '\n\nThe batch was STOPPED at the first agent failure so the remaining agents were not touched.' : ''}${out.prepNotes}` })
     flash(dry ? 'Dry run complete – nothing changed' : `${nConfirmed} confirmed, ${nUnverified} unverified, ${nFail} failed`)
-    if (!dry && out.acceptedKeys.length) { opLog('auto-refresh: re-reading live data in 5 s'); setTimeout(onRefresh, 5000) }
+    if (!dry && out.entries.length) { opLog('auto-refresh: re-reading live data in 5 s'); setTimeout(onRefresh, 5000) }
     setRunning(false); busyRef.current = false
   }
 

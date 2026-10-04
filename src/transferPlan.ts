@@ -10,6 +10,7 @@
  * Apps and flows keep light parallelism (3) because their operations are atomic single calls.
  */
 import { log } from './oplog'
+import { isPartialUpdate } from './util'
 import type { Asset, AuditEntry, Backend, ItemStatus, Person, TransferOptions } from './types'
 
 export interface TransferHooks {
@@ -121,8 +122,28 @@ export async function runTransfer(args: TransferArgs): Promise<TransferOutcome> 
       record(a, r.status, undefined, r.note)
     } catch (e) {
       const m = (e as Error).message
-      record(a, 'failed', m)
       halted = `"${a.name}" failed: ${m}`
+      // A partial-update failure can leave the agent half-moved. Documented recovery = reassign again: put it back with the ORIGINAL owner, then read back.
+      if (isPartialUpdate(m)) {
+        const orig = ownerOf(a)
+        log(`AUTO-ROLLBACK "${a.name}": reassigning back to ${orig.email}`)
+        hooks.message(`"${a.name}" failed half-way - restoring ${orig.email} as owner automatically…`)
+        let note: string
+        try {
+          await backend.transfer(a, orig, { mode: 'replace', removeOldOwner: false })
+          if (!args.noVerifyDelay) await sleep(4000)
+          const back = backend.verifyOwner ? await backend.verifyOwner(a, orig).catch(() => null) : null
+          note = back === true ? `Rolled back automatically: ${orig.email} is the owner again (CONFIRMED at the source). The agent stays with the original user.`
+            : back === false ? `Rollback sent, but the read-back does not show ${orig.email} yet. Check Copilot Studio; use Restore original owner if needed.`
+            : `Rollback sent to ${orig.email}; it could not be read back from here – check Copilot Studio.`
+          entries.push({ at: new Date().toISOString(), assetKey: a.key, name: a.name, kind: a.kind, envName: a.envName, from: to, to: orig, mode: 'replace', status: 'done', dryRun: false, batch: 'restore', note })
+        } catch (re) {
+          note = `⚠ Automatic rollback FAILED: ${(re as Error).message.slice(0, 250)}. Use "Restore original owner".`
+          entries.push({ at: new Date().toISOString(), assetKey: a.key, name: a.name, kind: a.kind, envName: a.envName, from: to, to: orig, mode: 'replace', status: 'failed', error: (re as Error).message, dryRun: false, batch: 'restore', note })
+        }
+        log(`AUTO-ROLLBACK result: ${note}`)
+        record(a, 'failed', m, note)
+      } else record(a, 'failed', m)
     }
   }
 
