@@ -186,3 +186,6 @@ Microsoft: agent ownership can only be reassigned to a user with an ACTIVE Micro
 ## v1.9.7 – transfer a whole solution
 `📦 Solutions` (also Ctrl K → "Transfer a whole solution") lists the solutions that contain the scanned user's apps, cloud flows and Copilot Studio agents (read through the Microsoft Dataverse connector). Pick one to select all of that user's items in it, then transfer them with the normal verified pipeline (dry run, read-back, rollback protection).
 Limits (by design): a solution itself has no owner; tables, security roles, plug-ins, model-driven apps are organisation-owned; classic workflows / connection references / environment variable values are not moved by this app; flows keep the OLD owner's connections until the new owner re-binds them; managed solutions may block some changes.
+
+## v1.9.8 – Report studio (CSV + PDF)
+`📄 Report` (or Ctrl K → "Report") opens a report for the scanned user: choose apps / flows / agents (or only the selected items), preview, then download a CSV (UTF-8 with BOM, opens in Excel) or a PDF (built in the browser, no libraries). Columns: type, name, id, created time, environment name, environment id, owner, state.

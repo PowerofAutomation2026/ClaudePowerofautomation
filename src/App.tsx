@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { reportCsv, reportPdf, reportRows, saveBlob } from './report'
 import { clearLog, getLog, log as opLog, subscribeLog } from './oplog'
 import type { AgentCategory, Asset, SolutionGroup, AssetKind, AuditEntry, Backend, Env, ItemStatus, Person, ScanNote, TransferOptions } from './types'
 import { hasConnectors, pickBackend } from './services'
@@ -17,7 +18,7 @@ const crumb = {
 }
 
 type SortKey = 'name' | 'kind' | 'envName' | 'state' | 'modifiedTime'
-type Panel = null | 'transfer' | 'history' | 'diag' | 'solutions'
+type Panel = null | 'transfer' | 'history' | 'diag' | 'solutions' | 'report'
 
 
 const KIND_UI: Record<AssetKind, { label: string; plural: string; icon: string }> = {
@@ -185,6 +186,7 @@ export default function App() {
     { label: 'Transfer selected…', run: () => selected.length && setPanel('transfer') },
     { label: 'Transfer EVERYTHING…', run: () => { setSel(new Set(assets.map((a) => a.key))); setPanel('transfer') } },
     { label: 'Export inventory (CSV)', run: () => download('inventory.csv', toCsv(assetRows(visible)), 'text/csv') },
+    { label: 'Report: export CSV / PDF for this user', run: () => assets.length && setPanel('report') },
     { label: 'Transfer a whole solution…', run: () => assets.length && setPanel('solutions') },
     { label: 'Open history', run: () => setPanel('history') },
     { label: 'Connector diagnostics', run: () => setPanel('diag') },
@@ -201,6 +203,7 @@ export default function App() {
         <span className="pill mut" title="Build running in this tab - if it is old, hard-refresh (Ctrl+Shift+R)">{__BUILD__}</span>
         <span className={`pill ${demo ? 'warn' : 'ok'}`}>{demo ? 'DEMO DATA' : 'LIVE'}</span>
         <button className="btn sm" onClick={() => setPalette(true)}>⌘ <kbd>Ctrl K</kbd></button>
+        <button className="btn sm" disabled={!assets.length} onClick={() => setPanel('report')}>📄 Report</button>
         <button className="btn sm" disabled={!assets.length} onClick={() => setPanel('solutions')}>📦 Solutions</button>
         <button className="btn sm" onClick={() => setPanel('history')}>🕘 History ({audit.filter((a) => !a.dryRun).length})</button>
         <button className="btn sm" onClick={() => setPanel('diag')}>🩺</button>
@@ -323,6 +326,7 @@ export default function App() {
           onClose={() => setPanel(null)}
           onAudit={(e) => setAudit((a) => [...a, ...e])}
           onDone={(moved) => { setAssets((all) => all.filter((a) => !moved.includes(a.key))); setSel(new Set()) }} onRefresh={() => { void search(user.email) }} flash={flash} />)}
+      {panel === 'report' && user && <ReportDrawer user={user} assets={assets} selected={selected} onClose={() => setPanel(null)} flash={flash} />}
       {panel === 'solutions' && <SolutionsDrawer backend={backend} assets={assets} onClose={() => setPanel(null)} onPick={(keys) => { setSel(new Set(keys)); setPanel('transfer') }} />}
       {panel === 'history' && <HistoryDrawer audit={audit} backend={backend} onClose={() => setPanel(null)} onClear={() => setAudit([])} onAudit={(e) => setAudit((a) => [...a, ...e])} flash={flash} />}
       {panel === 'diag' && <DiagDrawer backend={backend} onClose={() => setPanel(null)} />}
@@ -528,6 +532,46 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
         })}
       </div>
       <div className="row" style={{ marginTop: 16 }}><button className="btn" disabled={running} onClick={onClose}>Close</button></div>
+    </Drawer>
+  )
+}
+
+/** Report studio: pick what to include, preview, download CSV (Excel) or PDF. */
+function ReportDrawer({ user, assets, selected, onClose, flash }: { user: Person; assets: Asset[]; selected: Asset[]; onClose: () => void; flash: (m: string) => void }) {
+  const [inc, setInc] = useState<Record<AssetKind, boolean>>({ app: true, flow: true, agent: true })
+  const [onlySel, setOnlySel] = useState(false)
+  const base = onlySel && selected.length ? selected : assets
+  const list = base.filter((a) => inc[a.kind])
+  const rows = reportRows(list)
+  const stamp = new Date().toISOString().slice(0, 10)
+  const slug = user.email.replace(/[^a-z0-9]+/gi, '_')
+  const tone = { app: '#3987e5', flow: '#d95926', agent: '#199e70' } as const
+  return (
+    <Drawer onClose={onClose}>
+      <div className="row"><h2 style={{ margin: 0 }}>📄 Report studio</h2><div className="spacer" /><button className="btn sm" onClick={onClose}>Close</button></div>
+      <div className="card" style={{ padding: 16, marginTop: 10, background: 'linear-gradient(135deg, rgba(99,86,255,.28), rgba(25,158,112,.18))' }}>
+        <div style={{ fontSize: 12, opacity: .8 }}>INVENTORY REPORT FOR</div>
+        <div style={{ fontSize: 20, fontWeight: 700 }}>{user.name}</div>
+        <div className="sub">{user.email}</div>
+        <div className="row" style={{ marginTop: 12, gap: 8 }}>
+          {(['app', 'flow', 'agent'] as AssetKind[]).map((k) => (
+            <button key={k} className="btn sm" onClick={() => setInc((s) => ({ ...s, [k]: !s[k] }))} style={{ borderColor: tone[k], opacity: inc[k] ? 1 : .4, minWidth: 110 }}>
+              <b style={{ color: tone[k], fontSize: 18 }}>{base.filter((a) => a.kind === k).length}</b> {KIND_UI[k].plural}
+            </button>
+          ))}
+        </div>
+        {selected.length > 0 && <label className="sub" style={{ display: 'block', marginTop: 10 }}><input type="checkbox" checked={onlySel} onChange={(e) => setOnlySel(e.target.checked)} /> Only the {selected.length} selected item(s)</label>}
+      </div>
+      <p className="sub" style={{ margin: '10px 0 6px' }}>Columns: type, name, id, created time, environment name, environment id, owner, state · {rows.length} row(s)</p>
+      <div className="row" style={{ gap: 8, marginBottom: 10 }}>
+        <button className="btn primary" disabled={!rows.length} onClick={() => { saveBlob(`ownership-report-${slug}-${stamp}.csv`, reportCsv(list), 'text/csv;charset=utf-8'); flash('CSV report downloaded') }}>⬇ CSV (Excel)</button>
+        <button className="btn primary" disabled={!rows.length} onClick={() => { saveBlob(`ownership-report-${slug}-${stamp}.pdf`, reportPdf(user, list, __BUILD__), 'application/pdf'); flash('PDF report downloaded') }}>⬇ PDF</button>
+      </div>
+      <div className="card" style={{ padding: 0, overflow: 'auto', maxHeight: 360 }}>
+        <table><thead><tr><th>Type</th><th>Name</th><th>Created</th><th>Environment</th></tr></thead>
+          <tbody>{rows.slice(0, 40).map((r) => <tr key={r.Id + r.EnvironmentId}><td><span className="pill" style={{ borderColor: tone[(r.Type === 'App' ? 'app' : r.Type === 'Agent' ? 'agent' : 'flow')] }}>{r.Type}</span></td><td><div className="name">{r.Name}</div><div className="id">{r.Id}</div></td><td>{r.Created || '—'}</td><td>{r.Environment}<div className="id">{r.EnvironmentId}</div></td></tr>)}</tbody></table>
+        {rows.length > 40 && <div className="sub" style={{ padding: 8 }}>… and {rows.length - 40} more in the file</div>}
+      </div>
     </Drawer>
   )
 }
