@@ -173,3 +173,6 @@ The tenant inventory keeps showing deleted agents for a while. After the invento
 - When the reassign fails half-way (HTTP 502 "partially updated") the app first READS the owner at the source: if the new owner is already confirmed it says so; if the original owner is still confirmed it says "nothing changed"; only otherwise it reassigns back to the original owner automatically (one attempt) and reads back again. The batch still stops at the first failure.
 - New pre-flight: a disabled or non-interactive target user in the agent's environment blocks the transfer before anything is sent (environment this app runs in).
 - If it still fails with the target a licensed environment member, the usual cause is the target's Copilot Studio licence/service plan - test by signing in as that user in Copilot Studio.
+
+## v1.9.5 – licence-first guidance for the agent 502
+Microsoft: agent ownership can only be reassigned to a user with an ACTIVE Microsoft 365 Copilot licence. If a transfer returns 502 "partially updated" while the target is an environment member and the app shows "Nothing changed … still the owner (CONFIRMED)", assign the licence to the target in the Microsoft 365 admin center, wait ~10 minutes, and retry. The pre-flight now says honestly when the target's user status could not be checked.

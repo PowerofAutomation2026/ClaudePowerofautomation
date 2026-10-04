@@ -609,11 +609,11 @@ export const liveBackend: Backend = {
   },
 
   async preflightTarget(envId, to) {
-    if (!nativeKey('systemuser') || (await getCurrentEnvId())?.toLowerCase() !== envId.toLowerCase()) return null
+    if (!nativeKey('systemuser') || (await getCurrentEnvId())?.toLowerCase() !== envId.toLowerCase()) return undefined   // cannot check from here
     const r: any = await sdk().retrieveMultipleRecordsAsync<any>(nativeKey('systemuser')!, { filter: `azureactivedirectoryobjectid eq ${to.id}`, select: ['systemuserid', 'isdisabled', 'accessmode'], top: 1 })
     const u = r?.success ? r.data?.[0] : null
     log(`pre-flight target user in Dataverse: ${u ? `isdisabled=${u.isdisabled} accessmode=${u.accessmode}` : 'no row'}`)
-    if (!u) return null
+    if (!u) return undefined
     if (u.isdisabled) return `${to.email} is DISABLED in this environment - enable the user first. Nothing was changed.`
     if (u.accessmode === 3 || u.accessmode === 4) return `${to.email} has access mode "${u.accessmode === 4 ? 'Non-interactive' : 'Support user'}" in this environment and cannot own agents. Nothing was changed.`
     return null

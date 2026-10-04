@@ -87,7 +87,7 @@ export interface Backend {
   prepareOwner?(envId: string, to: Person): Promise<string>
   /** true = the user is a member of the environment, false = definitely not, null = cannot tell from here. */
   /** Returns a problem text when the new owner's Dataverse user cannot own agents (disabled / non-interactive), else null. Home environment only. */
-  preflightTarget?(envId: string, to: Person): Promise<string | null>
+  preflightTarget?(envId: string, to: Person): Promise<string | null | undefined>
   checkMember?(envId: string, to: Person): Promise<boolean | null>
   /** After a transfer: true = inventory shows `to` as owner, false = not (yet) reflected, null = cannot tell. */
   verifyOwner?(asset: Asset, to: Person): Promise<boolean | null>

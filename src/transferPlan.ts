@@ -99,9 +99,10 @@ export async function runTransfer(args: TransferArgs): Promise<TransferOutcome> 
         catch (e) { const m = (e as Error).message; lines.push(`✖ ${ename}: ${m}`); envBlocked.set(eid, `could not add ${to.email} to this environment (${m})`); continue }
       }
       if (backend.preflightTarget) {
-        const problem = await backend.preflightTarget(eid, to).catch(() => null)
+        const problem = await backend.preflightTarget(eid, to).catch(() => undefined)
         if (problem) { lines.push(`✖ ${ename}: ${problem}`); envBlocked.set(eid, problem); continue }
-        lines.push(`✔ ${ename}: ${to.email} passed the user checks (enabled, interactive)`)
+        lines.push(problem === null ? `✔ ${ename}: ${to.email} is enabled and interactive` : `• ${ename}: user status could not be checked from this app (it runs in another environment)`)
+        lines.push(`• ${to.email} must hold an ACTIVE Microsoft 365 Copilot licence (Microsoft requirement for agent ownership) - this app cannot read licences. A 502 "partially updated" with membership OK almost always means this licence is missing.`)
       }
       if (backend.checkMember) {
         const member = await backend.checkMember(eid, to).catch(() => null)
