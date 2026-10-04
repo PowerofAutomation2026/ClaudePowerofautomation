@@ -809,10 +809,18 @@ export const liveBackend: Backend = {
     // Cloud flows: the API only accepts CanEdit / CanViewWithShare / CanView. "Owner" = a CanEdit co-owner; the creator stays recorded as creator.
     await call(need('flowOwner'), [asset.envId, asset.id], { put: [{ properties: { principal: { id: to.id, type: 'User' }, roleName: 'CanEdit' } }] })
     if (opts.mode === 'replace' && opts.removeOldOwner) {
-      try { await call(need('flowOwner'), [asset.envId, asset.id], { delete: [{ id: asset.ownerId }] }) }
+      try {
+        // The API deletes by ROLE id (from the owners list), not by the user's object id. The new owner was added first so the flow is never left without an owner.
+        const ownersOp = OPS.flowOwners()
+        const roles = ownersOp ? asList(await call(ownersOp, [asset.envId, asset.id])) : []
+        const old = roles.find((r) => (r.properties?.principal?.id ?? r.principal?.id) === asset.ownerId)
+        const roleId = old?.name ?? String(old?.id ?? '').split('/').pop()
+        if (!roleId) throw new Error('previous owner not found in the flow\'s owner list')
+        await call(need('flowOwner'), [asset.envId, asset.id], { delete: [{ id: roleId }] })
+      }
       catch (e) {
         log(`flow "${asset.name}": removing the previous owner failed - ${(e as Error).message.slice(0, 200)}`)
-        return `${to.email} is now an owner (co-owner). The previous owner could not be removed (Power Automate keeps the creator on the flow): ${(e as Error).message.slice(0, 160)}`
+        return `${to.email} is now an owner (co-owner). The previous owner could not be removed: ${(e as Error).message.slice(0, 160)}`
       }
     }
   },

@@ -206,3 +206,6 @@ Cross-environment reads use `ListRecordsWithOrganization` with `organization = h
 
 ## v1.9.12 – cloud flow transfer fix
 The flow permission API rejected `roleName: "Owner"` (HTTP 400: accepted values are CanEdit, CanViewWithShare, CanView). Flows are now transferred by adding the new user as a **CanEdit co-owner** (what Power Automate shows as an owner); "Replace" then tries to remove the previous owner in a second call and reports honestly if Power Automate refuses (the creator stays recorded on the flow). Scan and read-back treat `Owner` (creator) and `CanEdit` (co-owner) as owners.
+
+## v1.9.13 – flow "replace owner" removes the previous owner correctly
+The previous owner is removed by ROLE id (looked up from the flow's owner list) after the new CanEdit owner was added first. Solution-aware flows are also owned in Dataverse; that record owner is not changed by this step.
