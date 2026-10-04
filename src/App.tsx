@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { clearLog, getLog, log as opLog, subscribeLog } from './oplog'
-import type { AgentCategory, Asset, AssetKind, AuditEntry, Backend, Env, ItemStatus, Person, ScanNote, TransferOptions } from './types'
+import type { AgentCategory, Asset, SolutionGroup, AssetKind, AuditEntry, Backend, Env, ItemStatus, Person, ScanNote, TransferOptions } from './types'
 import { hasConnectors, pickBackend } from './services'
 import { runTransfer } from './transferPlan'
 import { ago, assetRows, portalUrl, auditRows, download, explainTransferError, isPartialUpdate, powershellFor, risksFor, toCsv } from './util'
@@ -17,7 +17,7 @@ const crumb = {
 }
 
 type SortKey = 'name' | 'kind' | 'envName' | 'state' | 'modifiedTime'
-type Panel = null | 'transfer' | 'history' | 'diag'
+type Panel = null | 'transfer' | 'history' | 'diag' | 'solutions'
 
 
 const KIND_UI: Record<AssetKind, { label: string; plural: string; icon: string }> = {
@@ -185,6 +185,7 @@ export default function App() {
     { label: 'Transfer selected…', run: () => selected.length && setPanel('transfer') },
     { label: 'Transfer EVERYTHING…', run: () => { setSel(new Set(assets.map((a) => a.key))); setPanel('transfer') } },
     { label: 'Export inventory (CSV)', run: () => download('inventory.csv', toCsv(assetRows(visible)), 'text/csv') },
+    { label: 'Transfer a whole solution…', run: () => assets.length && setPanel('solutions') },
     { label: 'Open history', run: () => setPanel('history') },
     { label: 'Connector diagnostics', run: () => setPanel('diag') },
     { label: 'Show operation log (real calls)', run: () => setPanel('diag') },
@@ -200,6 +201,7 @@ export default function App() {
         <span className="pill mut" title="Build running in this tab - if it is old, hard-refresh (Ctrl+Shift+R)">{__BUILD__}</span>
         <span className={`pill ${demo ? 'warn' : 'ok'}`}>{demo ? 'DEMO DATA' : 'LIVE'}</span>
         <button className="btn sm" onClick={() => setPalette(true)}>⌘ <kbd>Ctrl K</kbd></button>
+        <button className="btn sm" disabled={!assets.length} onClick={() => setPanel('solutions')}>📦 Solutions</button>
         <button className="btn sm" onClick={() => setPanel('history')}>🕘 History ({audit.filter((a) => !a.dryRun).length})</button>
         <button className="btn sm" onClick={() => setPanel('diag')}>🩺</button>
         <button className="btn sm" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? '☀️' : '🌙'}</button>
@@ -321,6 +323,7 @@ export default function App() {
           onClose={() => setPanel(null)}
           onAudit={(e) => setAudit((a) => [...a, ...e])}
           onDone={(moved) => { setAssets((all) => all.filter((a) => !moved.includes(a.key))); setSel(new Set()) }} onRefresh={() => { void search(user.email) }} flash={flash} />)}
+      {panel === 'solutions' && <SolutionsDrawer backend={backend} assets={assets} onClose={() => setPanel(null)} onPick={(keys) => { setSel(new Set(keys)); setPanel('transfer') }} />}
       {panel === 'history' && <HistoryDrawer audit={audit} backend={backend} onClose={() => setPanel(null)} onClear={() => setAudit([])} onAudit={(e) => setAudit((a) => [...a, ...e])} flash={flash} />}
       {panel === 'diag' && <DiagDrawer backend={backend} onClose={() => setPanel(null)} />}
       {palette && <Palette commands={commands} onClose={() => setPalette(false)} />}
@@ -525,6 +528,43 @@ function TransferDrawer({ backend, from, items: itemsIn, busyRef, onClose, onAud
         })}
       </div>
       <div className="row" style={{ marginTop: 16 }}><button className="btn" disabled={running} onClick={onClose}>Close</button></div>
+    </Drawer>
+  )
+}
+
+/** Solutions that contain the user's apps / flows / agents. Picking one pre-selects those items for the normal (safe, verified) transfer. */
+function SolutionsDrawer({ backend, assets, onClose, onPick }: { backend: Backend; assets: Asset[]; onClose: () => void; onPick: (keys: string[]) => void }) {
+  const [groups, setGroups] = useState<SolutionGroup[] | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  useEffect(() => {
+    let live = true
+    if (!backend.listSolutions) { setErr('This build cannot read solutions.'); return }
+    backend.listSolutions(assets).then((g) => { if (live) setGroups(g) }).catch((e) => { if (live) setErr((e as Error).message) })
+    return () => { live = false }
+  }, [backend, assets])
+  const byKey = new Map(assets.map((a) => [a.key, a]))
+  return (
+    <Drawer onClose={onClose}>
+      <div className="row"><h2 style={{ margin: 0 }}>📦 Transfer a whole solution</h2><div className="spacer" /><button className="btn sm" onClick={onClose}>Close</button></div>
+      <p className="sub">Dataverse solutions themselves have no owner – the owners are the components inside. This lists the solutions that contain this user's apps, cloud flows and Copilot Studio agents. Pick one to select ALL of that user's items in it, then transfer them with the normal verified pipeline.</p>
+      {!groups && !err && <div className="skeleton" style={{ height: 80 }} />}
+      {err && <div className="banner" style={{ borderColor: 'var(--bad)', color: 'var(--bad)' }}>Could not read solutions: {err}<br />This needs the Microsoft Dataverse connector (the deploy script adds it) and admin rights in that environment.</div>}
+      {groups && groups.length === 0 && <div className="empty"><div className="big">🫥</div>None of this user's items are inside a (non-default) solution.</div>}
+      {groups?.map((g) => {
+        const items = g.assetKeys.map((k) => byKey.get(k)).filter(Boolean) as Asset[]
+        const n = (k: string) => items.filter((i) => i.kind === k).length
+        const hasFlows = n('flow') > 0
+        return (
+          <div className="card" key={g.key} style={{ padding: 12, marginBottom: 10 }}>
+            <div className="row"><b>{g.name}</b> <span className="pill mut">{g.uniqueName} {g.version ?? ''}</span>{g.managed && <span className="pill warn">managed</span>}<div className="spacer" /><span className="sub">{g.envName}</span></div>
+            <div className="sub" style={{ margin: '6px 0' }}>{n('app')} app(s) · {n('flow')} flow(s) · {n('agent')} agent(s) owned by this user · {g.totalComponents} component(s) in the solution (tables, roles, connection references etc. are not owner-transferable here)</div>
+            <ul style={{ margin: '4px 0 8px 18px', padding: 0, fontSize: 12 }}>{items.map((i) => <li key={i.key}>{KIND_UI[i.kind].icon} {i.name}</li>)}</ul>
+            {g.managed && <div className="sub" style={{ color: 'var(--warn)' }}>Managed solution: ownership of some components may be blocked or create a customization layer – use the dry run first.</div>}
+            {hasFlows && <div className="sub" style={{ color: 'var(--warn)' }}>Flows keep running on the OLD owner's connections after an owner change. The new owner should open each flow once and re-bind its connections (and the old account must not be disabled before that).</div>}
+            <div className="row" style={{ marginTop: 8 }}><button className="btn primary sm" onClick={() => onPick(g.assetKeys)}>Select these {items.length} item(s) and transfer →</button></div>
+          </div>
+        )
+      })}
     </Drawer>
   )
 }

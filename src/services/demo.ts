@@ -69,6 +69,12 @@ export const demoBackend: Backend = {
     if (!q.includes('@')) throw new Error('No user found')
     return { id: 'u-' + q.length + q.charCodeAt(0), name: q.split('@')[0].replace(/[._]/g, ' '), email: q }
   },
+  async listSolutions(assets) {
+    await sleep(400)
+    const picks = assets.slice(0, 3)
+    if (!picks.length) return []
+    return [{ key: 'demo:sol1', envId: picks[0]!.envId, envName: picks[0]!.envName, name: 'Contoso Sales Suite', uniqueName: 'contoso_sales', version: '1.0.0.4', managed: false, assetKeys: picks.map((a) => a.key), totalComponents: picks.length + 14 }]
+  },
   async listAssets(user, envs, onProgress) {
     let i = 0
     for (const e of envs) {

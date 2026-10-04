@@ -182,3 +182,7 @@ Microsoft: agent ownership can only be reassigned to a user with an ACTIVE Micro
 - Read-backs (after a transfer) use the same Dataverse source. An inventory mismatch is never treated as proof of "nothing changed", and the automatic rollback only runs when Dataverse itself shows the agent is neither with the new nor the original owner.
 - New: `↗ open` link on every row (opens the item in its own portal to check the Owner column) and `⬇ Download receipt` (the full operation log as a text file).
 - Observed in a real tenant: a 502 "partially updated" can still end with the agent owned by the new user - always check the Owner column in Copilot Studio.
+
+## v1.9.7 – transfer a whole solution
+`📦 Solutions` (also Ctrl K → "Transfer a whole solution") lists the solutions that contain the scanned user's apps, cloud flows and Copilot Studio agents (read through the Microsoft Dataverse connector). Pick one to select all of that user's items in it, then transfer them with the normal verified pipeline (dry run, read-back, rollback protection).
+Limits (by design): a solution itself has no owner; tables, security roles, plug-ins, model-driven apps are organisation-owned; classic workflows / connection references / environment variable values are not moved by this app; flows keep the OLD owner's connections until the new owner re-binds them; managed solutions may block some changes.

@@ -16,7 +16,7 @@
 import { log } from '../oplog'
 import { getClient } from '@microsoft/power-apps/data'
 import { getContext } from '@microsoft/power-apps/app'
-import type { AgentCategory, Asset, Backend, Env, ScanNote } from '../types'
+import type { AgentCategory, Asset, Backend, Env, ScanNote, SolutionGroup } from '../types'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const infoModules = import.meta.glob('../../.power/schemas/appschemas/dataSourcesInfo.ts', { eager: true }) as Record<string, any>
@@ -341,7 +341,7 @@ async function nativeSystemUserId(aadId: string): Promise<string | null> {
 
 // ---- Authoritative Dataverse access for ANY environment: this app's own (native) or the Microsoft Dataverse connector (org host) ----
 const orgHosts = new Map<string, string>()
-type DvQuery = (table: 'bots' | 'systemusers', filter: string, select: string[], top?: number) => Promise<any[]>
+type DvQuery = (table: string, filter: string, select: string[], top?: number) => Promise<any[]>
 async function dvConnectorRows(host: string, table: string, filter: string, select: string, top: number): Promise<any[]> {
   const op = OPS.dvList()
   if (!op) throw new Error('Microsoft Dataverse connector is not in this build')
@@ -362,17 +362,21 @@ async function dvConnectorRows(host: string, table: string, filter: string, sele
 }
 async function dvFor(envId: string): Promise<DvQuery | null> {
   const home = (await getCurrentEnvId())?.toLowerCase() === envId.toLowerCase()
+  const host = orgHosts.get(envId.toLowerCase())
+  const viaConnector: DvQuery | null = host && OPS.dvList() ? (table, filter, select, top = 500) => dvConnectorRows(host, table, filter, select.join(','), top) : null
   if (home && nativeKey('bot') && nativeKey('systemuser')) {
     return async (table, filter, select, top = 500) => {
+      if (table !== 'bots' && table !== 'systemusers') {                  // other tables (solutions, components) only via the Dataverse connector
+        if (!viaConnector) throw new Error('Reading solutions needs the Microsoft Dataverse connector (re-run the deploy script).')
+        return viaConnector(table, filter, select, top)
+      }
       const t = table === 'bots' ? nativeKey('bot')! : nativeKey('systemuser')!
       const r: any = await sdk().retrieveMultipleRecordsAsync<any>(t, { filter, select, top })
       if (!r?.success) throw new Error(r?.error?.message ?? 'Dataverse query failed')
       return r.data ?? []
     }
   }
-  const host = orgHosts.get(envId.toLowerCase())
-  if (host && OPS.dvList()) return (table, filter, select, top = 500) => dvConnectorRows(host, table, filter, select.join(','), top)
-  return null
+  return viaConnector
 }
 
 export const liveBackend: Backend = {
@@ -633,6 +637,41 @@ export const liveBackend: Backend = {
     }
 
     return { assets: out, notes }
+  },
+
+  async listSolutions(assets) {
+    const groups: SolutionGroup[] = []
+    const byEnv = new Map<string, Asset[]>()
+    for (const a of assets) (byEnv.get(a.envId) ?? byEnv.set(a.envId, []).get(a.envId)!).push(a)
+    for (const [eid, list] of byEnv) {
+      const dv = await dvFor(eid)
+      const envName = list[0]!.envName
+      if (!dv) { log(`solutions: no Dataverse route for ${envName}`); continue }
+      try {
+        // 1. which solutions contain the user's items (component objectid = canvasapp / workflow / bot id)
+        const sols = new Map<string, Asset[]>()
+        for (let i = 0; i < list.length; i += 12) {
+          const chunk = list.slice(i, i + 12)
+          const rows = await dv('solutioncomponents', chunk.map((a) => `objectid eq ${a.id}`).join(' or '), ['objectid', '_solutionid_value', 'componenttype'], 500)
+          for (const r of rows) {
+            const a = chunk.find((x) => x.id.toLowerCase() === String(r.objectid).toLowerCase())
+            const sid = String(r._solutionid_value ?? '').toLowerCase()
+            if (a && sid) { const arr = sols.get(sid) ?? []; if (!arr.includes(a)) arr.push(a); sols.set(sid, arr) }
+          }
+        }
+        // 2. solution names (hide the always-present Default / Active solutions) and the total component count
+        for (const [sid, members] of sols) {
+          const sr = await dv('solutions', `solutionid eq ${sid}`, ['solutionid', 'friendlyname', 'uniquename', 'ismanaged', 'version'], 1)
+          const s0 = sr[0]
+          if (!s0 || /^(default|active|basic)$/i.test(String(s0.uniquename))) continue
+          let total = members.length
+          try { total = (await dv('solutioncomponents', `_solutionid_value eq ${sid}`, ['objectid'], 500)).length } catch { /* keep */ }
+          groups.push({ key: `${eid}:${sid}`, envId: eid, envName, name: s0.friendlyname ?? s0.uniquename, uniqueName: s0.uniquename, version: s0.version, managed: !!s0.ismanaged, assetKeys: members.map((m) => m.key), totalComponents: total })
+        }
+        log(`solutions in ${envName}: ${groups.filter((g) => g.envId === eid).length} contain the user's items`)
+      } catch (e) { log(`solutions lookup failed in ${envName}: ${(e as Error).message.slice(0, 200)}`); throw e }
+    }
+    return groups
   },
 
   async preflightTarget(envId, to) {

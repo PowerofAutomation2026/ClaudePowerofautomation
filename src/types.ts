@@ -92,5 +92,20 @@ export interface Backend {
   /** After a transfer: true = inventory shows `to` as owner, false = not (yet) reflected, null = cannot tell. */
   verifyOwner?(asset: Asset, to: Person): Promise<boolean | null>
   verifyOwnerRaw?(asset: Asset, to: Person): Promise<boolean | null>
+  /** Which solutions contain the given items (apps, flows, agents). Needs the Dataverse connector. */
+  listSolutions?(assets: Asset[]): Promise<SolutionGroup[]>
   diagnostics(): Promise<{ name: string; ok: boolean; detail: string }[]>
+}
+
+/** A solution that contains items owned by the scanned user (found via solution components). */
+export interface SolutionGroup {
+  key: string
+  envId: string
+  envName: string
+  name: string
+  uniqueName: string
+  version?: string
+  managed: boolean
+  assetKeys: string[] // the user's apps / flows / agents inside this solution (these are what a transfer can move)
+  totalComponents: number // everything in the solution (tables, roles, connection references... are not owner-transferable here)
 }
