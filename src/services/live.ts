@@ -339,6 +339,42 @@ async function nativeSystemUserId(aadId: string): Promise<string | null> {
   return r.data?.[0]?.systemuserid ?? null
 }
 
+// ---- Authoritative Dataverse access for ANY environment: this app's own (native) or the Microsoft Dataverse connector (org host) ----
+const orgHosts = new Map<string, string>()
+type DvQuery = (table: 'bots' | 'systemusers', filter: string, select: string[], top?: number) => Promise<any[]>
+async function dvConnectorRows(host: string, table: string, filter: string, select: string, top: number): Promise<any[]> {
+  const op = OPS.dvList()
+  if (!op) throw new Error('Microsoft Dataverse connector is not in this build')
+  const extra: Record<string, unknown> = {}
+  for (const p of op.params) {                      // parameter names differ between Dataverse connector versions: map by meaning
+    const n = p.name.toLowerCase()
+    if (p.in === 'path' || p.in === 'header') {
+      if (/dataset|organi|environment|instance|^org/.test(n)) extra[p.name] = host
+      else if (/table|entity/.test(n)) extra[p.name] = table
+    } else if (p.in === 'query') {
+      const k = n.replace('$', '')
+      if (k === 'filter') extra[p.name] = filter
+      else if (k === 'select') extra[p.name] = select
+      else if (k === 'top') extra[p.name] = top
+    }
+  }
+  return asList(await callRaw(op, [], undefined, {}, extra))
+}
+async function dvFor(envId: string): Promise<DvQuery | null> {
+  const home = (await getCurrentEnvId())?.toLowerCase() === envId.toLowerCase()
+  if (home && nativeKey('bot') && nativeKey('systemuser')) {
+    return async (table, filter, select, top = 500) => {
+      const t = table === 'bots' ? nativeKey('bot')! : nativeKey('systemuser')!
+      const r: any = await sdk().retrieveMultipleRecordsAsync<any>(t, { filter, select, top })
+      if (!r?.success) throw new Error(r?.error?.message ?? 'Dataverse query failed')
+      return r.data ?? []
+    }
+  }
+  const host = orgHosts.get(envId.toLowerCase())
+  if (host && OPS.dvList()) return (table, filter, select, top = 500) => dvConnectorRows(host, table, filter, select.join(','), top)
+  return null
+}
+
 export const liveBackend: Backend = {
   label: 'Live',
 
@@ -346,6 +382,7 @@ export const liveBackend: Backend = {
     const op = OPS.envs()
     if (op) {
       const rows = asList(await call(op))
+      rows.forEach((e) => { const u = e.properties?.linkedEnvironmentMetadata?.instanceUrl ?? e.properties?.linkedEnvironmentMetadata?.instanceApiUrl; if (u) { try { orgHosts.set(String(e.name).toLowerCase(), new URL(u).host) } catch { /* ignore */ } } })
       return rows.map<Env>((e) => ({ id: e.name, name: e.properties?.displayName ?? e.name, isDefault: !!e.properties?.isDefault, region: e.location, orgUrl: e.properties?.linkedEnvironmentMetadata?.instanceUrl ?? e.properties?.linkedEnvironmentMetadata?.instanceApiUrl }))
     }
     // No environment connector: fall back to the environment this app runs in.
@@ -550,68 +587,59 @@ export const liveBackend: Backend = {
 
       onProgress(++done, envs.length, env.name)
     }
-    // ---- Live check: the tenant inventory lags (deleted agents linger for a while), so confirm every agent against the Dataverse of its environment ----
+    // ---- Live reconcile: the tenant inventory lags both ways (deleted / transferred agents linger, new ones are missing).
+    //      Dataverse of each environment is the source of truth wherever this app can reach it. ----
     if (agentsViaInventory) {
-      const agents = out.filter((a) => a.kind === 'agent' && a.orgHost === 'inventory')
-      const byEnv = new Map<string, Asset[]>()
-      for (const a of agents) (byEnv.get(a.envId) ?? byEnv.set(a.envId, []).get(a.envId)!).push(a)
-      const homeId = await getCurrentEnvId()
-      const botsTable = nativeKey('bot')
-      let live = 0, gone = 0, moved = 0, unchecked = 0
-      const drop = new Set<Asset>()
-      for (const [eid, list] of byEnv) {
-        const env = envs.find((e) => e.id.toLowerCase() === eid.toLowerCase())
-        const useNative = !!botsTable && homeId?.toLowerCase() === eid.toLowerCase()
-        const host = !useNative && dvList && env?.orgUrl ? new URL(env.orgUrl).host : null
-        if (!useNative && !host) { unchecked += list.length; list.forEach((a) => { a.meta = { ...(a.meta ?? {}), live: 'unverified' } }); continue }
+      let confirmed = 0, removed = 0, added = 0, unchecked = 0
+      for (const env of envs) {
+        const here = out.filter((a) => a.kind === 'agent' && a.orgHost === 'inventory' && a.envId.toLowerCase() === env.id.toLowerCase())
+        const dv = await dvFor(env.id)
+        if (!dv) { unchecked += here.length; here.forEach((a) => { a.meta = { ...(a.meta ?? {}), live: 'unverified' } }); continue }
         try {
-          const found = new Map<string, any>()
-          const sysId = await (async () => {
-            if (useNative) return nativeSystemUserId(user.id)
-            const su = asList(await call(dvList!, [], undefined, {}, { dataset: host, table: 'systemusers', '$filter': `azureactivedirectoryobjectid eq ${user.id}`, '$select': 'systemuserid', '$top': 1 }))
-            return su[0]?.systemuserid ?? null
-          })()
-          for (let i = 0; i < list.length; i += 15) {
-            const chunk = list.slice(i, i + 15)
-            const filter = chunk.map((a) => `botid eq ${a.id}`).join(' or ')
-            if (useNative) {
-              const r: any = await sdk().retrieveMultipleRecordsAsync<any>(botsTable!, { filter, select: ['botid', 'name', 'statecode', '_ownerid_value', 'modifiedon'], top: 100 })
-              if (!r?.success) throw new Error(r?.error?.message ?? 'query failed')
-              for (const b of r.data ?? []) found.set(String(b.botid).toLowerCase(), b)
-            } else {
-              const rows = asList(await call(dvList!, [], undefined, {}, { dataset: host, table: 'bots', '$filter': filter, '$select': 'botid,name,statecode,_ownerid_value,modifiedon', '$top': 100 }))
-              for (const b of rows) found.set(String(b.botid).toLowerCase(), b)
-            }
-            log(`live check ${env?.name ?? eid}: asked Dataverse for ${chunk.length} bot id(s), ${chunk.filter((x) => found.has(x.id.toLowerCase())).length} exist`)
-            await tick()
-          }
-          for (const a of list) {
-            const b = found.get(a.id.toLowerCase())
-            if (!b) { drop.add(a); gone++; continue }                                   // not in Dataverse any more = deleted
-            if (sysId && b._ownerid_value && String(b._ownerid_value).toLowerCase() !== String(sysId).toLowerCase()) { drop.add(a); moved++; continue }   // owner already changed
+          onProgress(0, envs.length, `${env.name} · live agents`)
+          const su = await dv('systemusers', `azureactivedirectoryobjectid eq ${user.id}`, ['systemuserid'], 1)
+          const sysId = su[0]?.systemuserid
+          const bots = sysId ? await dv('bots', `_ownerid_value eq ${sysId}`, ['botid', 'name', 'statecode', 'modifiedon', 'createdon', 'ismanaged'], 500) : []
+          log(`live agents in ${env.name}: Dataverse says ${bots.length} owned by user (inventory had ${here.length})`)
+          const live = new Map<string, any>(bots.map((b) => [String(b.botid).toLowerCase(), b]))
+          for (const a of here) {
+            const b = live.get(a.id.toLowerCase())
+            if (!b) { out.splice(out.indexOf(a), 1); removed++; continue }                 // deleted, or no longer owned by this user
             a.name = b.name ?? a.name
             a.state = b.statecode === 0 ? 'Started' : 'Stopped'
             a.modifiedTime = b.modifiedon ?? a.modifiedTime
+            a.inSolution = !!b.ismanaged
             a.meta = { ...(a.meta ?? {}), live: 'verified' }
-            live++
+            live.delete(a.id.toLowerCase()); confirmed++
           }
-        } catch (e) { unchecked += list.length; list.forEach((a) => { a.meta = { ...(a.meta ?? {}), live: 'unverified' } }); note(env?.name ?? eid, 'agent', 'warn', `live check of agents failed: ${(e as Error).message.slice(0, 250)} - showing inventory data unverified`) }
+          for (const b of live.values()) {                                                  // exists in Dataverse but the inventory has not caught up yet
+            out.push({
+              key: `agent:${env.id}:${b.botid}`, id: b.botid, kind: 'agent', name: b.name ?? b.botid, envId: env.id, envName: env.name,
+              ownerId: user.id, ownerName: user.name, ownerEmail: user.email, state: b.statecode === 0 ? 'Started' : 'Stopped',
+              createdTime: b.createdon, modifiedTime: b.modifiedon, inSolution: !!b.ismanaged, orgHost: 'inventory', category: 'agent', meta: { live: 'verified', source: 'Dataverse' },
+            })
+            added++
+          }
+        } catch (e) {
+          unchecked += here.length; here.forEach((a) => { a.meta = { ...(a.meta ?? {}), live: 'unverified' } })
+          note(env.name, 'agent', 'warn', `live check of agents failed: ${(e as Error).message.slice(0, 250)} - showing inventory data unverified`)
+        }
       }
-      for (let i = out.length - 1; i >= 0; i--) if (drop.has(out[i]!)) out.splice(i, 1)
-      note('(all)', 'agent', gone || moved || unchecked ? 'warn' : 'info',
-        `Live check against Dataverse: ${live} agent(s) confirmed existing and owned by the user` +
-        (gone ? `; ${gone} DELETED agent(s) removed from the list (the inventory still lists them for a while)` : '') +
-        (moved ? `; ${moved} removed because Dataverse shows a different owner now` : '') +
-        (unchecked ? `; ⚠ ${unchecked} could NOT be live-checked (this app has no Dataverse access to their environment) - they come from the tenant inventory, which can still list DELETED agents. Fix: deploy this app into the agents' environment (run the deploy script with -EnvironmentId <that environment>) or add the optional "Microsoft Dataverse" connector.` : ''))
+      note('(all)', 'agent', removed || added || unchecked ? 'warn' : 'info',
+        `Live check against Dataverse: ${confirmed} agent(s) confirmed` +
+        (removed ? `; ${removed} removed (deleted, or already owned by someone else - the tenant inventory lags)` : '') +
+        (added ? `; ${added} added that the inventory had not listed yet` : '') +
+        (unchecked ? `; ⚠ ${unchecked} could NOT be live-checked (no Dataverse access to their environment) - inventory data only, may include deleted agents` : ''))
     }
 
     return { assets: out, notes }
   },
 
   async preflightTarget(envId, to) {
-    if (!nativeKey('systemuser') || (await getCurrentEnvId())?.toLowerCase() !== envId.toLowerCase()) return undefined   // cannot check from here
-    const r: any = await sdk().retrieveMultipleRecordsAsync<any>(nativeKey('systemuser')!, { filter: `azureactivedirectoryobjectid eq ${to.id}`, select: ['systemuserid', 'isdisabled', 'accessmode'], top: 1 })
-    const u = r?.success ? r.data?.[0] : null
+    const dv = await dvFor(envId)
+    if (!dv) return undefined                                     // cannot check from here
+    const rows = await dv('systemusers', `azureactivedirectoryobjectid eq ${to.id}`, ['systemuserid', 'isdisabled', 'accessmode'], 1)
+    const u = rows[0]
     log(`pre-flight target user in Dataverse: ${u ? `isdisabled=${u.isdisabled} accessmode=${u.accessmode}` : 'no row'}`)
     if (!u) return undefined
     if (u.isdisabled) return `${to.email} is DISABLED in this environment - enable the user first. Nothing was changed.`
@@ -620,12 +648,11 @@ export const liveBackend: Backend = {
   },
 
   async checkMember(envId, to) {
-    // Only decidable for the environment this app runs in (its own Dataverse); elsewhere we cannot tell.
-    if (!nativeKey('systemuser') || (await getCurrentEnvId()) !== envId) return null
-    try { return !!(await nativeSystemUserId(to.id)) } catch { return null }
+    const dv = await dvFor(envId)
+    if (!dv) return null
+    try { return (await dv('systemusers', `azureactivedirectoryobjectid eq ${to.id}`, ['systemuserid'], 1)).length > 0 } catch { return null }
   },
 
-  /** Read the owner back from the SOURCE after a transfer. true = confirmed, false = NOT changed (yet), null = cannot tell. */
   async verifyOwner(asset, to) {
     const r = await liveBackend.verifyOwnerRaw!(asset, to)
     log(`READ-BACK ${asset.kind} "${asset.name}": new owner ${r === true ? 'CONFIRMED' : r === false ? 'NOT showing yet' : 'could not be read'}`)
@@ -648,14 +675,15 @@ export const liveBackend: Backend = {
         if (!roles.length) return null
         return roles.some((r) => (r.properties?.principal?.id ?? r.principal?.id) === to.id && /owner/i.test(r.properties?.roleName ?? r.roleName ?? ''))
       }
-      // agent: authoritative Dataverse read in the app's own environment, otherwise the tenant inventory (may lag 5-15 min)
-      if (nativeKey('bot') && (await getCurrentEnvId()) === asset.envId) {
-        const t = nativeKey('bot')!
-        const sysId = await nativeSystemUserId(to.id)
-        const r: any = await sdk().retrieveMultipleRecordsAsync<any>(t, { filter: `botid eq ${asset.id}`, select: ['botid', '_ownerid_value'], top: 1 })
-        const row = r?.success ? r.data?.[0] : null
-        if (row && sysId) return String(row._ownerid_value ?? '').toLowerCase() === sysId.toLowerCase()
+      // agent: authoritative Dataverse read (this app's own environment or via the Dataverse connector)
+      const dv = await dvFor(asset.envId)
+      if (dv) {
+        const su = await dv('systemusers', `azureactivedirectoryobjectid eq ${to.id}`, ['systemuserid'], 1)
+        const rows = await dv('bots', `botid eq ${asset.id}`, ['botid', '_ownerid_value'], 1)
+        log(`read-back Dataverse bot ${asset.id}: owner row ${rows[0]?._ownerid_value ?? 'NOT FOUND'}, expected ${su[0]?.systemuserid ?? '?'}`)
+        if (rows[0] && su[0]?.systemuserid) return String(rows[0]._ownerid_value ?? '').toLowerCase() === String(su[0].systemuserid).toLowerCase()
       }
+      // Fallback = tenant inventory, which LAGS: a match proves the change, a mismatch proves nothing.
       const op = OPS.inventory()
       if (!op) return null
       const body = { TableName: 'PowerPlatformResources', Clauses: [
@@ -664,7 +692,7 @@ export const liveBackend: Backend = {
       ], Options: { Top: 5 } }
       const rows = invRows(await callRaw(op, [], body))
       if (!rows.length) return null
-      return rows.some((r) => String(invProp(r, 'ownerId') ?? '').toLowerCase() === to.id.toLowerCase())
+      return rows.some((r) => String(invProp(r, 'ownerId') ?? '').toLowerCase() === to.id.toLowerCase()) ? true : null
     } catch { return null }
   },
 
@@ -692,11 +720,12 @@ export const liveBackend: Backend = {
     if (asset.kind === 'agent') {
       // Never send tool / MCP / Agent Builder / CLI inventory rows to the Copilot Studio reassign API.
       if (asset.category && asset.category !== 'agent') throw new Error(`Not attempted: "${asset.name}" is a ${asset.category}, not a Copilot Studio agent – nothing was changed.`)
-      // Pre-flight: the inventory can list deleted agents - make sure it still exists (and is still owned by the expected user) where Dataverse is reachable.
-      if (nativeKey('bot') && (await getCurrentEnvId())?.toLowerCase() === asset.envId.toLowerCase()) {
-        const r: any = await sdk().retrieveMultipleRecordsAsync<any>(nativeKey('bot')!, { filter: `botid eq ${asset.id}`, select: ['botid', 'name', '_ownerid_value', 'ismanaged'], top: 1 })
-        log(`pre-flight Dataverse bot ${asset.id}: ${r?.success ? (r.data?.[0] ? 'exists, owner row ' + r.data[0]._ownerid_value + (r.data[0].ismanaged ? ' - MANAGED (reassign may be blocked)' : '') : 'NOT FOUND') : 'query failed'}`)
-        if (r?.success && !r.data?.[0]) throw new Error('Not attempted: this agent no longer exists in Dataverse (it was deleted; the tenant inventory is stale). Nothing was changed. Re-scan.')
+      // Pre-flight: the inventory can list deleted agents - make sure it still exists where Dataverse is reachable.
+      const dv = await dvFor(asset.envId).catch(() => null)
+      if (dv) {
+        const rows = await dv('bots', `botid eq ${asset.id}`, ['botid', 'name', '_ownerid_value', 'ismanaged'], 1).catch(() => null)
+        log(`pre-flight Dataverse bot ${asset.id}: ${rows ? (rows[0] ? 'exists, owner row ' + rows[0]._ownerid_value + (rows[0].ismanaged ? ' - MANAGED (reassign may be blocked)' : '') : 'NOT FOUND') : 'query failed'}`)
+        if (rows && !rows[0]) throw new Error('Not attempted: this agent no longer exists in Dataverse (it was deleted; the tenant inventory is stale). Nothing was changed. Re-scan.')
       }
       const re = OPS.agentReassign()
       if (re) {

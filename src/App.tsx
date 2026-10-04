@@ -3,7 +3,7 @@ import { clearLog, getLog, log as opLog, subscribeLog } from './oplog'
 import type { AgentCategory, Asset, AssetKind, AuditEntry, Backend, Env, ItemStatus, Person, ScanNote, TransferOptions } from './types'
 import { hasConnectors, pickBackend } from './services'
 import { runTransfer } from './transferPlan'
-import { ago, assetRows, auditRows, download, explainTransferError, isPartialUpdate, powershellFor, risksFor, toCsv } from './util'
+import { ago, assetRows, portalUrl, auditRows, download, explainTransferError, isPartialUpdate, powershellFor, risksFor, toCsv } from './util'
 
 const ls = {
   get<T>(k: string, d: T): T { try { const v = localStorage.getItem(k); return v ? (JSON.parse(v) as T) : d } catch { return d } },
@@ -295,7 +295,7 @@ export default function App() {
                 <tbody>{visible.map((a) => (
                   <tr key={a.key} className={sel.has(a.key) ? 'sel' : ''} onClick={() => toggle(a.key)}>
                     <td><input type="checkbox" checked={sel.has(a.key)} readOnly /></td>
-                    <td><div className="name">{a.name}</div><div className="id">{a.id}</div></td>
+                    <td><div className="name">{a.name} <a href={portalUrl(a)} target="_blank" rel="noreferrer" title="Open in its portal to check the owner" onClick={(e) => e.stopPropagation()} style={{ fontSize: 11, opacity: .8 }}>↗ open</a></div><div className="id">{a.id}</div></td>
                     <td><span className={`kind k-${a.kind}`}>{KIND_UI[a.kind].icon} {KIND_UI[a.kind].label}</span>{a.kind === 'agent' && a.category && a.category !== 'agent' && <span className="pill warn" style={{ marginLeft: 6 }} title={a.meta ? Object.entries(a.meta).map(([k, v]) => `${k}: ${v}`).join('\n') : ''}>{CAT_LABEL[a.category]}</span>}{a.kind === 'agent' && a.meta?.flavor && <span className="pill" style={{ marginLeft: 6 }}>{a.meta.flavor}</span>}{a.kind === 'agent' && a.meta?.live === 'unverified' && <span className="pill warn" style={{ marginLeft: 6 }} title="The tenant inventory can still list deleted agents. This app could not confirm it exists (no Dataverse access to this environment). Deploy the app into this environment to live-check.">⚠ not live-checked</span>}{a.kind === 'agent' && a.meta?.live === 'verified' && <span className="pill ok" style={{ marginLeft: 6 }} title="Confirmed to exist in Dataverse just now">✓ live</span>}</td>
                     <td>{a.envName}</td>
                     <td><span className="state"><i className={`dot ${a.state === 'Started' || a.state === 'Published' ? 'on' : a.state === 'Suspended' ? 'bad' : 'off'}`} />{a.state}</span></td>
@@ -341,6 +341,7 @@ function OpLog() {
       <summary><b>Operation log</b> – {lines.length} real call(s) recorded</summary>
       <div className="row" style={{ margin: '8px 0' }}>
         <button className="btn sm" onClick={() => navigator.clipboard?.writeText(lines.join('\n'))}>Copy log</button>
+        <button className="btn sm" onClick={() => download(`transfer-receipt-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.txt`, `Ownership Command Center - transfer receipt\nBuild ${typeof __BUILD__ === 'string' ? __BUILD__ : ''}\nGenerated ${new Date().toISOString()}\n\n${lines.join('\n')}\n`, 'text/plain')}>⬇ Download receipt</button>
         <button className="btn sm" onClick={clearLog}>Clear</button>
       </div>
       <pre style={{ maxHeight: 260, overflow: 'auto', fontSize: 11, whiteSpace: 'pre-wrap', margin: 0 }}>{lines.join('\n') || '(nothing yet)'}</pre>

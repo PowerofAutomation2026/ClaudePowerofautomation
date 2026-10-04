@@ -141,6 +141,10 @@ export async function runTransfer(args: TransferArgs): Promise<TransferOutcome> 
           record(a, 'done', undefined, `⚠ The service reported an error, but the read-back shows ${to.email} IS the owner now (CONFIRMED). The agent may still be partly updated - open it in Copilot Studio as the new owner and test it; if it misbehaves run the transfer again (a second reassignment completes it).`)
           continue
         }
+        if (nowNew === null) {          // cannot read the real owner from here: never guess, never roll back blindly
+          record(a, 'failed', m, 'State UNKNOWN: this app cannot read the agent owner from here (no Dataverse access to its environment). The service error can be a false alarm - open Copilot Studio and look at the Owner column BEFORE retrying; the agent may already belong to the new owner.')
+          continue
+        }
         if (stillOld === true) {
           record(a, 'failed', m, `Nothing changed: ${orig.email} is still the owner (CONFIRMED at the source). The agent was not taken from the original user.`)
           continue

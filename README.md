@@ -176,3 +176,9 @@ The tenant inventory keeps showing deleted agents for a while. After the invento
 
 ## v1.9.5 – licence-first guidance for the agent 502
 Microsoft: agent ownership can only be reassigned to a user with an ACTIVE Microsoft 365 Copilot licence. If a transfer returns 502 "partially updated" while the target is an environment member and the app shows "Nothing changed … still the owner (CONFIRMED)", assign the licence to the target in the Microsoft 365 admin center, wait ~10 minutes, and retry. The pre-flight now says honestly when the target's user status could not be checked.
+
+## v1.9.6 – live agents from Dataverse (any environment), no more false "nothing changed"
+- The tenant inventory lags BOTH ways (transferred/deleted agents linger, new agents missing). Agents are now reconciled against Dataverse of each environment: this app's own environment natively, every other environment through the Microsoft Dataverse connector (added by the deploy script). Agents that exist in Dataverse but not yet in the inventory are added; deleted / already-moved ones are removed. Rows show `✓ live`.
+- Read-backs (after a transfer) use the same Dataverse source. An inventory mismatch is never treated as proof of "nothing changed", and the automatic rollback only runs when Dataverse itself shows the agent is neither with the new nor the original owner.
+- New: `↗ open` link on every row (opens the item in its own portal to check the Owner column) and `⬇ Download receipt` (the full operation log as a text file).
+- Observed in a real tenant: a 502 "partially updated" can still end with the agent owned by the new user - always check the Owner column in Copilot Studio.

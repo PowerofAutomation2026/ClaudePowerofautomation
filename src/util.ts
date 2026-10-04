@@ -92,3 +92,11 @@ export function explainTransferError(err: string, kind: AssetKind): string[] {
   else tips.push('For flows the new owner must have a licence that allows the flow\'s connectors; solution flows may need their connection references re-pointed.')
   return [...new Set(tips)]
 }
+
+/** Direct link to the item in its own portal, to eyeball the owner after a transfer. */
+export function portalUrl(a: Asset): string {
+  const env = encodeURIComponent(a.envId)
+  if (a.kind === 'agent') return `https://copilotstudio.microsoft.com/environments/${env}/bots/${encodeURIComponent(a.id)}/overview`
+  if (a.kind === 'flow') return `https://make.powerautomate.com/environments/${env}/flows/${encodeURIComponent(a.id)}/details`
+  return `https://make.powerapps.com/environments/${env}/apps`
+}
