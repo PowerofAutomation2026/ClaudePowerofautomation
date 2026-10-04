@@ -200,3 +200,6 @@ Limits (by design): a solution itself has no owner; tables, security roles, plug
 - The Dataverse connector is called with the organisation as `host` and, if that fails, as `https://host` (the working form is remembered).
 - Transfer drawer: every item has a link to check its Owner in its own portal.
 - **Most reliable setup**: deploy the app INTO the environment that holds the agents (`-EnvironmentId e6c360d6-57a5-473e-9188-3bfac0e3250e` for "microsoft (default)"). There the app reads and verifies agents natively, with no connector guesswork.
+
+## v1.9.11 – Dataverse connector call matches Microsoft's own parameters
+Cross-environment reads use `ListRecordsWithOrganization` with `organization = https://orgXXXX.crm.dynamics.com`, `entityName`, `$filter/$select/$top` and `accept` (found in public code-app samples). Parameters are matched by meaning, wherever the connector places them; the plain hostname is tried as a fallback.

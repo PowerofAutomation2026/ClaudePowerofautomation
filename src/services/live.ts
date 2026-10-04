@@ -115,6 +115,7 @@ const OPS = {
     o.find((x) => x.method === 'POST' && /\/(addUser|syncUser|addsyncuser)\b/i.test(x.path))) },
   /** Microsoft Dataverse (legacy): list / patch rows in ANY environment by passing `dataset` (the org host). */
   dvList: () => { const o = allOps(); return pick(
+    o.find((x) => /commondataservice/i.test(x.ds) && x.norm === 'listrecordswithorganization'),
     o.find((x) => /commondataservice/i.test(x.ds) && x.method === 'GET' && /datasets\/\{dataset\}\/tables\/\{table\}\/items$/i.test(bare(x.path))),
     o.find((x) => /commondataservice/i.test(x.ds) && x.method === 'GET' && /datasets\/\{[^}]+\}\/tables\/\{[^}]+\}\/items$/i.test(bare(x.path))),
     o.find((x) => /commondataservice/i.test(x.ds) && /^(listrecords|listrecordswithorganization|getitems|listrows)$/.test(x.norm)),
@@ -353,27 +354,24 @@ async function dvConnectorRows(host: string, table: string, filter: string, sele
   const op = OPS.dvList()
   if (!op) throw new Error('Microsoft Dataverse connector is not in this build')
   const extra: Record<string, unknown> = {}
-  for (const p of op.params) {                      // parameter names differ between Dataverse connector versions: map by meaning
-    const n = p.name.toLowerCase()
-    if (p.in === 'path' || p.in === 'header') {
-      if (/dataset|organi|environment|instance|^org/.test(n)) extra[p.name] = host
-      else if (/table|entity/.test(n)) extra[p.name] = table
-    } else if (p.in === 'query') {
-      const k = n.replace('$', '')
-      if (k === 'filter') extra[p.name] = filter
-      else if (k === 'select') extra[p.name] = select
-      else if (k === 'top') extra[p.name] = top
-    }
+  for (const p of op.params) {                      // parameter names differ between Dataverse connector versions: map by meaning, whatever the location
+    const n = p.name.toLowerCase().replace('$', '')
+    if (n === 'accept') extra[p.name] = 'application/json'
+    else if (n === 'filter') extra[p.name] = filter
+    else if (n === 'select') extra[p.name] = select
+    else if (n === 'top') extra[p.name] = top
+    else if (/dataset|organi|environment|instance|^org/.test(n)) extra[p.name] = host
+    else if (/table|entity/.test(n)) extra[p.name] = table
   }
   const withOrg = (v: string) => { const e = { ...extra }; for (const k of Object.keys(e)) if (e[k] === host) e[k] = v; return e }
-  const forms = orgForm === 'url' ? [`https://${host}`, host] : [host, `https://${host}`]
+  const forms = orgForm === 'host' ? [host, `https://${host}`] : [`https://${host}`, host]   // Microsoft's connector expects https://orgXXXX.crm.dynamics.com
   let lastErr: unknown
   for (const f of forms) {
     try { const rows = asList(await callRaw(op, [], undefined, {}, withOrg(f))); orgForm = f.startsWith('https') ? 'url' : 'host'; return rows } catch (e) { lastErr = e }
   }
   throw lastErr
 }
-let orgForm: 'host' | 'url' = 'host'
+let orgForm: 'host' | 'url' = 'url'
 async function dvFor(envId: string): Promise<DvQuery | null> {
   const home = (await getCurrentEnvId())?.toLowerCase() === envId.toLowerCase()
   const host = orgHosts.get(envId.toLowerCase())
