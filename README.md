@@ -203,3 +203,6 @@ Limits (by design): a solution itself has no owner; tables, security roles, plug
 
 ## v1.9.11 – Dataverse connector call matches Microsoft's own parameters
 Cross-environment reads use `ListRecordsWithOrganization` with `organization = https://orgXXXX.crm.dynamics.com`, `entityName`, `$filter/$select/$top` and `accept` (found in public code-app samples). Parameters are matched by meaning, wherever the connector places them; the plain hostname is tried as a fallback.
+
+## v1.9.12 – cloud flow transfer fix
+The flow permission API rejected `roleName: "Owner"` (HTTP 400: accepted values are CanEdit, CanViewWithShare, CanView). Flows are now transferred by adding the new user as a **CanEdit co-owner** (what Power Automate shows as an owner); "Replace" then tries to remove the previous owner in a second call and reports honestly if Power Automate refuses (the creator stays recorded on the flow). Scan and read-back treat `Owner` (creator) and `CanEdit` (co-owner) as owners.

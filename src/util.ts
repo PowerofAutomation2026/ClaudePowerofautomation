@@ -55,6 +55,7 @@ export function risksFor(a: Asset): Risk[] {
   const r: Risk[] = []
   if (a.inSolution) r.push({ level: 'warn', text: 'Solution-aware: ownership may be governed by the solution / connection references.' })
   if (a.kind === 'flow' && (a.connections ?? 0) > 0) r.push({ level: 'warn', text: `${a.connections} connection(s) use the old owner's credentials - re-authenticate after transfer.` })
+  if (a.kind === 'flow') r.push({ level: 'info', text: 'Cloud flows are CO-owned: the new user becomes an owner (CanEdit). Power Automate keeps the original creator on the record; the old owner is removed only if the service allows it.' })
   if (a.kind === 'flow' && a.state !== 'Started') r.push({ level: 'info', text: `Flow is ${a.state}.` })
   if (a.kind === 'app') r.push({ level: 'info', text: 'Apps have a single owner; the previous owner keeps no ownership.' })
   if (a.kind === 'agent') {

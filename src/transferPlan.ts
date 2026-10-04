@@ -184,9 +184,9 @@ export async function runTransfer(args: TransferArgs): Promise<TransferOutcome> 
       try {
         if (dry) await sleep(60)
         else {
-          await backend.transfer(a, to, opts)
+          const tn = await backend.transfer(a, to, opts)
           const r = await verify(a)
-          record(a, r.status, undefined, r.note)
+          record(a, r.status, undefined, [typeof tn === 'string' ? tn : '', r.note ?? ''].filter(Boolean).join('\n'))
           continue
         }
         record(a, 'dry')

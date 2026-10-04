@@ -530,7 +530,7 @@ export const liveBackend: Backend = {
             const checked = await mapLimit(subset, 4, async (x) => {
               try {
                 const roles = asList(await call(ownersOp, [env.id, x.name]))
-                const mine = roles.some((r) => (r.properties?.principal?.id ?? r.principal?.id) === user.id && /owner/i.test(r.properties?.roleName ?? r.roleName ?? ''))
+                const mine = roles.some((r) => (r.properties?.principal?.id ?? r.principal?.id) === user.id && /^(owner|canedit)$/i.test(r.properties?.roleName ?? r.roleName ?? ''))
                 return mine ? { ...x, properties: { ...x.properties, creator: { userId: user.id } } } : null
               } catch { return null }
             })
@@ -546,7 +546,7 @@ export const liveBackend: Backend = {
             if (how === 'creator field' && ownersOp) {
               try {
                 const roles = asList(await call(ownersOp, [env.id, x.name]))
-                if (roles.length && !roles.some((r) => (r.properties?.principal?.id ?? r.principal?.id) === user.id && /owner/i.test(r.properties?.roleName ?? r.roleName ?? ''))) { movedAway++; continue }
+                if (roles.length && !roles.some((r) => (r.properties?.principal?.id ?? r.principal?.id) === user.id && /^(owner|canedit)$/i.test(r.properties?.roleName ?? r.roleName ?? ''))) { movedAway++; continue }
               } catch { /* cannot tell - keep the flow listed */ }
             }
             mine++
@@ -733,7 +733,7 @@ export const liveBackend: Backend = {
         if (!op) return null
         const roles = asList(await call(op, [asset.envId, asset.id]))
         if (!roles.length) return null
-        return roles.some((r) => (r.properties?.principal?.id ?? r.principal?.id) === to.id && /owner/i.test(r.properties?.roleName ?? r.roleName ?? ''))
+        return roles.some((r) => (r.properties?.principal?.id ?? r.principal?.id) === to.id && /^(owner|canedit)$/i.test(r.properties?.roleName ?? r.roleName ?? ''))
       }
       // agent: authoritative Dataverse read (this app's own environment or via the Dataverse connector)
       const dv = await dvFor(asset.envId)
@@ -806,9 +806,15 @@ export const liveBackend: Backend = {
       }
       throw new Error('Not attempted: neither the Power Platform for Admins V2 reassign operation nor a usable Dataverse path is available for this agent.')
     }
-    const body: Record<string, unknown> = { put: [{ properties: { principal: { id: to.id, type: 'User' }, roleName: 'Owner' } }] }
-    if (opts.mode === 'replace' && opts.removeOldOwner) body.delete = [{ id: asset.ownerId }]
-    await call(need('flowOwner'), [asset.envId, asset.id], body)
+    // Cloud flows: the API only accepts CanEdit / CanViewWithShare / CanView. "Owner" = a CanEdit co-owner; the creator stays recorded as creator.
+    await call(need('flowOwner'), [asset.envId, asset.id], { put: [{ properties: { principal: { id: to.id, type: 'User' }, roleName: 'CanEdit' } }] })
+    if (opts.mode === 'replace' && opts.removeOldOwner) {
+      try { await call(need('flowOwner'), [asset.envId, asset.id], { delete: [{ id: asset.ownerId }] }) }
+      catch (e) {
+        log(`flow "${asset.name}": removing the previous owner failed - ${(e as Error).message.slice(0, 200)}`)
+        return `${to.email} is now an owner (co-owner). The previous owner could not be removed (Power Automate keeps the creator on the flow): ${(e as Error).message.slice(0, 160)}`
+      }
+    }
   },
 
   async diagnostics() {

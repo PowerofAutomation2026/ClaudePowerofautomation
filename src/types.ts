@@ -82,7 +82,7 @@ export interface Backend {
     envs: Env[],
     onProgress: (done: number, total: number, env: string) => void,
   ): Promise<ScanResult>
-  transfer(asset: Asset, to: Person, opts: TransferOptions): Promise<void>
+  transfer(asset: Asset, to: Person, opts: TransferOptions): Promise<void | string>
   /** Make `to` a member (Dataverse user) of an environment WITHOUT assigning security roles. Returns a short status. */
   prepareOwner?(envId: string, to: Person): Promise<string>
   /** true = the user is a member of the environment, false = definitely not, null = cannot tell from here. */
