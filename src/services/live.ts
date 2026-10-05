@@ -230,18 +230,24 @@ const call = async (o: Op, pathValues: string[] = [], body?: unknown, query: Rec
 }
 
 /** Follow `nextLink` / skiptoken paging when the operation exposes a skiptoken parameter (bounded). */
-async function callAll(o: Op, pathValues: string[], maxPages = 10, maxItems = 20000): Promise<{ items: any[]; truncated: boolean }> {
-  const tokenParam = o.params.find((p) => p.in === 'query' && /skiptoken/i.test(p.name))?.name
+async function callAll(o: Op, pathValues: string[], maxPages = 25, maxItems = 20000): Promise<{ items: any[]; truncated: boolean }> {
+  const declared = o.params.find((p) => p.in === 'query' && /skiptoken/i.test(p.name))?.name
+  const tokenParam = declared ?? '$skiptoken'           // the continuation parameter is sometimes not declared in the connector schema: try it anyway
   const items: any[] = []
+  const seen = new Set<string>()
   let token: string | undefined
   for (let page = 0; page < maxPages; page++) {
-    const d = await callRaw(o, pathValues, undefined, token && tokenParam ? { [tokenParam]: token } : {})
-    items.push(...asList(d))
+    const d = await callRaw(o, pathValues, undefined, declared && token ? { [tokenParam]: token } : {}, !declared && token ? { [tokenParam]: token } : {})
+    const got = asList(d)
+    let fresh = 0
+    for (const x of got) { const id = String(x?.name ?? x?.id ?? JSON.stringify(x).slice(0, 80)); if (!seen.has(id)) { seen.add(id); items.push(x); fresh++ } }
     const link: string | undefined = d?.nextLink ?? d?.['@odata.nextLink']
     const m = link ? /[?&]\$?skiptoken=([^&]+)/i.exec(link) : null
     token = m ? decodeURIComponent(m[1]) : undefined
-    if (!token || !tokenParam) return { items, truncated: !!link && !tokenParam }
+    if (!link) return { items, truncated: false }
+    if (!token || !fresh) { log(`paging stopped on ${o.op}: ${!token ? 'no continuation token in nextLink' : 'page returned nothing new'}`); return { items, truncated: true } }
     if (items.length >= maxItems) return { items, truncated: true }
+    log(`paging ${o.op}: page ${page + 2} (${items.length} so far)`)
     await tick()
   }
   return { items, truncated: true }
@@ -568,10 +574,31 @@ export const liveBackend: Backend = {
           }
           note(env.name, 'flow', 'info', `${op.op}: ${total} flow(s) listed, ${mine} owned by user (via ${how})${movedAway ? `; ${movedAway} flow(s) created by the user are no longer owned by them (already transferred)` : ''}`)
           flowsDone = true
+          if (total === 0 && op !== flowOps[flowOps.length - 1]) { flowsDone = false; continue }   // empty answer: another list operation may know more
           break
         } catch (e) { note(env.name, 'flow', 'warn', `${op.op} failed: ${(e as Error).message.slice(0, 250)}`) }
       }
       if (flowOps.length && !flowsDone) note(env.name, 'flow', 'error', 'All flow list operations failed in this environment (are you an admin there?).')
+
+      // ---- solution-aware cloud flows: Dataverse `workflow` rows (category 5) owned by the user, in case the admin API list missed them ----
+      try {
+        const dvq = await dvFor(env.id)
+        if (dvq) {
+          const su = await dvq('systemusers', `azureactivedirectoryobjectid eq ${user.id}`, ['systemuserid'], 1)
+          const sid = su[0]?.systemuserid
+          if (sid) {
+            const wf = await dvq('workflows', `category eq 5 and _ownerid_value eq ${sid}`, ['workflowid', 'name', 'statecode', 'createdon', 'modifiedon'], 500)
+            let added = 0
+            for (const w of wf) {
+              const key = `flow:${env.id}:${String(w.workflowid).toLowerCase()}`
+              if (out.some((o) => o.kind === 'flow' && o.key.toLowerCase() === key)) continue
+              out.push({ key, id: String(w.workflowid).toLowerCase(), kind: 'flow', name: w.name ?? w.workflowid, envId: env.id, envName: env.name, ownerId: user.id, ownerName: user.name, ownerEmail: user.email, state: w.statecode === 1 ? 'Started' : 'Stopped', createdTime: w.createdon, modifiedTime: w.modifiedon, inSolution: true, connections: 0 })
+              added++
+            }
+            note(env.name, 'flow', 'info', `Dataverse check: ${wf.length} cloud flow(s) owned by the user in Dataverse${added ? `, ${added} added that the flow list had missed` : ''}`)
+          }
+        }
+      } catch (e) { note(env.name, 'flow', 'info', `Dataverse flow check skipped: ${(e as Error).message.slice(0, 160)}`) }
 
       // ---- Copilot Studio agents: per-environment Dataverse fallback (only if the inventory was unavailable) ----
       await tick()
@@ -626,7 +653,10 @@ export const liveBackend: Backend = {
     if (agentsViaInventory) {
       let confirmed = 0, removed = 0, added = 0, unchecked = 0
       for (const env of envs) {
-        const here = out.filter((a) => a.kind === 'agent' && a.orgHost === 'inventory' && a.envId.toLowerCase() === env.id.toLowerCase())
+        const hereAll = out.filter((a) => a.kind === 'agent' && a.orgHost === 'inventory' && a.envId.toLowerCase() === env.id.toLowerCase())
+        // Only classic Copilot Studio agents live in the Dataverse bot table; Agent Builder and other kinds are kept as the inventory reports them.
+        const here = hereAll.filter((a) => !a.category || a.category === 'agent')
+        hereAll.filter((a) => !here.includes(a)).forEach((a) => { a.meta = { ...(a.meta ?? {}), live: 'inventory-only' } })
         const dv = await dvFor(env.id)
         if (!dv) { unchecked += here.length; here.forEach((a) => { a.meta = { ...(a.meta ?? {}), live: 'unverified' } }); continue }
         try {
@@ -804,7 +834,7 @@ export const liveBackend: Backend = {
     }
     if (asset.kind === 'agent') {
       // Never send tool / MCP / Agent Builder / CLI inventory rows to the Copilot Studio reassign API.
-      if (asset.category && asset.category !== 'agent') throw new Error(`Not attempted: "${asset.name}" is a ${asset.category}, not a Copilot Studio agent – nothing was changed.`)
+      if (asset.category && asset.category !== 'agent' && asset.category !== 'agentbuilder') throw new Error(`Not attempted: "${asset.name}" is a ${asset.category}, not a Copilot Studio agent – nothing was changed.`)
       // Pre-flight: the inventory can list deleted agents - make sure it still exists where Dataverse is reachable.
       const dv = await dvFor(asset.envId).catch(() => null)
       if (dv) {

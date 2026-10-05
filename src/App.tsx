@@ -139,7 +139,7 @@ export default function App() {
     const p = await backend.resolveUser(em.trim())
     const scope = envScope.length ? envs.filter((e) => envScope.includes(e.id)) : envs
     const { assets: found } = await backend.listAssets(p, scope, () => {})
-    return { user: p, assets: found.filter((a) => a.kind !== 'agent' || !a.category || a.category === 'agent') }
+    return { user: p, assets: found.filter((a) => a.kind !== 'agent' || !a.category || a.category === 'agent' || a.category === 'agentbuilder') }
   }, [backend, envs, envScope])
 
   /** Run one saved report schedule now: scan its users, build the report, mail it. */
@@ -173,11 +173,11 @@ export default function App() {
   }, [envs.length])
 
   // Only real Copilot Studio agents by default; tools / MCP / Agent Builder / CLI items sit behind a toggle.
-  const assets = useMemo(() => allAssets.filter((a) => showOthers || a.kind !== 'agent' || !a.category || a.category === 'agent'), [allAssets, showOthers])
+  const assets = useMemo(() => allAssets.filter((a) => showOthers || a.kind !== 'agent' || !a.category || a.category === 'agent' || a.category === 'agentbuilder'), [allAssets, showOthers])
   const hiddenCount = allAssets.length - assets.length
   const hiddenByCat = useMemo(() => {
     const m: Record<string, number> = {}
-    allAssets.filter((a) => a.kind === 'agent' && a.category && a.category !== 'agent').forEach((a) => { m[a.category!] = (m[a.category!] ?? 0) + 1 })
+    allAssets.filter((a) => a.kind === 'agent' && a.category && a.category !== 'agent' && a.category !== 'agentbuilder').forEach((a) => { m[a.category!] = (m[a.category!] ?? 0) + 1 })
     return m
   }, [allAssets])
   const counts = useMemo(() => ({ app: assets.filter((a) => a.kind === 'app').length, flow: assets.filter((a) => a.kind === 'flow').length, agent: assets.filter((a) => a.kind === 'agent').length }), [assets])

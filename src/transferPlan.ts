@@ -80,7 +80,7 @@ export async function runTransfer(args: TransferArgs): Promise<TransferOutcome> 
   // 1. category guard (applies to dry runs too)
   const blocked = new Map<string, string>()
   for (const a of agents) {
-    if (a.category && a.category !== 'agent') {
+    if (a.category && a.category !== 'agent' && a.category !== 'agentbuilder') {
       blocked.set(a.key, `Not attempted: this inventory item is a "${a.category}", not a Copilot Studio agent. The Copilot Studio reassign API is only for real agents – nothing was changed.`)
     }
   }
