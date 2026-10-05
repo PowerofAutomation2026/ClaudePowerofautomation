@@ -233,11 +233,17 @@ const call = async (o: Op, pathValues: string[] = [], body?: unknown, query: Rec
 async function callAll(o: Op, pathValues: string[], maxPages = 25, maxItems = 20000): Promise<{ items: any[]; truncated: boolean }> {
   const declared = o.params.find((p) => p.in === 'query' && /skiptoken/i.test(p.name))?.name
   const tokenParam = declared ?? '$skiptoken'           // the continuation parameter is sometimes not declared in the connector schema: try it anyway
+  const topName = o.params.find((p) => p.in === 'query' && /^\$?top$/i.test(p.name))?.name   // the admin list operations expose $top but no continuation token: ask for big pages
+  let useTop = !!topName
   const items: any[] = []
   const seen = new Set<string>()
   let token: string | undefined
   for (let page = 0; page < maxPages; page++) {
-    const d = await callRaw(o, pathValues, undefined, declared && token ? { [tokenParam]: token } : {}, !declared && token ? { [tokenParam]: token } : {})
+    const q: Record<string, unknown> = declared && token ? { [tokenParam]: token } : {}
+    if (useTop && !token) q[topName!] = 250
+    let d: any
+    try { d = await callRaw(o, pathValues, undefined, q, !declared && token ? { [tokenParam]: token } : {}) }
+    catch (e) { if (useTop && !token) { useTop = false; log(`${o.op}: $top rejected (${(e as Error).message.slice(0, 80)}) - retrying without it`); d = await callRaw(o, pathValues, undefined, {}, {}) } else throw e }
     const got = asList(d)
     let fresh = 0
     for (const x of got) { const id = String(x?.name ?? x?.id ?? JSON.stringify(x).slice(0, 80)); if (!seen.has(id)) { seen.add(id); items.push(x); fresh++ } }
@@ -310,12 +316,12 @@ function classifyAgent(r: any): { category: AgentCategory; meta: Record<string, 
   return { category, meta }
 }
 
-async function inventoryAgents(op: Op, ownerAad: string | null): Promise<{ rows: any[]; total?: number; truncated: boolean }> {
+async function inventoryAgents(op: Op, ownerAad: string | null, type = 'microsoft.copilotstudio/agents'): Promise<{ rows: any[]; total?: number; truncated: boolean }> {
   const rows: any[] = []
   let token: string | undefined
   let total: number | undefined
   for (let page = 0; page < 20; page++) {
-    const clauses: any[] = [{ $type: 'where', FieldName: 'type', Operator: '==', Values: ["'microsoft.copilotstudio/agents'"] }]
+    const clauses: any[] = [{ $type: 'where', FieldName: 'type', Operator: '==', Values: [`'${type}'`] }]
     if (ownerAad) clauses.push({ $type: 'where', FieldName: 'properties.ownerId', Operator: '==', Values: [`'${ownerAad}'`] })
     const body = { TableName: 'PowerPlatformResources', Clauses: clauses, Options: { Top: 1000, ...(token ? { SkipToken: token } : {}) } }
     const d = await callRaw(op, [], body)
@@ -648,6 +654,25 @@ export const liveBackend: Backend = {
 
       onProgress(++done, envs.length, env.name)
     }
+    // ---- code apps: the inventory knows them as their own type, the canvas-app admin list may not return them ----
+    if (invOp) {
+      try {
+        const inScope = new Set(envs.map((e) => e.id.toLowerCase()))
+        const envName = new Map(envs.map((e) => [e.id.toLowerCase(), e.name]))
+        const res = await inventoryAgents(invOp, user.id, 'microsoft.powerapps/codeapps')
+        let added = 0
+        for (const r of res.rows) {
+          const eid = String(invProp(r, 'environmentId') ?? '')
+          const id = String(r.name ?? '')
+          if (!id || !inScope.has(eid.toLowerCase()) || String(invProp(r, 'ownerId') ?? '').toLowerCase() !== user.id.toLowerCase()) continue
+          if (out.some((o) => o.kind === 'app' && o.id.toLowerCase() === id.toLowerCase())) continue
+          out.push({ key: `app:${eid}:${id}`, id, kind: 'app', name: invProp(r, 'displayName') ?? id, envId: eid, envName: envName.get(eid.toLowerCase()) ?? eid, ownerId: user.id, ownerName: user.name, ownerEmail: user.email, state: 'Started', createdTime: invProp(r, 'createdAt'), modifiedTime: invProp(r, 'modifiedAt') ?? invProp(r, 'lastModifiedAt'), meta: { appType: 'Code app' } })
+          added++
+        }
+        note('(all)', 'app', 'info', `Inventory (code apps): ${added} code app(s) added that the app list did not return`)
+      } catch (e) { note('(all)', 'app', 'info', `code app inventory skipped: ${(e as Error).message.slice(0, 160)}`) }
+    }
+
     // ---- Live reconcile: the tenant inventory lags both ways (deleted / transferred agents linger, new ones are missing).
     //      Dataverse of each environment is the source of truth wherever this app can reach it. ----
     if (agentsViaInventory) {

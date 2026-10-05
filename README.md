@@ -222,3 +222,10 @@ Use a scheduled Power Automate cloud flow owned by an admin or service account (
 2. Add **Power Apps for Admins - Get Apps as Admin** (per environment), **Power Automate Management - List Flows as Admin**, filter by the user's id, and **Create CSV table**.
 3. Add **Office 365 Outlook - Send an email (V2)** with the CSV as attachment.
 4. Put the flow in a solution with connection references so it can be reassigned later (this app can do that).
+
+## v1.10.2 – more complete scans (apps, flows, all kinds of agents) in every environment
+Based on the connector schemas and Microsoft's inventory docs:
+- **Cloud flows**: the admin flow-list operations expose `$top` but no continuation parameter, so the scan now asks for pages of 250 (falls back if rejected) and tries `$skiptoken` anyway, stopping safely when a page adds nothing. If the first list operation returns nothing the next one is tried. The V2 list has no creator, so owners are looked up per flow (up to 400 per environment). In environments with Dataverse, `workflow` rows (category 5) owned by the user are cross-checked and any solution flow the list missed is added. (Flows in "My flows" exist only in the flow service, so only the admin API can see them.)
+- **Apps**: canvas apps from the admin list plus **code apps** found through the tenant inventory (tagged "Code app").
+- **Agents**: Copilot Studio agents, GitHub-Copilot-powered agents and **Agent Builder** agents are shown by default (tools / MCP / other stay behind the toggle). Only classic Copilot Studio agents are checked against the Dataverse `bot` table; Agent Builder agents are shown as the inventory reports them.
+- The Scan report ends with "Per environment (apps / flows / agents)" so you can compare each environment with its portal.
