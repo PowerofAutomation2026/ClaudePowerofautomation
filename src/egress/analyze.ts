@@ -3,7 +3,7 @@
  * No network. The definition is the Logic Apps workflow JSON returned by "Get Flow as Admin" (includeFlowDefinition).
  */
 export type Sev = 'High' | 'Medium' | 'Low' | 'Info'
-export interface FlowDef { key: string; id: string; name: string; envId: string; envName: string; state?: string; ownerId?: string; modified?: string; definition: any }
+export interface FlowDef { key: string; id: string; name: string; envId: string; envName: string; state?: string; ownerId?: string; modified?: string; definition: any; agentFlow?: boolean; via?: 'admin' | 'dataverse' }
 export interface HttpCall { flowKey: string; action: string; method: string; uri: string; host: string | null; scheme: string | null; dynamic: boolean; secrets: string[]; kind: 'http' | 'webhook' }
 export interface MailCall { flowKey: string; action: string; recipients: string[] }
 export interface Extract { http: HttpCall[]; mail: MailCall[]; triggerHttp: boolean; actions: number }

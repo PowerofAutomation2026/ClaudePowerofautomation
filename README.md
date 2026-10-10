@@ -285,3 +285,22 @@ It reads every flow definition (*Get Flow as Admin*, with the definition) and wa
 Tabs: **Findings** and **Destinations** (every host with flow count, environments, class), CSV exports, and **⏹ Stop flow** (turns the trigger off, read-back verified; nothing deleted; needs the *Stop flow as admin* operation, otherwise the button is disabled and the report says so).
 Code: `src/egress/analyze.ts` (pure, tested on nested scope/if/else definitions), `live.ts`, `demo.ts`, `EgressView.tsx`.
 **Limits:** only literal values are analysed (secrets in environment variables / Key Vault are correctly not flagged); custom connectors, child flows and Dataverse actions are not followed; flows whose definition cannot be read are reported as unknown, not safe; `*.sharepoint.com` / Microsoft domains are treated as Microsoft services (another tenant's SharePoint looks the same); `azurewebsites.net` and blob storage are treated as external. Reads are capped at 400 definitions per environment (started flows first). **Unverified live:** the query parameter that makes *Get Flow as Admin* return the definition is detected from the connector schema – if the Scan report says "returned NO definition", send me 🩺.
+
+## v1.15.0 – 🤖 Agent Guard (new) + agent flows in Egress Radar
+**Why:** Microsoft's own write-up *"Detecting and mitigating common agent misconfigurations"* (Copilot Studio agent security top-10) and several practitioner posts call out the same risks – agents with **no authentication**, tools running with the **maker's credentials**, over-broad access – but Microsoft's at-scale detection route is Defender Advanced Hunting (`AIAgentsInfo`). Agent Guard gives Power Platform admins a self-service view with no Defender and no app registration.
+**Agent Guard** (header button 🤖, Ctrl K) reads every agent from Dataverse (`bot` + `botcomponent`; this app's own environment natively, others via the Dataverse connector):
+
+| Finding | Severity |
+|---|---|
+| No authentication **and** a tool runs as the maker ("anyone with the link acts as the maker") | High |
+| No authentication | High |
+| HTTP request node to a capture/paste/tunnel service, raw IP, plain HTTP, or with a secret typed into the topic | High |
+| Tools run with the maker's credentials | Medium |
+| Grounded on a public website (untrusted input / prompt injection) | Medium |
+| HTTP request node to a host not on the allow-list (allow-list shared with Egress Radar), destination computed at run time | Medium |
+| Open to every signed-in user | Low |
+| Settings / topics unreadable → *unknown, not safe* | Info |
+
+**Agent flows & solution flows** are now analysed by 📡 Egress Radar too: they live in Dataverse (`workflow`, category 5, definition in `clientdata`), are tagged **agent flow**, and also fill the gap where *Get Flow as Admin* returns no definition.
+**Unverified live – treat the first run as a pilot:** the Dataverse column names `authenticationmode` / `accesscontrolpolicy` and the numeric code→meaning map (None = 1, Integrated = 2 …; the raw value is shown next to every verdict and the Dataverse formatted value is preferred when returned); the YAML patterns used to find HTTP request nodes (`kind: HttpRequestAction`), maker-mode tools (`mode: Maker`) and public sites (`PublicSiteSearchSource`); `modernflowtype = 1` for agent flows. If a column is rejected the agent is shown as *unknown*, never as safe. Not read yet: who an agent is shared with, published channels, MCP servers, Entra group membership.
+Code: `src/agents/` (`analyze.ts` pure + tested, `live.ts`, `demo.ts`, `AgentView.tsx`), `src/nav.tsx` (shared navigation across the five modules).

@@ -83,6 +83,7 @@ export default function EgressView({ demo, setDemo, theme, setTheme, go }: { dem
       {res && data && !busy && (<>
         <div className="stats">
           <div className="card stat"><div className="n">{data.flows.length}</div><div className="l">Flows analysed</div></div>
+          <div className="card stat"><div className="n">{data.flows.filter((f) => f.agentFlow).length}</div><div className="l">Agent flows</div></div>
           <div className="card stat"><div className="n">{res.withHttp}</div><div className="l">Flows with HTTP calls</div></div>
           <div className="card stat"><div className="n">{res.dests.length}</div><div className="l">Distinct destinations</div></div>
           {(['High', 'Medium', 'Info'] as Sev[]).map((s) => <div key={s} className="card stat" style={{ cursor: 'pointer', outline: sev === s ? '2px solid var(--accent)' : undefined }} onClick={() => { setTab('findings'); setSev(sev === s ? 'all' : s) }}><div className="n">{count(s)}</div><div className="l">{s}</div></div>)}
@@ -106,7 +107,7 @@ export default function EgressView({ demo, setDemo, theme, setTheme, go }: { dem
           <table><thead><tr><th>Severity</th><th>Flow</th><th>Environment</th><th>Finding</th><th /></tr></thead>
             <tbody>{visible.map((f) => { const fl = flowByKey.get(f.flowKey); return (
               <tr key={f.id}><td><span className={`pill ${SEV_PILL[f.severity]}`}>{f.severity}</span></td>
-                <td><div className="name">⚡ {f.name}</div><div className="id">{fl?.state ?? ''}</div></td><td>{f.envName}</td>
+                <td><div className="name">{fl?.agentFlow ? '🤖' : '⚡'} {f.name}{fl?.agentFlow && <span className="pill warn" style={{ marginLeft: 6 }}>agent flow</span>}</div><div className="id">{fl?.state ?? ''}</div></td><td>{f.envName}</td>
                 <td><div className="name">{f.title}</div><div className="id" style={{ whiteSpace: 'pre-wrap' }}>{f.detail}{msg[f.flowKey] && <div style={{ color: 'var(--accent2)' }}>{msg[f.flowKey]}</div>}</div></td>
                 <td><div className="col">{f.rule === 'NEW_EXTERNAL' && f.host && <button className="btn sm" onClick={() => setAllow((a) => [...new Set([...a, f.host!])])}>✓ Allow {f.host}</button>}
                   {f.severity === 'High' && fl && /^started$/i.test(fl.state ?? '') && <button className="btn sm danger" disabled={!demo && !stopBound()} title={!demo && !stopBound() ? 'No "stop flow as admin" operation bound in this build (see 🩺)' : 'Turn the flow off (nothing is deleted)'} onClick={() => void stop(fl)}>⏹ Stop flow</button>}</div></td></tr>) })}</tbody></table>)}</div>}

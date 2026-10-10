@@ -13,6 +13,8 @@ export const DEMO_FLOWS: FlowDef[] = [
   flow('e5', 'Teams alert on failure', 'env-dev', 'Development', { Hook: http('https://contoso.webhook.office.com/webhookb2/abc') , Slack: http('https://hooks.slack.com/services/T000/B000/XXXX') }),
   flow('e6', 'Archive old files', 'env-dev', 'Development', { Call: http('https://contoso.sharepoint.com/_api/web/lists') }),
   flow('e7', 'Weekly digest email', 'env-uat', 'UAT', { Mail: { type: 'OpenApiConnection', inputs: { host: { operationId: 'SendEmailV2' }, parameters: { 'emailMessage/To': 'team@contoso.com' } } } }),
+  { ...flow('af1', 'Agent flow: refund customer', 'env-prod', 'Production', { Call: http('https://pay.refunds-demo.io/api/refund', { headers: { Authorization: 'Bearer sk_live_abc' } }) }, { manual: { type: 'Request', kind: 'Skills' } }), agentFlow: true, via: 'dataverse' },
+  { ...flow('af2', 'Agent flow: log chat to partner', 'env-uat', 'UAT', { Hook: http('https://hooks.zapier.com/hooks/catch/1/abc') }, { manual: { type: 'Request', kind: 'Skills' } }), agentFlow: true, via: 'dataverse' },
 ]
 
 export async function demoScan(envs: Env[], onProgress: (d: number, t: number, l: string) => void): Promise<{ flows: FlowDef[]; notes: { env: string; level: 'info' | 'warn' | 'error'; text: string }[] }> {
