@@ -412,6 +412,33 @@ async function dvFor(envId: string): Promise<DvQuery | null> {
   return viaConnector
 }
 
+/** Set the Dataverse owner of a `workflow` row (solution-aware / agent flows are owned there). Connector route only. */
+async function dvAssignWorkflow(envId: string, workflowId: string, newOwnerAad: string): Promise<void> {
+  const host = orgHosts.get(envId.toLowerCase())
+  const dv = await dvFor(envId)
+  if (!dv || !host) throw new Error('no Dataverse route for this environment')
+  const su = await dv('systemusers', `azureactivedirectoryobjectid eq ${newOwnerAad}`, ['systemuserid'], 1)
+  const sid = su[0]?.systemuserid
+  if (!sid) throw new Error('the new owner has no Dataverse user record in this environment')
+  const ops = allOps().filter((o) => /commondataservice/i.test(o.ds))
+  const op = ops.find((o) => o.norm === 'updaterecordwithorganization') ?? ops.find((o) => o.norm === 'updaterecord') ?? ops.find((o) => o.method === 'PATCH')
+  if (!op) throw new Error('the Dataverse connector has no update-row operation in this build')
+  const body = { 'ownerid@odata.bind': `/systemusers(${sid})` }
+  let lastErr: unknown
+  for (const org of [`https://${host}`, host]) {
+    const extra: Record<string, unknown> = {}
+    for (const p of op.params) {
+      const n = p.name.toLowerCase()
+      if (n === 'accept') extra[p.name] = 'application/json'
+      else if (/dataset|organi|environment|instance|^org/.test(n)) extra[p.name] = org
+      else if (/table|entity/.test(n)) extra[p.name] = 'workflows'
+      else if (p.in === 'path' && /record|^id$|item/.test(n)) extra[p.name] = workflowId
+    }
+    try { await callRaw(op, [], body, {}, extra); log(`Dataverse assign workflow ${workflowId} -> ${sid} OK`); return } catch (e) { lastErr = e }
+  }
+  throw lastErr
+}
+
 export const liveBackend: Backend = {
   label: 'Live',
 
@@ -654,6 +681,30 @@ export const liveBackend: Backend = {
 
       onProgress(++done, envs.length, env.name)
     }
+    // ---- agent flows and "Workflows" (Copilot Studio / M365 workflow agent flows): own inventory types, also cloud flows underneath ----
+    if (invOp) {
+      const kinds: [string, string][] = [['microsoft.powerautomate/agentflows', 'Agent flow'], ['microsoft.powerautomate/m365agentflows', 'Workflow']]
+      const inScope = new Set(envs.map((e) => e.id.toLowerCase()))
+      const envName = new Map(envs.map((e) => [e.id.toLowerCase(), e.name]))
+      for (const [type, label] of kinds) {
+        try {
+          const res = await inventoryAgents(invOp, user.id, type)
+          let added = 0, tagged = 0
+          for (const r of res.rows) {
+            const eid = String(invProp(r, 'environmentId') ?? '')
+            const id = String(r.name ?? '')
+            const wf = String(invProp(r, 'workflowEntityId') ?? '')
+            if (!id || !inScope.has(eid.toLowerCase()) || String(invProp(r, 'ownerId') ?? '').toLowerCase() !== user.id.toLowerCase()) continue
+            const same = out.find((o) => o.kind === 'flow' && o.envId.toLowerCase() === eid.toLowerCase() && (o.id.toLowerCase() === id.toLowerCase() || (wf && o.id.toLowerCase() === wf.toLowerCase())))
+            if (same) { same.meta = { ...(same.meta ?? {}), flowType: label, workflowEntityId: wf || same.id }; tagged++; continue }
+            out.push({ key: `flow:${eid}:${id}`, id, kind: 'flow', name: invProp(r, 'displayName') ?? id, envId: eid, envName: envName.get(eid.toLowerCase()) ?? eid, ownerId: user.id, ownerName: user.name, ownerEmail: user.email, state: 'Started', createdTime: invProp(r, 'createdAt'), modifiedTime: invProp(r, 'modifiedAt') ?? invProp(r, 'lastModifiedAt'), inSolution: true, connections: 0, meta: { flowType: label, workflowEntityId: wf || id } })
+            added++
+          }
+          note('(all)', 'flow', 'info', `Inventory (${label.toLowerCase()}s): ${res.rows.length} in the tenant, ${added} added for this user, ${tagged} already in the flow list (tagged)`)
+        } catch (e) { note('(all)', 'flow', 'info', `${label} inventory skipped: ${(e as Error).message.slice(0, 160)}`) }
+      }
+    }
+
     // ---- code apps: the inventory knows them as their own type, the canvas-app admin list may not return them ----
     if (invOp) {
       try {
@@ -810,10 +861,26 @@ export const liveBackend: Backend = {
       }
       if (asset.kind === 'flow') {
         const op = OPS.flowOwners()
-        if (!op) return null
-        const roles = asList(await call(op, [asset.envId, asset.id]))
-        if (!roles.length) return null
-        return roles.some((r) => (r.properties?.principal?.id ?? r.principal?.id) === to.id && /^(owner|canedit)$/i.test(r.properties?.roleName ?? r.roleName ?? ''))
+        let viaRoles: boolean | null = null
+        if (op) {
+          const roles = asList(await call(op, [asset.envId, asset.id]).catch(() => []))
+          if (roles.length) viaRoles = roles.some((r) => (r.properties?.principal?.id ?? r.principal?.id) === to.id && /^(owner|canedit)$/i.test(r.properties?.roleName ?? r.roleName ?? ''))
+        }
+        let viaDv: boolean | null = null
+        if (asset.inSolution || asset.meta?.flowType) {
+          try {
+            const dv = await dvFor(asset.envId)
+            if (dv) {
+              const su = await dv('systemusers', `azureactivedirectoryobjectid eq ${to.id}`, ['systemuserid'], 1)
+              const wf = await dv('workflows', `workflowid eq ${String(asset.meta?.workflowEntityId ?? asset.id)}`, ['workflowid', '_ownerid_value'], 1)
+              if (wf[0] && su[0]?.systemuserid) viaDv = String(wf[0]._ownerid_value ?? '').toLowerCase() === String(su[0].systemuserid).toLowerCase()
+              log(`read-back Dataverse workflow ${asset.id}: owner ${wf[0]?._ownerid_value ?? 'NOT FOUND'}`)
+            }
+          } catch { /* keep null */ }
+        }
+        if (viaRoles === true || viaDv === true) return true
+        if (viaRoles === false || viaDv === false) return false
+        return null
       }
       // agent: authoritative Dataverse read (this app's own environment or via the Dataverse connector)
       const dv = await dvFor(asset.envId)
@@ -887,7 +954,20 @@ export const liveBackend: Backend = {
       throw new Error('Not attempted: neither the Power Platform for Admins V2 reassign operation nor a usable Dataverse path is available for this agent.')
     }
     // Cloud flows: the API only accepts CanEdit / CanViewWithShare / CanView. "Owner" = a CanEdit co-owner; the creator stays recorded as creator.
-    await call(need('flowOwner'), [asset.envId, asset.id], { put: [{ properties: { principal: { id: to.id, type: 'User' }, roleName: 'CanEdit' } }] })
+    let apiErr: Error | null = null
+    try { await call(need('flowOwner'), [asset.envId, asset.id], { put: [{ properties: { principal: { id: to.id, type: 'User' }, roleName: 'CanEdit' } }] }) }
+    catch (e) { apiErr = e as Error; log(`flow "${asset.name}": co-owner call failed - ${apiErr.message.slice(0, 200)}`) }
+    // Solution-aware flows, agent flows and workflow agent flows are also OWNED in Dataverse (workflow row): move that owner too.
+    const dvBacked = !!asset.inSolution || !!asset.meta?.flowType
+    let dvNote = ''
+    if (dvBacked) {
+      try { await dvAssignWorkflow(asset.envId, String(asset.meta?.workflowEntityId ?? asset.id), to.id); dvNote = 'Dataverse owner of the flow set to the new owner.' }
+      catch (e) { dvNote = `Dataverse owner not changed (${(e as Error).message.slice(0, 140)}).`; log(`flow "${asset.name}": ${dvNote}`) }
+    }
+    if (apiErr) {
+      if (dvNote.startsWith('Dataverse owner of')) return `Flow API refused (${apiErr.message.slice(0, 140)}) but ${dvNote}`
+      throw apiErr
+    }
     if (opts.mode === 'replace' && opts.removeOldOwner) {
       try {
         // The API deletes by ROLE id (from the owners list), not by the user's object id. The new owner was added first so the flow is never left without an owner.
@@ -900,9 +980,10 @@ export const liveBackend: Backend = {
       }
       catch (e) {
         log(`flow "${asset.name}": removing the previous owner failed - ${(e as Error).message.slice(0, 200)}`)
-        return `${to.email} is now an owner (co-owner). The previous owner could not be removed: ${(e as Error).message.slice(0, 160)}`
+        return `${to.email} is now an owner (co-owner). The previous owner could not be removed: ${(e as Error).message.slice(0, 160)} ${dvNote}`.trim()
       }
     }
+    return dvNote || undefined
   },
 
   async diagnostics() {
