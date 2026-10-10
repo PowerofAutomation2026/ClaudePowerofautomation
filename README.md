@@ -266,3 +266,22 @@ Chains continue only through *control-plane* connectors (Power Platform / Power 
 Why it's different: Microsoft Security Hub, CoE Kit, Rencore and Syskit list ownership/sharing; none computes transitive credential reachability. Closest is SpecterOps BloodHound's Entra-agent preview (enterprise product, agent-centred, needs collectors + a Graph app registration). This runs in your tenant on your admin's connections.
 Code: `src/blast/graph.ts` (pure engine, unit-testable), `src/blast/BlastView.tsx`; the scan (`src/exposure/live.ts`) now also reads each flow's/app's connection references (capped 300 per environment).
 **Limits / unverified:** group membership, Entra roles, sign-in activity and the real permissions a credential has at the data source are unknown (reach = upper bound, never "safe"); the per-flow *Get flow as admin* and per-app read must be bound (🩺 on the Exposure Auditor lists them); solution flows may reference connection *references* rather than connections (those edges are missing until the Dataverse join is added). Defensive use only: audit, offboarding, least privilege.
+
+## v1.14.0 – 📡 Egress Radar (new): where does every flow send your data?
+Header button **📡 Egress Radar** (or Ctrl K); the four modules are linked by a shared navigation bar.
+**Why:** the same gap appears throughout Microsoft's own docs and practitioner write-ups – an admin can see *that* a flow makes an HTTP call but not *where it goes*; DLP cannot catch HTTP actions / custom connectors; Microsoft's published script (`Get-AdminFlowWithHttpAction`) lists flows with HTTP actions but not their destinations. No built-in end-to-end destination report was found.
+It reads every flow definition (*Get Flow as Admin*, with the definition) and walks all actions (scopes, conditions, loops, switches) to list **every destination host**:
+
+| Finding | Severity |
+|---|---|
+| Sends to a capture / paste / tunnel service (webhook.site, requestbin, pipedream, ngrok, pastebin, Discord/Telegram hooks, transfer.sh …) | High |
+| Calls a raw IP address / plain `http://` | High |
+| **Secret typed into the flow** (literal API-key / Authorization header, Basic-auth password, OAuth secret, token in the URL) | High |
+| Destination computed at run time (expression) | Medium |
+| Host not on your allow-list (one-click **Allow**, kept in the browser) | Medium |
+| Always emails fixed external recipients (set "your email domains") | Medium |
+| Flow startable by HTTP request (check "who can trigger") | Info |
+
+Tabs: **Findings** and **Destinations** (every host with flow count, environments, class), CSV exports, and **⏹ Stop flow** (turns the trigger off, read-back verified; nothing deleted; needs the *Stop flow as admin* operation, otherwise the button is disabled and the report says so).
+Code: `src/egress/analyze.ts` (pure, tested on nested scope/if/else definitions), `live.ts`, `demo.ts`, `EgressView.tsx`.
+**Limits:** only literal values are analysed (secrets in environment variables / Key Vault are correctly not flagged); custom connectors, child flows and Dataverse actions are not followed; flows whose definition cannot be read are reported as unknown, not safe; `*.sharepoint.com` / Microsoft domains are treated as Microsoft services (another tenant's SharePoint looks the same); `azurewebsites.net` and blob storage are treated as external. Reads are capped at 400 definitions per environment (started flows first). **Unverified live:** the query parameter that makes *Get Flow as Admin* return the definition is detected from the connector schema – if the Scan report says "returned NO definition", send me 🩺.

@@ -7,6 +7,8 @@ import { hasConnectors, pickBackend } from './services'
 import { runTransfer } from './transferPlan'
 import ExposureView from './exposure/ExposureView'
 import BlastView from './blast/BlastView'
+import EgressView from './egress/EgressView'
+import type { View } from './nav'
 import { ago, assetRows, portalUrl, auditRows, download, explainTransferError, isPartialUpdate, powershellFor, risksFor, toCsv } from './util'
 
 const ls = {
@@ -102,7 +104,7 @@ export default function App() {
   const [audit, setAudit] = useState<AuditEntry[]>(() => ls.get('occ.audit', []))
   const [toast, setToast] = useState<string | null>(null)
   const [palette, setPalette] = useState(false)
-  const [view, setView] = useState<'owner' | 'exposure' | 'blast'>(() => ls.get('occ.view', 'owner'))
+  const [view, setView] = useState<View>(() => ls.get('occ.view', 'owner'))
   useEffect(() => { ls.set('occ.view', view) }, [view])
   const searchRef = useRef<HTMLInputElement>(null)
 
@@ -238,12 +240,14 @@ export default function App() {
     { label: 'Open history', run: () => setPanel('history') },
     { label: 'Connector diagnostics', run: () => setPanel('diag') },
     { label: 'Show operation log (real calls)', run: () => setPanel('diag') },
+    { label: 'Open Egress Radar (where flows send data)', run: () => setView('egress') },
     { label: 'Open Credential Blast-Radius Map (compromise / offboarding)', run: () => setView('blast') },
     { label: 'Open Exposure Auditor (sharing / guest / connection risk)', run: () => setView('exposure') },
   ]
 
-  if (view === 'exposure') return <ExposureView demo={demo} setDemo={setDemo} theme={theme} setTheme={setTheme} onBack={() => setView('owner')} onBlast={() => setView('blast')} />
-  if (view === 'blast') return <BlastView demo={demo} setDemo={setDemo} theme={theme} setTheme={setTheme} onBack={() => setView('owner')} onExposure={() => setView('exposure')} />
+  if (view === 'exposure') return <ExposureView demo={demo} setDemo={setDemo} theme={theme} setTheme={setTheme} go={setView} />
+  if (view === 'blast') return <BlastView demo={demo} setDemo={setDemo} theme={theme} setTheme={setTheme} go={setView} />
+  if (view === 'egress') return <EgressView demo={demo} setDemo={setDemo} theme={theme} setTheme={setTheme} go={setView} />
 
   return (
     <div className="app">
@@ -257,6 +261,7 @@ export default function App() {
         <button className="btn sm" onClick={() => setPalette(true)}>⌘ <kbd>Ctrl K</kbd></button>
         <button className="btn sm" onClick={() => setView('exposure')} title="Who can reach what: Everyone / guest shares, connection credential sharing">🔐 Exposure Auditor</button>
         <button className="btn sm" onClick={() => setView('blast')} title="If an account is compromised or leaves: which credentials can it act through?">🕸️ Blast-Radius Map</button>
+        <button className="btn sm" onClick={() => setView('egress')} title="Where does every flow send data? destinations, secrets in flows, external mail">📡 Egress Radar</button>
         <button className="btn sm" disabled={!assets.length} onClick={() => setPanel('report')}>📄 Report</button>
         <button className="btn sm" onClick={() => setPanel('schedules')}>⏰ Schedules{schedules.some((s) => s.enabled) ? ` (${schedules.filter((s) => s.enabled).length})` : ''}</button>
         <button className="btn sm" disabled={!assets.length} onClick={() => setPanel('solutions')}>📦 Solutions</button>

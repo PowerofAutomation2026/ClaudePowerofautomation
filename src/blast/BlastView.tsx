@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { pickBackend } from '../services'
+import { NavButtons, type View } from '../nav'
 import { pickExposure } from '../exposure'
 import { download, toCsv } from '../util'
 import type { Env } from '../types'
@@ -12,7 +13,7 @@ const EDGE_LABEL: Record<EdgeType, string> = { edits: 'can edit', views: 'can vi
 const SEV_PILL = { High: 'bad', Medium: 'warn', Low: 'mut', Info: 'mut' } as const
 type Mode = 'forward' | 'reverse' | 'offboard'
 
-export default function BlastView({ demo, setDemo, theme, setTheme, onBack, onExposure }: { demo: boolean; setDemo: (d: boolean) => void; theme: string; setTheme: (t: string) => void; onBack: () => void; onExposure: () => void }) {
+export default function BlastView({ demo, setDemo, theme, setTheme, go }: { demo: boolean; setDemo: (d: boolean) => void; theme: string; setTheme: (t: string) => void; go: (v: View) => void }) {
   const ex = useMemo(() => pickExposure(demo), [demo])
   const [envs, setEnvs] = useState<Env[]>([])
   const [scope, setScope] = useState('')
@@ -68,8 +69,7 @@ export default function BlastView({ demo, setDemo, theme, setTheme, onBack, onEx
         <span className={`pill ${demo ? 'warn' : 'ok'}`}>{demo ? 'DEMO DATA' : 'LIVE'}</span>
         <button className="btn sm" onClick={() => setDemo(!demo)}>{demo ? 'Go live' : 'Demo'}</button>
         <button className="btn sm" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? '☀️' : '🌙'}</button>
-        <button className="btn sm" onClick={onExposure}>🔐 Exposure Auditor</button>
-        <button className="btn sm" onClick={onBack}>← Ownership Command Center</button>
+        <NavButtons view="blast" go={go} />
       </header>
       {demo && <div className="banner" style={{ borderColor: 'var(--accent)', color: 'var(--accent2)', background: 'rgba(124,92,255,.08)' }}>Demo mode – sample tenant with a planted escalation chain. Nothing is read or changed.</div>}
 
@@ -126,7 +126,7 @@ export default function BlastView({ demo, setDemo, theme, setTheme, onBack, onEx
             <div className="item"><span className="pill warn">{off.breaks.length}</span><div><div className="name">flows / apps will stop working (they run with their credentials)</div><div className="id">{off.breaks.map((b) => `${KIND_ICON[b.kind]} ${b.label} (${b.sub})`).join(', ') || 'none'}</div></div></div>
             <div className="item"><span className="pill bad">{off.stillUsable.length}</span><div><div className="name">credential(s) others can still use, with nobody watching the identity</div><div className="id">{off.stillUsable.map((s) => `${s.who.label} → ${s.conn.label}`).join(', ') || 'none'}</div></div></div>
             <div className="item"><span className="pill warn">{off.orphaned.length}</span><div><div className="name">flow(s)/app(s) only they can edit (will be orphaned — transfer first)</div><div className="id">{off.orphaned.map((o) => o.label).join(', ') || 'none'}</div></div></div>
-            <div className="row"><button className="btn sm" onClick={onBack}>Open Ownership Command Center to transfer →</button></div>
+            <div className="row"><button className="btn sm" onClick={() => go('owner')}>Open Ownership Command Center to transfer →</button></div>
           </div>)}
         </section>
 

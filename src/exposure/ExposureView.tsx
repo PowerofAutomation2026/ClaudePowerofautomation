@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { pickBackend } from '../services'
+import { NavButtons, type View } from '../nav'
 import { download, toCsv } from '../util'
 import type { Env } from '../types'
 import { pickExposure } from '.'
@@ -11,7 +12,7 @@ type Status = { s: 'running' | 'done' | 'failed' | 'dry' | 'skipped'; msg?: stri
 const SEV_PILL: Record<Severity, string> = { High: 'bad', Medium: 'warn', Low: 'mut', Info: 'mut' }
 const KIND_ICON = { app: '📱', flow: '⚡', connection: '🔌' } as const
 
-export default function ExposureView({ demo, setDemo, theme, setTheme, onBack, onBlast }: { demo: boolean; setDemo: (d: boolean) => void; theme: string; setTheme: (t: string) => void; onBack: () => void; onBlast: () => void }) {
+export default function ExposureView({ demo, setDemo, theme, setTheme, go }: { demo: boolean; setDemo: (d: boolean) => void; theme: string; setTheme: (t: string) => void; go: (v: View) => void }) {
   const ex = useMemo(() => pickExposure(demo), [demo])
   const [envs, setEnvs] = useState<Env[]>([])
   const [scope, setScope] = useState('')
@@ -86,8 +87,7 @@ export default function ExposureView({ demo, setDemo, theme, setTheme, onBack, o
         <button className="btn sm" onClick={() => setDemo(!demo)}>{demo ? 'Go live' : 'Demo'}</button>
         <button className="btn sm" onClick={() => { setDiag(null); void ex.diagnostics().then(setDiag) }}>🩺</button>
         <button className="btn sm" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? '☀️' : '🌙'}</button>
-        <button className="btn sm" onClick={onBlast}>🕸️ Blast-Radius Map</button>
-        <button className="btn sm" onClick={onBack}>← Ownership Command Center</button>
+        <NavButtons view="exposure" go={go} />
       </header>
 
       {demo && <div className="banner" style={{ borderColor: 'var(--accent)', color: 'var(--accent2)', background: 'rgba(124,92,255,.08)' }}>Demo mode – sample tenant with planted problems, nothing is changed.</div>}
