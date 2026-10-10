@@ -1,0 +1,16 @@
+OWNERSHIP COMMAND CENTER + EXPOSURE AUDITOR  (v1.12.0)
+Power Apps code app - no Azure app registration.
+
+1. Unzip this folder anywhere (extract OVER the old folder if you already deployed, so power.config.json is kept).
+2. Double-click Deploy.cmd
+3. Paste your ENVIRONMENT ID when asked (maker portal URL: make.powerapps.com/environments/<THIS-PART>/...).
+4. Sign in as a Power Platform admin. If a connection is missing the script opens the Connections page - create it, press Enter.
+5. When it finishes, open the app link it prints (or make.powerapps.com > Apps).
+
+Inside the app:
+  - Ownership Command Center : find & transfer apps / flows / Copilot Studio agents
+  - Exposure Auditor (header button) : who can reach what - Everyone/guest shares, connection credential sharing, disabled-owner connections
+Deployed builds start in LIVE mode. Click "Scan exposure".
+
+Requirements: Power Apps premium licence for admin users, code apps enabled on the environment.
+If something is empty or "missing": open the 🩺 button, Copy diagnostics, send it back.
