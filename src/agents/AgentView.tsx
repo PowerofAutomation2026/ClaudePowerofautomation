@@ -7,6 +7,8 @@ import type { Sev } from '../egress/analyze'
 import { accessLabel, analyzeAgents, authLabel, type AgentInfo } from './analyze'
 import { demoAgents } from './demo'
 import { liveAgents } from './live'
+import PublishBar from '../publish/PublishBar'
+import { fromAgents } from '../publish/mappers'
 
 const ls = {
   get<T>(k: string, d: T): T { try { const v = localStorage.getItem(k); return v ? (JSON.parse(v) as T) : d } catch { return d } },
@@ -92,6 +94,7 @@ export default function AgentView({ demo, setDemo, theme, setTheme, go }: { demo
             <td>{!a.fieldsOk ? <span className="pill mut">unknown</span> : <span className={`pill ${f.openAccess ? 'warn' : 'ok'}`} title={`raw ${String(a.access?.raw)}`}>{accessLabel(a.access)}</span>}</td>
             <td>{a.compsOk ? (f.makerTools ? <span className="pill bad">{f.makerTools}</span> : '0') : <span className="pill mut">unknown</span>}</td>
             <td>{a.compsOk ? f.http.map((h) => h.host ?? '(dynamic)').join(', ') || '—' : '—'}</td><td>{a.compsOk ? f.publicSites.join(', ') || '—' : '—'}</td></tr>))}</tbody></table></div>}
+        <PublishBar module="agents" demo={demo} rows={fromAgents(res.findings)} />
       </>)}
     </div>
   )

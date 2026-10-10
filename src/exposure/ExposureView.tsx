@@ -4,6 +4,8 @@ import { NavButtons, type View } from '../nav'
 import { download, toCsv } from '../util'
 import type { Env } from '../types'
 import { pickExposure } from '.'
+import PublishBar from '../publish/PublishBar'
+import { fromExposure } from '../publish/mappers'
 import { evaluate, findingRows, powershellFix, score, SEV_ORDER } from './rules'
 import type { Finding, Resource, ScanOutput, Severity, Share } from './types'
 import { DEFAULT_THRESHOLDS } from './types'
@@ -148,6 +150,8 @@ export default function ExposureView({ demo, setDemo, theme, setTheme, go }: { d
               })}</tbody>
             </table>)}
         </div>
+
+        <PublishBar module="exposure" demo={demo} rows={fromExposure(findings, byKey)} />
 
         <div className="sticky">
           <b>{selected.length}</b> fixable finding(s) selected

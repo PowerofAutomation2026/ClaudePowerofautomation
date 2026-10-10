@@ -1,0 +1,9 @@
+- Show all High findings in Production.
+- What can priya.shah@contoso.com reach if her account is compromised?
+- Which flows or agents send data to webhook.site?
+- Which Copilot Studio agents have no authentication?
+- Which agents run tools with the maker's credentials?
+- Which connections belong to disabled accounts but are still used?
+- What is new since the last snapshot? (occ_firstseen in the last 7 days)
+- What was fixed this week? (occ_status = 'fixed')
+- List flows that contain secrets typed into the definition.

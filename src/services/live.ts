@@ -1021,3 +1021,12 @@ export const liveBackend: Backend = {
 /** Low-level helpers shared with the Exposure Auditor (src/exposure/live.ts). */
 export const internals = { allOps, bare, call, callRaw, callAll, mapLimit, asList, flowLists, pick, listEnvironments: () => liveBackend.listEnvironments(), userOp: () => OPS.user(), flowOwnersOp: () => OPS.flowOwners(), flowOwnerOp: () => OPS.flowOwner(), appsOp: () => OPS.apps(), appGetOp: () => OPS.appGet(), dvFor, dvAvailable: () => !!OPS.dvList() || !!nativeKey('bot') }
 export type { Op }
+
+/** Dataverse table of THIS environment that was added with `pac code add-data-source` (used by "Publish to Copilot agent"). */
+export function nativeByLogical(logical: string, entitySet: string): string | null {
+  const entries = Object.entries<any>(dataSourcesInfo).filter(([, info]) => /dataverse/i.test(String(info?.dataSourceType ?? '')) || Object.keys(info?.apis ?? {}).length === 0)
+  const short = logical.replace(/^occ_/, '')
+  const hit = entries.find(([, i]) => i?.logicalName === logical || i?.entitySetName === entitySet) ?? entries.find(([k]) => new RegExp(`occ.?${short}`, 'i').test(k))
+  return hit?.[0] ?? null
+}
+export const dataClient = () => sdk()

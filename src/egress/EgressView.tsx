@@ -6,6 +6,8 @@ import type { Env } from '../types'
 import { analyze, type FlowDef, type Sev } from './analyze'
 import { demoScan } from './demo'
 import { liveScan, stopBound, stopFlow } from './live'
+import PublishBar from '../publish/PublishBar'
+import { fromEgress } from '../publish/mappers'
 
 const ls = {
   get<T>(k: string, d: T): T { try { const v = localStorage.getItem(k); return v ? (JSON.parse(v) as T) : d } catch { return d } },
@@ -117,6 +119,8 @@ export default function EgressView({ demo, setDemo, theme, setTheme, go }: { dem
             <tr key={d.host}><td><div className="name">{d.host}</div></td><td>{d.flows.size}</td><td>{[...d.envs].join(', ')}</td>
               <td>{d.exfil ? <span className="pill bad">capture / paste / tunnel</span> : d.first ? <span className="pill ok">Microsoft service</span> : d.allowed ? <span className="pill ok">allow-listed</span> : /^(\d{1,3}\.){3}\d{1,3}$/.test(d.host) ? <span className="pill bad">raw IP</span> : <span className="pill warn">external · unreviewed</span>}</td>
               <td>{!d.first && !d.allowed && !d.exfil && <button className="btn sm" onClick={() => setAllow((a) => [...new Set([...a, d.host])])}>✓ Allow</button>}</td></tr>))}</tbody></table></div>}
+
+        <PublishBar module="egress" demo={demo} rows={fromEgress(res.findings)} />
 
         {allow.length > 0 && <section className="card" style={{ marginTop: 12 }}><b>Allow-list</b> <span className="sub">(kept in this browser)</span>
           <div className="chips">{allow.map((a) => <span key={a} className="chip" title="Remove" onClick={() => setAllow(allow.filter((x) => x !== a))}>{a} ✕</span>)}</div></section>}

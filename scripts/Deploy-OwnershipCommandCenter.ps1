@@ -205,6 +205,14 @@ foreach ($tbl in @('bot','systemuser')) {
   else { Warn "Could not add Dataverse table '$tbl' (agents will be skipped): $($o.Trim())" }
 }
 
+# Optional: the 'occ_finding' table lets the app publish its findings for a Copilot Studio agent (created by scripts/Setup-OccDataverse.ps1).
+$prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+$o = (& pac code add-data-source -a dataverse -t occ_finding 2>&1) | Out-String
+$ErrorActionPreference = $prev
+if ($LASTEXITCODE -eq 0) { Ok "Dataverse table 'occ_finding' added (Publish to Copilot agent is available)" }
+elseif ($o -match '(?i)already') { Ok "Dataverse table 'occ_finding' already added" }
+else { Warn "Table 'occ_finding' not found - 'Publish to Copilot agent' stays off. Optional: run scripts/Setup-OccDataverse.ps1, then deploy again." }
+
 # ---------- 6. build + publish ----------
 Step 'Building'
 # pac sometimes generates TypeScript that does not compile (e.g. parameters named api-version). The app does not

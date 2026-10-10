@@ -5,6 +5,8 @@ import { pickExposure } from '../exposure'
 import { download, toCsv } from '../util'
 import type { Env } from '../types'
 import type { ScanOutput } from '../exposure/types'
+import PublishBar from '../publish/PublishBar'
+import { fromBlast } from '../publish/mappers'
 import { blast, blastFindings, buildGraph, offboarding, pathTo, topUsers, traverse, type EdgeType, type GNode } from './graph'
 
 const KIND_ICON = { user: '👤', flow: '⚡', app: '📱', connection: '🔌', surface: '🗄️' } as const
@@ -138,7 +140,9 @@ export default function BlastView({ demo, setDemo, theme, setTheme, go }: { demo
               <span className={`pill ${SEV_PILL[f.severity]}`}>{f.severity}</span><div><div className="name">{f.title}</div><div className="id" style={{ whiteSpace: 'pre-wrap' }}>{f.detail}</div></div></div>))}</div>
         </section>
 
-        <section className="card">
+        <PublishBar module="blast" demo={demo} rows={fromBlast(g)} />
+
+        <section className="card" style={{ marginTop: 12 }}>
           <div className="row"><b>Scan report</b><span className="pill mut">{data.notes.length}</span><div className="spacer" /><button className="btn sm" onClick={() => setShowNotes(!showNotes)}>{showNotes ? 'Hide' : 'Show'}</button></div>
           {showNotes && <div className="col" style={{ marginTop: 10 }}>{data.notes.map((n, i) => <div key={i} className="item"><span className={`pill ${n.level === 'error' ? 'bad' : n.level === 'warn' ? 'warn' : 'mut'}`}>{n.level}</span><div><div className="name">{n.env}</div><div className="id" style={{ whiteSpace: 'pre-wrap' }}>{n.text}</div></div></div>)}</div>}
           <div className="sub" style={{ marginTop: 8 }}>Not knowable without an app registration (shown as unknown, never as safe): group membership, Entra roles, sign-in activity, what a credential is <i>actually</i> permitted to do at the data source. Reach means "can act through the stored credential", an upper bound. This tool is for defenders: audit, offboarding and least privilege.</div>
