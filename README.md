@@ -233,3 +233,25 @@ Based on the connector schemas and Microsoft's inventory docs:
 ## v1.11.0 – agent flows and Copilot Studio "Workflows"
 Copilot Studio's **Workflows** page lists "workflow agent flows" (`microsoft.powerautomate/m365agentflows`); "agent flows" are `microsoft.powerautomate/agentflows`. Both are cloud flows with a Dataverse `workflow` row (`workflowEntityId`). The scan now reads them from the tenant inventory in every environment, shows them in the **Flows** tab with an "Agent flow" / "Workflow" tag and tags matching flows already found by the flow list.
 Transfer: the new owner is added as a CanEdit co-owner through the flow API **and**, for Dataverse-backed flows (solution, agent, workflow), the Dataverse `workflow` owner is set to the new owner through the Microsoft Dataverse connector (update row). The read-back confirms through the flow owner list or the Dataverse owner, whichever shows the new owner. If one route is refused the row says which one worked.
+
+## v1.12.0 – 🔐 Exposure Auditor (cyber-security: who can reach what)
+New view (header button **🔐 Exposure Auditor**, or Ctrl K). Tenant-wide audit of *sharing exposure* across all environments, with **no app registration** and **no new connectors** (reuses Power Apps for Admins, Power Automate Management, Office 365 Users; optionally the *connections as admin* operations).
+Picked after a research pass because Microsoft only documents manual PowerShell/CoE-kit workarounds for flows shared outside an environment, and its Security Hub sharing recommendation covers apps only (Managed Environments only, active in the last 90 days only). There is no first-party report for connection-credential sharing.
+
+| Finding | Severity | How it is computed |
+|---|---|---|
+| Shared with **everyone** (app/flow) | High | permission principal is the tenant (`type=Tenant`, `tenant-…` id) |
+| Shared with a **guest / external** account | High | principal UPN contains `#EXT#` |
+| **Connection credentials shared** | High (share/edit roles) / Medium | connection role assignments other than its creator |
+| Connection owned by a **disabled/deleted** user | High | creator → Office 365 Users profile (`accountEnabled=false` or 404) |
+| **Too many editors** (> N, or any group with CanEdit) | Medium | app role assignments |
+| **Too many flow co-owners** (> 3) | Medium | flow owner roles |
+| Connection in **error** state | Low | `statuses[].status` |
+| Permissions **unreadable** / list says more shares than were read | Info | never reported as "safe" |
+
+Screens: scan with progress + per-environment Scan report (counts of successful permission reads), exposure score, severity/type filters, CSV export, **PowerShell export**, 🩺 operation binding. Remediation: select findings → **Remove selected shares** (apps and flows) with **Dry run on by default**, typed confirmation above 5 items, stop at the first failure, and a **read-back** check that the share is really gone. Connection shares are report-only.
+Code: `src/exposure/` (`rules.ts` pure rule engine, `live.ts` connector scanner, `demo.ts` sample tenant, `ExposureView.tsx`).
+
+**Limits (cannot be done without an app registration):** expanding group membership, Entra sign-in activity, the sharing audit log (Purview). Groups are reported as one principal.
+**Unverified against a live tenant** – treat the first Live run as a pilot: (1) how "Everyone" is encoded (`type: Tenant` assumed), (2) the exact connector operations for app role assignments / connections / connection role assignments are bound by path pattern – check 🩺 and adjust `EX` in `src/exposure/live.ts`, (3) some admin connectors may omit `sharedUsersCount` or return permissions only for tenant admins – an empty result with failed reads is flagged in the Scan report, (4) per-resource permission reads are capped at 400 per environment and kind, 4 in parallel.
+Roadmap: HTTP-action egress to non-allow-listed hosts, flow run-only users, scheduled emailed exposure report, DLP what-if.

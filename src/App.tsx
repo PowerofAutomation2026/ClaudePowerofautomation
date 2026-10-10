@@ -5,6 +5,7 @@ import { clearLog, getLog, log as opLog, subscribeLog } from './oplog'
 import type { AgentCategory, Asset, SolutionGroup, AssetKind, AuditEntry, Backend, Env, ItemStatus, Person, ScanNote, TransferOptions } from './types'
 import { hasConnectors, pickBackend } from './services'
 import { runTransfer } from './transferPlan'
+import ExposureView from './exposure/ExposureView'
 import { ago, assetRows, portalUrl, auditRows, download, explainTransferError, isPartialUpdate, powershellFor, risksFor, toCsv } from './util'
 
 const ls = {
@@ -100,6 +101,8 @@ export default function App() {
   const [audit, setAudit] = useState<AuditEntry[]>(() => ls.get('occ.audit', []))
   const [toast, setToast] = useState<string | null>(null)
   const [palette, setPalette] = useState(false)
+  const [view, setView] = useState<'owner' | 'exposure'>(() => ls.get('occ.view', 'owner'))
+  useEffect(() => { ls.set('occ.view', view) }, [view])
   const searchRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { document.documentElement.dataset.theme = theme; ls.set('occ.theme', theme) }, [theme])
@@ -234,7 +237,10 @@ export default function App() {
     { label: 'Open history', run: () => setPanel('history') },
     { label: 'Connector diagnostics', run: () => setPanel('diag') },
     { label: 'Show operation log (real calls)', run: () => setPanel('diag') },
+    { label: 'Open Exposure Auditor (sharing / guest / connection risk)', run: () => setView('exposure') },
   ]
+
+  if (view === 'exposure') return <ExposureView demo={demo} setDemo={setDemo} theme={theme} setTheme={setTheme} onBack={() => setView('owner')} />
 
   return (
     <div className="app">
@@ -246,6 +252,7 @@ export default function App() {
         <span className="pill mut" title="Build running in this tab - if it is old, hard-refresh (Ctrl+Shift+R)">{__BUILD__}</span>
         <span className={`pill ${demo ? 'warn' : 'ok'}`}>{demo ? 'DEMO DATA' : 'LIVE'}</span>
         <button className="btn sm" onClick={() => setPalette(true)}>⌘ <kbd>Ctrl K</kbd></button>
+        <button className="btn sm" onClick={() => setView('exposure')} title="Who can reach what: Everyone / guest shares, connection credential sharing">🔐 Exposure Auditor</button>
         <button className="btn sm" disabled={!assets.length} onClick={() => setPanel('report')}>📄 Report</button>
         <button className="btn sm" onClick={() => setPanel('schedules')}>⏰ Schedules{schedules.some((s) => s.enabled) ? ` (${schedules.filter((s) => s.enabled).length})` : ''}</button>
         <button className="btn sm" disabled={!assets.length} onClick={() => setPanel('solutions')}>📦 Solutions</button>
