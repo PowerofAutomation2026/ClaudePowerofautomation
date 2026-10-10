@@ -1019,5 +1019,5 @@ export const liveBackend: Backend = {
 }
 
 /** Low-level helpers shared with the Exposure Auditor (src/exposure/live.ts). */
-export const internals = { allOps, bare, call, callRaw, callAll, mapLimit, asList, flowLists, pick, listEnvironments: () => liveBackend.listEnvironments(), userOp: () => OPS.user(), flowOwnersOp: () => OPS.flowOwners(), flowOwnerOp: () => OPS.flowOwner(), appsOp: () => OPS.apps() }
+export const internals = { allOps, bare, call, callRaw, callAll, mapLimit, asList, flowLists, pick, listEnvironments: () => liveBackend.listEnvironments(), userOp: () => OPS.user(), flowOwnersOp: () => OPS.flowOwners(), flowOwnerOp: () => OPS.flowOwner(), appsOp: () => OPS.apps(), appGetOp: () => OPS.appGet() }
 export type { Op }

@@ -1,4 +1,4 @@
-OWNERSHIP COMMAND CENTER + EXPOSURE AUDITOR  (v1.12.0)
+OWNERSHIP COMMAND CENTER + EXPOSURE AUDITOR  (v1.13.0)
 Power Apps code app - no Azure app registration.
 
 1. Unzip this folder anywhere (extract OVER the old folder if you already deployed, so power.config.json is kept).
@@ -9,7 +9,7 @@ Power Apps code app - no Azure app registration.
 
 Inside the app:
   - Ownership Command Center : find & transfer apps / flows / Copilot Studio agents
-  - Exposure Auditor (header button) : who can reach what - Everyone/guest shares, connection credential sharing, disabled-owner connections
+  - Exposure Auditor + Credential Blast-Radius Map (header buttons) : who can reach what - Everyone/guest shares, connection credential sharing, disabled-owner connections
 Deployed builds start in LIVE mode. Click "Scan exposure".
 
 Requirements: Power Apps premium licence for admin users, code apps enabled on the environment.

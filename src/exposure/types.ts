@@ -35,6 +35,8 @@ export interface Resource {
   shares: Share[] // everyone who can reach it, EXCLUDING its owner/creator
   /** Number of people this resource is shared with, as reported by the list call (may exceed shares.length when permissions could not be read). */
   sharedCount?: number
+  /** Flows/apps: ids of the connections (same environment) this resource runs with the OWNER's credentials. Connections: unused. */
+  uses?: string[]
 }
 
 export type RuleId =

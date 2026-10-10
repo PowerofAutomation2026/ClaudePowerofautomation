@@ -11,7 +11,7 @@ type Status = { s: 'running' | 'done' | 'failed' | 'dry' | 'skipped'; msg?: stri
 const SEV_PILL: Record<Severity, string> = { High: 'bad', Medium: 'warn', Low: 'mut', Info: 'mut' }
 const KIND_ICON = { app: '📱', flow: '⚡', connection: '🔌' } as const
 
-export default function ExposureView({ demo, setDemo, theme, setTheme, onBack }: { demo: boolean; setDemo: (d: boolean) => void; theme: string; setTheme: (t: string) => void; onBack: () => void }) {
+export default function ExposureView({ demo, setDemo, theme, setTheme, onBack, onBlast }: { demo: boolean; setDemo: (d: boolean) => void; theme: string; setTheme: (t: string) => void; onBack: () => void; onBlast: () => void }) {
   const ex = useMemo(() => pickExposure(demo), [demo])
   const [envs, setEnvs] = useState<Env[]>([])
   const [scope, setScope] = useState('')
@@ -86,6 +86,7 @@ export default function ExposureView({ demo, setDemo, theme, setTheme, onBack }:
         <button className="btn sm" onClick={() => setDemo(!demo)}>{demo ? 'Go live' : 'Demo'}</button>
         <button className="btn sm" onClick={() => { setDiag(null); void ex.diagnostics().then(setDiag) }}>🩺</button>
         <button className="btn sm" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? '☀️' : '🌙'}</button>
+        <button className="btn sm" onClick={onBlast}>🕸️ Blast-Radius Map</button>
         <button className="btn sm" onClick={onBack}>← Ownership Command Center</button>
       </header>
 

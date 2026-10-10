@@ -19,12 +19,26 @@ const EX = {
   appDelete: () => byName(/^(removeadminapproleassignment|deleteapproleassignmentasadmin)$/) ?? adminPath(/apps\/\{[^}/]+\}\/(permissions|roleassignments)\/\{[^}/]+\}$/i, 'DELETE'),
   appModify: () => adminPath(/apps\/\{[^}/]+\}\/modifyPermissions$/i, 'POST'),
   connList: () => byName(/^(getconnectionsasadmin|getadminconnections?)$/) ?? adminPath(/environments\/\{[^}/]+\}\/connections$/i, 'GET'),
+  flowGet: () => byName(/^(getflowasadmin|getadminflow)$/) ?? adminPath(/environments\/\{[^}/]+\}\/flows\/\{[^}/]+\}$/i, 'GET'),
   connPerms: () => byName(/^(getconnectionroleassignmentsasadmin|getadminconnectionroleassignments?)$/) ?? adminPath(/connections\/\{[^}/]+\}\/permissions$/i, 'GET') ?? adminPath(/connections\/\{[^}/]+\}\/roleassignments$/i, 'GET'),
 }
 type ExKey = keyof typeof EX
 
 const MAX_PERM_LOOKUPS = 400 // per environment and kind, same cap as the owner app
 const PARALLEL = 4
+const MAX_REF_LOOKUPS = 300 // per environment: one extra read per flow/app that did not list its connection references
+
+/** Connection ids a flow/app runs with the OWNER's credentials. Flow refs with source "Invoker" use the run-only user's own connection: not the owner's, so no edge. */
+function connIds(refs: any, isApp: boolean): string[] | undefined {
+  if (!refs || typeof refs !== 'object') return undefined
+  const out: string[] = []
+  for (const v of Object.values<any>(refs)) {
+    if (!v || (!isApp && /^invoker$/i.test(String(v.source ?? '')))) continue
+    const id = v.connectionName ?? String(v.sharedConnectionId ?? v.connection?.id ?? '').split('/').pop()
+    if (id) out.push(String(id))
+  }
+  return out
+}
 
 const shares = (rows: any[], skipRoles = /^owner$/i): Share[] =>
   rows.flatMap((r) => {
@@ -80,7 +94,7 @@ export const liveExposure: ExposureBackend = {
           const sharedCount = (Number(p.sharedUsersCount ?? 0) || 0) + (Number(p.sharedGroupsCount ?? 0) || 0)
           return { key: `app:${env.id}:${a.name}`, kind: 'app', id: a.name, name: p.displayName ?? a.name, envId: env.id, envName: env.name,
             owner: p.owner ? { id: p.owner.id, type: 'User', name: p.owner.displayName, email: p.owner.email ?? p.owner.userPrincipalName } : undefined,
-            state: 'Published', modified: p.lastModifiedTime, shares: [], sharedCount: p.sharedUsersCount === undefined && p.sharedGroupsCount === undefined ? undefined : sharedCount }
+            state: 'Published', modified: p.lastModifiedTime, shares: [], uses: connIds(p.connectionReferences, true), sharedCount: p.sharedUsersCount === undefined && p.sharedGroupsCount === undefined ? undefined : sharedCount }
         })
         stats.apps = apps.length
         if (appPerms) {
@@ -90,6 +104,13 @@ export const liveExposure: ExposureBackend = {
           await I.mapLimit(todo, PARALLEL, async (a) => {
             try { a.shares = shares(I.asList(await I.call(appPerms, [env.id, a.id]))); stats.appPerms++ }
             catch (e) { stats.failed++; log(`app permissions ${a.id}: ${(e as Error).message.slice(0, 160)}`) }
+          })
+        }
+        const appGet = I.appGetOp()
+        if (appGet) {
+          const need = apps.filter((a) => a.uses === undefined).slice(0, MAX_REF_LOOKUPS)
+          await I.mapLimit(need, PARALLEL, async (a) => {
+            try { const full = await I.call(appGet, [env.id, a.id]); a.uses = connIds(full?.properties?.connectionReferences, true) ?? [] } catch (e) { log(`app connections ${a.id}: ${(e as Error).message.slice(0, 120)}`) }
           })
         }
         resources.push(...apps)
@@ -102,7 +123,7 @@ export const liveExposure: ExposureBackend = {
           const p = f.properties ?? {}
           const cid = p.creator?.userId ?? p.creator?.objectId
           return { key: `flow:${env.id}:${f.name}`, kind: 'flow', id: f.name, name: p.displayName ?? f.name, envId: env.id, envName: env.name,
-            owner: cid ? { id: cid, type: 'User', name: cid } : undefined, state: p.state, modified: p.lastModifiedTime, shares: [] }
+            owner: cid ? { id: cid, type: 'User', name: cid } : undefined, state: p.state, modified: p.lastModifiedTime, shares: [], uses: connIds(p.connectionReferences, false) }
         })
         stats.flows = flows.length
         if (flowPerms) {
@@ -116,6 +137,14 @@ export const liveExposure: ExposureBackend = {
             } catch (e) { stats.failed++; log(`flow permissions ${f.id}: ${(e as Error).message.slice(0, 160)}`) }
           })
         }
+        const flowGet = EX.flowGet()
+        if (flowGet) {
+          const need = flows.filter((f) => f.uses === undefined).slice(0, MAX_REF_LOOKUPS)
+          if (flows.filter((f) => f.uses === undefined).length > need.length) note(env.name, 'warn', `Connection use was read for only ${MAX_REF_LOOKUPS} flows; the blast-radius map may under-report here.`)
+          await I.mapLimit(need, PARALLEL, async (f) => {
+            try { const full = await I.call(flowGet, [env.id, f.id]); f.uses = connIds(full?.properties?.connectionReferences, false) ?? [] } catch (e) { log(`flow connections ${f.id}: ${(e as Error).message.slice(0, 120)}`) }
+          })
+        } else if (flows.some((f) => f.uses === undefined)) note(env.name, 'warn', 'No "get flow as admin" operation - flow → connection edges unavailable (blast-radius map is incomplete).')
         resources.push(...flows)
       } catch (e) { note(env.name, 'error', `Flows: ${(e as Error).message}`) }
       // ---- connections ----
@@ -171,7 +200,7 @@ export const liveExposure: ExposureBackend = {
   },
 
   async diagnostics() {
-    const need: Record<ExKey, string> = { appPerms: 'read who an app is shared with', appDelete: 'remove an app share (preferred)', appModify: 'remove an app share (fallback modifyPermissions)', connList: 'list connections as admin', connPerms: 'read who a connection is shared with' }
+    const need: Record<ExKey, string> = { flowGet: 'read a flow incl. its connection references (blast-radius map)', appPerms: 'read who an app is shared with', appDelete: 'remove an app share (preferred)', appModify: 'remove an app share (fallback modifyPermissions)', connList: 'list connections as admin', connPerms: 'read who a connection is shared with' }
     const rows = (Object.keys(EX) as ExKey[]).map((k) => { const o: Op | null = EX[k](); return { name: `${k} (${need[k]})`, ok: !!o, detail: o ? `${o.ds} → ${o.op}  [${o.method} ${o.path}]` : 'not found - open the Ownership diagnostics to see the real operation names, then adjust the pattern in src/exposure/live.ts' } })
     const extra: [string, Op | null][] = [['apps list', I.appsOp()], ['flow list', I.flowLists()[0] ?? null], ['flow permissions', I.flowOwnersOp()], ['flow modify permissions', I.flowOwnerOp()], ['user profile (disabled-account check)', I.userOp()]]
     extra.forEach(([n, o]) => rows.push({ name: n, ok: !!o, detail: o ? `${o.ds} → ${o.op}  [${o.method} ${o.path}]` : 'not found' }))
