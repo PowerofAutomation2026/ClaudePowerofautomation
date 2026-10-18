@@ -1,0 +1,13 @@
+{
+  "name": "db-emulator",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Simulated SQL Server, Oracle and Teradata servers with big realistic datasets and Power Platform connector-shaped REST endpoints. No dependencies; needs Node 22.13+ (built-in SQLite).",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "seed": "node src/server.mjs --seed-only",
+    "test": "node tests/emulator.test.mjs"
+  },
+  "engines": { "node": ">=22.13" }
+}

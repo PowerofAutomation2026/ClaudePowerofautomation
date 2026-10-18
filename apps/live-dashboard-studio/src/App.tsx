@@ -7,7 +7,9 @@ import { BarChart, DataTable, Donut, Kpi, LineChart, SeriesTable, colorMap, useT
 import {
   DEMO_KEY, canWatchFiles, describeConnectors, fetchSimulated, fetchTable, listDbSources, pickWatchableFile, readFile, readPasted, resetSimulated, runSqlQuery,
 } from './sources'
-import type { DbSource, WatchHandle } from './sources'
+import type { DbRef, DbSource, WatchHandle } from './sources'
+import { DEFAULT_EMU_URL, EMU_SQL_EXAMPLES, emuHealth, setEmuKey } from './emulator'
+import type { EmuHealth } from './emulator'
 import { delDataset, getDataset, loadDashboards, loadPrefs, putDataset, saveDashboards, savePrefs } from './store'
 import type { DashboardDef, SourceDef } from './store'
 
@@ -24,6 +26,7 @@ const WTYPES: { v: WidgetType; t: string }[] = [
   { v: 'kpi', t: 'Number' }, { v: 'bar', t: 'Bars' }, { v: 'line', t: 'Line over time' }, { v: 'donut', t: 'Share (donut)' }, { v: 'table', t: 'Table' },
 ]
 
+const ENGINE_LABEL = { sql: 'SQL Server', oracle: 'Oracle', teradata: 'Teradata' } as const
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e))
 const ago = (t: number) => { const s = Math.max(0, Math.round((Date.now() - t) / 1000)); return s < 5 ? 'just now' : s < 90 ? `${s} s ago` : `${Math.round(s / 60)} min ago` }
 
@@ -102,8 +105,9 @@ export default function App() {
   const fetchFromSource = useCallback(async (def: DashboardDef): Promise<Dataset> => {
     const s = def.source
     if (s.kind === 'demo') return fromObjectsAsync(def.name, await fetchSimulated(), def.id)
-    if (s.kind === 'db' && s.dbKey) { setProgress({ f: 0.05, msg: 'Reading rows from the database…' }); const rows = await fetchTable(s.dbKey, { top: s.top ?? 5000, filter: s.filter, orderBy: s.orderBy, select: s.select }); return fromObjectsAsync(def.name, rows, def.id, (f, msg) => setProgress({ f, msg })) }
-    if (s.kind === 'sql') { setProgress({ f: 0.05, msg: 'Running the query…' }); const rows = await runSqlQuery({ server: s.sqlServer ?? '', database: s.sqlDatabase ?? '', query: s.sqlQuery ?? '' }); return fromObjectsAsync(def.name, rows, def.id, (f, msg) => setProgress({ f, msg })) }
+    const ref: DbRef = s.via === 'emulator' && s.emuUrl && s.engine && s.dataset ? { via: 'emulator', url: s.emuUrl, engine: s.engine, dataset: s.dataset } : { via: 'sdk' }
+    if (s.kind === 'db' && s.dbKey) { setProgress({ f: 0.05, msg: 'Reading rows from the database…' }); const rows = await fetchTable(s.dbKey, { top: s.top ?? 5000, filter: s.filter, orderBy: s.orderBy, select: s.select }, ref); return fromObjectsAsync(def.name, rows, def.id, (f, msg) => setProgress({ f, msg })) }
+    if (s.kind === 'sql') { setProgress({ f: 0.05, msg: 'Running the query…' }); const rows = await runSqlQuery({ server: s.sqlServer ?? '', database: s.sqlDatabase ?? '', query: s.sqlQuery ?? '' }, ref); return fromObjectsAsync(def.name, rows, def.id, (f, msg) => setProgress({ f, msg })) }
     const h = watch.current.get(def.id)
     if (h) { const f = await h.getFile(); const r = await readFile(f, s.sheet, (f2, msg) => setProgress({ f: f2, msg })); return { ...r.dataset, id: def.id, name: def.name } }
     const cached = await getDataset(def.id)
@@ -400,7 +404,7 @@ export default function App() {
         try {
           const data = await fetchFromSource(full)
           createDashboard(data, def.source, def.name); setDialog(null)
-        } catch (e) { return errMsg(e) }
+        } catch (e) { return errMsg(e) } finally { setProgress(null) }
       }} />}
       {dialog === 'diag' && <Diagnostics log={log} onClose={() => setDialog(null)} />}
     </div>
@@ -421,8 +425,9 @@ function kindLabel(s: SourceDef): string {
   if (s.kind === 'file') return `File · ${s.fileName ?? ''}`
   if (s.kind === 'paste') return 'Pasted data'
   if (s.kind === 'demo') return 'Demo · live'
-  if (s.kind === 'sql') return `SQL query${s.refreshSec ? ' · live' : ''}`
-  return `${s.dbKind ?? 'Table'} · ${s.dbKey ?? ''}${s.refreshSec ? ' · live' : ''}`
+  const emu = s.via === 'emulator' ? 'Emulator · ' : ''
+  if (s.kind === 'sql') return `${emu}${s.engine ? ENGINE_LABEL[s.engine] + ' ' : ''}SQL query${s.refreshSec ? ' · live' : ''}`
+  return `${emu}${s.engine ? ENGINE_LABEL[s.engine] : (s.dbKind ?? 'Table')} · ${s.dbKey ?? ''}${s.refreshSec ? ' · live' : ''}`
 }
 
 function StatusChip({ def, ds, loading, live, error, lastLoaded }: { def: DashboardDef; ds: Dataset | null; loading: boolean; live: boolean; error: boolean; lastLoaded: number }) {
@@ -569,6 +574,7 @@ function PasteDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (na
 function DbDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (d: { name: string; source: SourceDef }) => Promise<string | void> }) {
   const sources = useMemo<DbSource[]>(() => listDbSources(), [])
   const real = sources.filter((s) => s.kind !== 'demo')
+  const [conn, setConn] = useState<'sdk' | 'emu'>(real.length ? 'sdk' : 'emu')
   const [mode, setMode] = useState<'table' | 'sql'>('table')
   const [key, setKey] = useState(real[0]?.key ?? DEMO_KEY)
   const [top, setTop] = useState(5000)
@@ -581,37 +587,110 @@ function DbDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (d: { 
   const [refreshSec, setRefreshSec] = useState(30)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  // emulator
+  const [emuUrl, setEmuUrl] = useState(() => { try { return localStorage.getItem('lds.emuUrl') ?? DEFAULT_EMU_URL } catch { return DEFAULT_EMU_URL } })
+  const [emuKeyText, setEmuKeyText] = useState('')
+  const [health, setHealth] = useState<EmuHealth | null>(null)
+  const [engineId, setEngineId] = useState<'sql' | 'oracle' | 'teradata'>('sql')
+  const [emuTable, setEmuTable] = useState('')
+  const [emuBusy, setEmuBusy] = useState(false)
+  const [emuErr, setEmuErr] = useState<string | null>(null)
+  const engine = health?.engines.find((e) => e.id === engineId)
   const chosen = sources.find((s) => s.key === key)
+
+  const connect = useCallback(async () => {
+    setEmuBusy(true); setEmuErr(null)
+    try {
+      setEmuKey(emuUrl, emuKeyText)
+      const h = await emuHealth(emuUrl)
+      setHealth(h)
+      const first = h.engines.find((e) => e.id === engineId) ?? h.engines[0]
+      if (first) { setEngineId(first.id); setEmuTable((t) => (first.tables.some((x) => x.name === t) ? t : first.tables.sort((a, b) => b.rows - a.rows)[0]?.name ?? '')) }
+      try { localStorage.setItem('lds.emuUrl', emuUrl) } catch { /* ignore */ }
+    } catch (e) { setHealth(null); setEmuErr(errMsg(e)) } finally { setEmuBusy(false) }
+  }, [emuUrl, emuKeyText, engineId])
+  useEffect(() => { if (conn === 'emu' && !health) void connect() }, [conn]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (engine && !engine.tables.some((t) => t.name === emuTable)) setEmuTable([...engine.tables].sort((a, b) => b.rows - a.rows)[0]?.name ?? '') }, [engineId, engine]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (conn === 'emu' && mode === 'sql') setQuery(EMU_SQL_EXAMPLES[engineId].sql) }, [engineId, mode, conn])
+
   const go = async () => {
     setBusy(true); setErr(null)
-    const source: SourceDef = mode === 'sql'
-      ? { kind: 'sql', sqlServer: server, sqlDatabase: database, sqlQuery: query, refreshSec }
-      : key === DEMO_KEY ? { kind: 'demo', refreshSec } : { kind: 'db', dbKey: key, dbKind: chosen?.kind, top, filter, orderBy, select, refreshSec }
-    const r = await onCreate({ name: mode === 'sql' ? 'SQL query' : chosen?.label ?? key, source })
+    let source: SourceDef, name: string
+    if (conn === 'emu') {
+      if (!engine) { setErr('Connect to the emulator first.'); setBusy(false); return }
+      const base = { via: 'emulator' as const, emuUrl, engine: engine.id, dataset: engine.dataset, refreshSec }
+      source = mode === 'sql' ? { kind: 'sql', ...base, sqlQuery: query } : { kind: 'db', ...base, dbKey: emuTable, dbKind: engine.id, top, filter, orderBy, select }
+      name = mode === 'sql' ? `${engine.label} query` : `${engine.label} · ${emuTable}`
+    } else {
+      source = mode === 'sql'
+        ? { kind: 'sql', sqlServer: server, sqlDatabase: database, sqlQuery: query, refreshSec }
+        : key === DEMO_KEY ? { kind: 'demo', refreshSec } : { kind: 'db', dbKey: key, dbKind: chosen?.kind, top, filter, orderBy, select, refreshSec }
+      name = mode === 'sql' ? 'SQL query' : chosen?.label ?? key
+    }
+    const r = await onCreate({ name, source })
     if (r) setErr(r)
     setBusy(false)
   }
+  const inEmu = conn === 'emu'
   return (
     <Modal title="Connect a database" onClose={onClose} wide>
       <div className="form">
-        {real.length === 0 && (
-          <div className="banner info">No database tables are connected to this app yet. See README, "Database sources": run the deploy script with your SQL Server / Oracle connection and table names, then reopen the app. You can try the simulated table below meanwhile.</div>
+        <div className="seg" role="radiogroup" aria-label="Where to read from">
+          <button role="radio" aria-checked={!inEmu} className={!inEmu ? 'on' : ''} onClick={() => setConn('sdk')}>Power Apps connection</button>
+          <button role="radio" aria-checked={inEmu} className={inEmu ? 'on' : ''} onClick={() => setConn('emu')}>Local emulator (test)</button>
+        </div>
+
+        {!inEmu && real.length === 0 && (
+          <div className="banner info">No database tables are connected to this app yet. Run the deploy script with your SQL Server, Oracle or Teradata connection and table names (README, "Database sources"), or switch to <b>Local emulator</b> to try simulated big databases.</div>
         )}
+
+        {inEmu && (
+          <>
+            <label>Emulator address
+              <span className="row">
+                <input value={emuUrl} onChange={(e) => setEmuUrl(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && void connect()} aria-label="Emulator address" />
+                <button className="btn" onClick={() => void connect()} disabled={emuBusy}>{emuBusy ? 'Connecting…' : health ? '↻ Reconnect' : 'Connect'}</button>
+              </span>
+            </label>
+            {(health?.apiKeyRequired || (emuErr && /API key/i.test(emuErr))) && <label>API key<input type="password" value={emuKeyText} onChange={(e) => setEmuKeyText(e.target.value)} placeholder="x-api-key" /></label>}
+            {emuErr && <div className="banner error" role="alert">{emuErr}</div>}
+            {health && (
+              <>
+                <div className="seg" role="radiogroup" aria-label="Database engine">
+                  {health.engines.map((e) => <button key={e.id} role="radio" aria-checked={engineId === e.id} className={engineId === e.id ? 'on' : ''} onClick={() => setEngineId(e.id)}>{e.label}</button>)}
+                </div>
+                <div className="muted small">{engine?.label} · dataset <code>{engine?.dataset}</code> · {engine?.dialect === 'tsql' ? 'T-SQL' : engine?.dialect === 'oracle' ? 'Oracle SQL' : 'Teradata SQL'}{health.live?.running ? ` · live writer on (about ${Math.round(health.live.rate * 25)} new rows per second)` : ' · live writer off'}</div>
+              </>
+            )}
+          </>
+        )}
+
         <div className="seg" role="radiogroup" aria-label="How to read data">
           <button role="radio" aria-checked={mode === 'table'} className={mode === 'table' ? 'on' : ''} onClick={() => setMode('table')}>Table</button>
           <button role="radio" aria-checked={mode === 'sql'} className={mode === 'sql' ? 'on' : ''} onClick={() => setMode('sql')}>SQL query (advanced)</button>
         </div>
+
         {mode === 'table' ? (
           <>
-            <label>Table<select value={key} onChange={(e) => setKey(e.target.value)}>
-              {sources.map((s) => <option key={s.key} value={s.key}>{s.label}{s.kind !== 'demo' ? ` · ${s.kind.toUpperCase()}` : ''}</option>)}</select></label>
-            {key !== DEMO_KEY && <>
+            {inEmu ? (
+              engine && <label>Table<select value={emuTable} onChange={(e) => setEmuTable(e.target.value)}>
+                {[...engine.tables].sort((a, b) => b.rows - a.rows).map((t) => <option key={t.name} value={t.name}>{t.name} · {t.rows.toLocaleString()} rows · {t.columns} columns</option>)}</select></label>
+            ) : (
+              <label>Table<select value={key} onChange={(e) => setKey(e.target.value)}>
+                {sources.map((s) => <option key={s.key} value={s.key}>{s.label}{s.kind !== 'demo' ? ` · ${s.kind.toUpperCase()}` : ''}</option>)}</select></label>
+            )}
+            {(inEmu || key !== DEMO_KEY) && <>
               <label>Max rows<input type="number" min={1} max={200000} value={top} onChange={(e) => setTop(Number(e.target.value) || 5000)} /></label>
               <label>Filter (OData, optional)<input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Status eq 'Open' and Amount gt 100" /></label>
               <label>Sort (optional)<input value={orderBy} onChange={(e) => setOrderBy(e.target.value)} placeholder="OrderDate desc" /></label>
               <label>Columns (optional, comma separated)<input value={select} onChange={(e) => setSelect(e.target.value)} placeholder="OrderDate, Region, Amount" /></label>
             </>}
+            {top > 100000 && <div className="muted small">Large reads take a few seconds. Over 100,000 rows the data is not kept after a reload.</div>}
           </>
+        ) : inEmu ? (
+          <label>Query ({EMU_SQL_EXAMPLES[engineId].dialect}, one SELECT)
+            <textarea rows={7} value={query} onChange={(e) => setQuery(e.target.value)} spellCheck={false} />
+          </label>
         ) : (
           <>
             <label>Server<input value={server} onChange={(e) => setServer(e.target.value)} placeholder="myserver.database.windows.net" /></label>
@@ -622,7 +701,7 @@ function DbDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (d: { 
         <label>Live refresh<select value={refreshSec} onChange={(e) => setRefreshSec(Number(e.target.value))}>{REFRESH_CHOICES.map((r) => <option key={r.v} value={r.v}>{r.t}</option>)}</select></label>
         {err && <div className="banner error" role="alert">{err}</div>}
       </div>
-      <footer className="modal-foot"><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy} onClick={() => void go()}>{busy ? 'Loading…' : 'Load and build dashboard'}</button></footer>
+      <footer className="modal-foot"><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy || (inEmu && !engine)} onClick={() => void go()}>{busy ? 'Loading…' : 'Load and build dashboard'}</button></footer>
     </Modal>
   )
 }

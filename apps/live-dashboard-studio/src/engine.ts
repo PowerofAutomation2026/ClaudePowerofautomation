@@ -116,8 +116,8 @@ export function parseDate(v: unknown): string | null {
 }
 
 const blank = (v: unknown) => v === null || v === undefined || (typeof v === 'string' && v.trim() === '')
-const ID_LIKE_WORD = /(^|[\s_.-])(id|uuid|guid|zip|zipcode|postal|phone|sku|code|number|no)$/i
-const ID_LIKE_CAMEL = /[a-z](Id|ID|Code|Number|Sku|SKU)$/
+const ID_LIKE_WORD = /(^|[\s_.-])(id|uuid|guid|key|zip|zipcode|postal|phone|sku|code|number|no)$/i
+const ID_LIKE_CAMEL = /[a-z](Id|ID|Key|Code|Number|Sku|SKU)$/
 const idLike = (name: string) => ID_LIKE_WORD.test(name) || ID_LIKE_CAMEL.test(name)
 
 function cleanHeaders(raw: unknown[]): string[] {
@@ -143,7 +143,7 @@ function inferColumn(name: string, values: unknown[]): { type: ColType; distinct
   if (dates >= need && nums < need) return { type: 'date', distinct, blanks }
   if (nums >= need) {
     const allInt = filled.every((v) => Number.isInteger(parseNumber(v)))
-    if (idLike(name) && allInt && distinct >= filled.length * 0.9) return { type: 'text', distinct, blanks }
+    if (idLike(name) && allInt) return { type: 'text', distinct, blanks }      // keys and codes are labels, never something to add up
     return { type: 'number', distinct, blanks }
   }
   return { type: 'text', distinct, blanks }

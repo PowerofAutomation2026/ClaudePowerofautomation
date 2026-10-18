@@ -15,6 +15,10 @@ export interface SourceDef {
   sqlServer?: string
   sqlDatabase?: string
   sqlQuery?: string
+  via?: 'sdk' | 'emulator'            // database sources: Power Apps connection (default) or the local emulator
+  emuUrl?: string
+  engine?: 'sql' | 'oracle' | 'teradata'
+  dataset?: string
   refreshSec: number       // 0 = manual
 }
 export interface DashboardDef {

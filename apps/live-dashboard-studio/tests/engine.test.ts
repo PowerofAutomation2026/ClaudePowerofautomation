@@ -104,6 +104,17 @@ t('id-like numeric columns are not measures', () => {
   assert.equal(ds.columns.find((c) => c.name === 'Revenue')!.type, 'number')
   assert.equal(ds.columns.find((c) => c.name === 'OrderDate')!.type, 'date')
 })
+t('key columns are categories, not numbers to sum (SALES_REP_ID, StoreKey, WAREHOUSE_ID)', () => {
+  const lines = ['ORDER_ID,SALES_REP_ID,WAREHOUSE_ID,StoreKey,ORDER_TOTAL,Quantity']
+  for (let i = 0; i < 60; i++) lines.push(`${1000 + i},${1 + (i % 7)},${1 + (i % 4)},${1 + (i % 5)},${(i * 13) % 97 + 5.5},${1 + (i % 9)}`)
+  const ds = datasetFromText('o.csv', lines.join('\n'))
+  const type = (n: string) => ds.columns.find((c) => c.name === n)!.type
+  assert.equal(type('SALES_REP_ID'), 'text'); assert.equal(type('WAREHOUSE_ID'), 'text'); assert.equal(type('StoreKey'), 'text'); assert.equal(type('ORDER_ID'), 'text')
+  assert.equal(type('ORDER_TOTAL'), 'number'); assert.equal(type('Quantity'), 'number')
+  const ws = autoDashboard(ds)
+  assert.ok(!ws.some((w) => /_ID|Key/.test(w.measure ?? '')), 'no ID column used as a measure')
+  assert.ok(ws.some((w) => w.type === 'kpi' && w.measure === 'ORDER_TOTAL'))
+})
 t('auto dashboard picks sensible widgets', () => {
   const ds = datasetFromText('sales.csv', SALES)
   const ws = autoDashboard(ds)

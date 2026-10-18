@@ -5,6 +5,8 @@
  */
 import { datasetFromText, datasetFromTextAsync, fromMatrixAsync, fromObjects, fromObjectsAsync, makeDemoOrders } from './engine'
 import type { Dataset, Progress } from './engine'
+import { emuPage, emuSql } from './emulator'
+import type { EmuRef } from './emulator'
 
 export const MAX_FILE_BYTES = 60 * 1024 * 1024
 
@@ -63,12 +65,13 @@ function loadInfo(): Record<string, any> {
 }
 const dataSourcesInfo = loadInfo()
 
-export type DbKind = 'sql' | 'oracle' | 'dataverse' | 'table' | 'demo'
+export type DbKind = 'sql' | 'oracle' | 'teradata' | 'dataverse' | 'table' | 'demo'
 export interface DbSource { key: string; label: string; kind: DbKind; tableId?: string }
 
 function kindOf(key: string, info: any): DbKind {
   const s = `${info?.dataSourceType ?? ''} ${info?.tableId ?? ''} ${key}`.toLowerCase()
   if (/oracle/.test(s)) return 'oracle'
+  if (/teradata/.test(s)) return 'teradata'
   if (/dataverse|commondataservice|cds/.test(s)) return 'dataverse'
   if (/\bsql\b|sqlserver|shared_sql|\[dbo\]|\bdbo\b/.test(s)) return 'sql'
   return 'table'
@@ -117,34 +120,43 @@ function errText(e: any): string {
   return raw
 }
 
-/** Read rows of a table-like data source (SQL Server, Oracle, Dataverse ...), paging until `top` rows. */
-export async function fetchTable(key: string, q: DbQuery): Promise<Record<string, unknown>[]> {
-  if (key === DEMO_KEY) return fetchSimulated()
+/** Where a database read goes: the Power Apps connection (SDK) or the local emulator. Same paging contract for both. */
+export type DbRef = { via: 'sdk' } | ({ via: 'emulator' } & EmuRef)
+
+async function sdkPage(key: string, q: DbQuery, token: string | undefined, top: number): Promise<{ rows: Record<string, unknown>[]; token?: string }> {
   const c = await client()
+  const res: any = await c.retrieveMultipleRecordsAsync(key, {
+    top, maxPageSize: top,
+    filter: q.filter?.trim() || undefined,
+    orderBy: q.orderBy?.trim() ? q.orderBy.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+    select: q.select?.trim() ? q.select.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+    skipToken: token,
+  })
+  if (!res?.success) throw new Error(errText(res?.error))
+  const data: any[] = Array.isArray(res.data) ? res.data : (res.data?.value ?? [])
+  return { rows: data, token: res.skipToken }
+}
+
+/** Read rows of a table-like data source (SQL Server, Oracle, Teradata, Dataverse ...), paging until `top` rows. */
+export async function fetchTable(key: string, q: DbQuery, ref: DbRef = { via: 'sdk' }): Promise<Record<string, unknown>[]> {
+  if (key === DEMO_KEY) return fetchSimulated()
   const out: Record<string, unknown>[] = []
   let token: string | undefined
-  for (let page = 0; page < 200 && out.length < q.top; page++) {
-    const left = q.top - out.length
-    const res: any = await c.retrieveMultipleRecordsAsync(key, {
-      top: Math.min(left, 5000), maxPageSize: Math.min(left, 5000),
-      filter: q.filter?.trim() || undefined,
-      orderBy: q.orderBy?.trim() ? q.orderBy.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
-      select: q.select?.trim() ? q.select.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
-      skipToken: token,
-    })
-    if (!res?.success) throw new Error(errText(res?.error))
-    const data: any[] = Array.isArray(res.data) ? res.data : (res.data?.value ?? [])
-    out.push(...data.map(dropMeta))
-    token = res.skipToken
-    if (!token || data.length === 0) break
+  for (let page = 0; page < 2000 && out.length < q.top; page++) {
+    const top = Math.min(q.top - out.length, 5000)
+    const p = ref.via === 'emulator' ? await emuPage(ref, key, q, token, top) : await sdkPage(key, q, token, top)
+    out.push(...p.rows.map(dropMeta))
+    token = p.token
+    if (!token || p.rows.length === 0) break
   }
   if (out.length === 0) throw new Error('The query returned no rows.')
-  return out
+  return out.length > q.top ? out.slice(0, q.top) : out
 }
 
 /* Raw SQL (SQL Server "Execute a SQL query"): only if that operation was added to the app. Experimental. */
 export interface SqlQuery { server: string; database: string; query: string }
-export async function runSqlQuery(q: SqlQuery): Promise<Record<string, unknown>[]> {
+export async function runSqlQuery(q: SqlQuery, ref: DbRef = { via: 'sdk' }): Promise<Record<string, unknown>[]> {
+  if (ref.via === 'emulator') return (await emuSql(ref, q.query)).map(dropMeta)   // the emulator speaks each engine's own dialect (SEL, TOP, FETCH FIRST ...)
   if (!/^\s*(select|with)\b/i.test(q.query)) throw new Error('Only SELECT (or WITH ... SELECT) statements are allowed.')
   if (/;\s*\S/.test(q.query.trim().replace(/;$/, ''))) throw new Error('Use a single statement.')
   const ops: { ds: string; op: string; def: any }[] = []

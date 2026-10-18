@@ -216,3 +216,6 @@ th.num button { text-align: right; }
 .progress { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-1); }
 .progress-bar { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
 .progress-bar i { display: block; height: 100%; background: var(--accent); transition: width 0.2s; }
+
+.row { display: flex; gap: 8px; }
+.row input { flex: 1; min-width: 0; }

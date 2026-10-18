@@ -3,7 +3,8 @@
 A Power Apps **code app** (React + TypeScript) that turns data into a live dashboard on the fly:
 
 - **Drop a file** (CSV, TSV, JSON, Excel .xlsx) or **paste cells**: the dashboard builds itself in a second.
-- **Connect a database** (SQL Server, Oracle, Dataverse tables) through your own Power Apps connections.
+- **Connect a database** (SQL Server, Oracle, Teradata, Dataverse tables) through your own Power Apps connections.
+- **Test with big simulated databases**: `apps/db-emulator` is a local SQL Server / Oracle / Teradata simulator (1.4 million rows, live inserts, each engine's SQL dialect and error style) that answers in the shape of the Power Platform connectors.
 - **Live**: database dashboards refresh on a timer (5 s to 5 min, pause / resume); file dashboards update when you **replace the data**, or automatically when you **watch a local file** (Chromium browsers).
 - Click any bar or slice to **filter the whole dashboard**; date-range presets; table view of every chart; export CSV / layout JSON / print to PDF.
 - **No Azure app registration.** Database calls run on the signed-in user's own connector connection.
@@ -13,7 +14,7 @@ A Power Apps **code app** (React + TypeScript) that turns data into a live dashb
 cd apps/live-dashboard-studio
 npm install
 npm run dev          # http://127.0.0.1:3100 : upload sample-sales.csv, or click "Try the live demo"
-npm test             # 25 engine tests (parsing, type detection, aggregation, auto layout)
+npm test             # 27 engine tests (parsing, type detection, aggregation, auto layout)
 npm run build        # type-check + bundle
 ```
 In the browser preview, files, pasted data and the simulated live demo work. Database tables need the app to run inside Power Apps.
@@ -24,6 +25,7 @@ In the browser preview, files, pasted data and the simulated live demo work. Dat
 ./scripts/Deploy-LiveDashboardStudio.ps1 -EnvironmentId <guid> `
     -SqlServer myserver.database.windows.net -SqlDatabase Sales -SqlTables 'dbo.Orders','dbo.Customers' `
     -OracleDataset <oracle-dataset> -OracleTables 'SALES.ORDERS' `
+    -TeradataDataset <teradata-dataset> -TeradataTables 'EDW_PROD.CALL_DETAIL_FACT' `
     -DataverseTables account,opportunity
 ```
 (`Deploy.cmd` is the same for Windows double-click.) The script installs Node and `pac` if missing, signs you in, opens the Connections page if the SQL / Oracle connection does not exist yet (OAuth sign-in cannot be scripted), adds each table with `pac code add-data-source`, builds and runs `pac code push`. Re-run it with more tables any time.
@@ -31,6 +33,9 @@ In the browser preview, files, pasted data and the simulated live demo work. Dat
 Requirements: Power Apps premium licence for the users (code apps + premium connectors) and code apps enabled on the environment. SQL Server on-premises and Oracle need an **on-premises data gateway** for the connection.
 
 ## Database sources
+**No database to hand? Use the emulator.** Start `apps/db-emulator` (`npm start`), then *Database (SQL / Oracle)* > **Local emulator (test)** > Connect. You get three engines with big tables and a live writer, and can type queries in T-SQL, Oracle SQL or Teradata SQL. See `../db-emulator/README.md` and `CONNECTOR-COMPAT.md` there.
+
+**Real databases** (inside Power Apps):
 Every table added with `pac code add-data-source` appears in **Database (SQL / Oracle)** > Table. You choose max rows (default 5,000, up to 200,000), an optional OData `filter`, sort and column list, and a live refresh interval. The app reads through the SDK (`retrieveMultipleRecordsAsync`, paged with `skipToken`).
 
 **SQL query (advanced)** runs one `SELECT` through the connector's *Execute a SQL query* operation, only if that operation exists in the app's generated data-source info. If it does not, the app says so and you can use a table or a database view instead (a view is the recommended way to give a dashboard a ready-made query).
@@ -62,11 +67,11 @@ Dashboard layouts live in this browser (localStorage); file data lives in Indexe
 - No sign-in layer of its own: access is whatever Power Apps sharing allows. Data shown comes from the user's own connections.
 
 ## Honest status
-Tested in this build: the data engine (25 unit tests, including 100k rows aggregated in under 1.5 s and the row-cap warning) and the full browser experience against the production bundle (upload CSV and Excel, paste, multi-file, cross-filtering, date range, replace-data with change deltas, saved layouts and data surviving reload, the live demo refreshing by itself, dark mode, phone width, no console errors).
+Tested in this build: the data engine (27 unit tests, including 100k rows aggregated in under 1.5 s and the row-cap warning) and the full browser experience against the production bundle (upload CSV and Excel, paste, multi-file, cross-filtering, date range, replace-data with change deltas, saved layouts and data surviving reload, the live demo refreshing by itself, dark mode, phone width, no console errors).
 
 **Measured with big files** (headless Chromium, production build): a 150,000-row CSV (7 MB) was ready in about 2 s with the longest page stall under 0.4 s and an exact total; a click-to-filter took about 160 ms and table search about 90 ms. A 300,000-row CSV loaded the first 200,000 rows in about 4 s and showed the warning. Your computer and Power Apps frame may be slower.
 
-**Not tested** (no tenant here): the real SQL / Oracle / Dataverse reads, `pac code push`, and the deploy script. The SDK calls follow the installed `@microsoft/power-apps` 1.5.0 typings, but the first run in your tenant is a pilot: open **Diagnostics**, add one small table, and check it loads. The `pac code add-data-source` flags (`-a`, `-c`, `-d`, `-t`) should be confirmed with `pac code add-data-source --help`; the script warns if `-d` is missing. Oracle is the least certain connector for code apps.
+**Not tested** (no tenant here): the real SQL / Oracle / Dataverse reads, `pac code push`, and the deploy script. The SDK calls follow the installed `@microsoft/power-apps` 1.5.0 typings, but the first run in your tenant is a pilot: open **Diagnostics**, add one small table, and check it loads. The `pac code add-data-source` flags (`-a`, `-c`, `-d`, `-t`) should be confirmed with `pac code add-data-source --help`; the script warns if `-d` is missing. Oracle is the least certain connector for code apps, and I could not confirm a Teradata connector for Power Apps code apps in your tenant (see the emulator's CONNECTOR-COMPAT.md).
 
 ## Layout
 ```
