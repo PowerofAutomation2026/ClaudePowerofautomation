@@ -32,9 +32,9 @@ Add the input: **Add an input**, Text, name `FolderPath`, example `/Shared Docum
 
 Then add these actions in order:
 1. **SharePoint, Get files (properties only)**: Site Address = your site, Library Name = Documents, Limit Entries to Folder = pick `Dashboards-Inbox`.
-2. **Initialize variable** `results`, type Array.
+2. **Initialize variable** `results`, type Array. Then another **Initialize variable** `csvText`, type String. (Variables must be created before the loop, not inside it.)
 3. **Apply to each** over the value from step 1. Inside it:
-   1. **Initialize variable** is not allowed inside a loop, so first (before the loop) add **Initialize variable** `csvText`, type String, and use **Set variable** inside.
+   1. **Set variable** `csvText` to empty text (so one file's data never leaks into the next).
    2. **SharePoint, Get file content using path**: Site = your site, File Path = `Full Path` from the current item.
    3. **Switch** on the lowercase extension:
       `toLower(last(split(items('Apply_to_each')?['{FilenameWithExtension}'], '.')))`
