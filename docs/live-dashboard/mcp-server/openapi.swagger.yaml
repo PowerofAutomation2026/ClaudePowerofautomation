@@ -1,0 +1,43 @@
+# Optional: import as a Power Platform CUSTOM CONNECTOR (Swagger 2.0) instead of MCP.
+# Replace YOUR-HOST. Security is an API key header, so no Azure app registration is needed.
+# Untested import. Custom connectors may need a premium licence.
+swagger: '2.0'
+info: { title: Live Dashboard, version: '1.0' }
+host: YOUR-HOST
+basePath: /
+schemes: [https]
+consumes: [application/json]
+produces: [application/json]
+paths:
+  /api/upload:
+    post:
+      operationId: CreateOrUpdateDashboard
+      summary: Create or update a live dashboard
+      description: Same name keeps the same dashboard link. Send csv_text or rows.
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            required: [name]
+            properties:
+              name: { type: string, description: File or dashboard name }
+              csv_text: { type: string, description: Whole file as CSV text }
+              rows: { type: array, items: { type: object }, description: Alternative to csv_text }
+      responses:
+        '200':
+          description: OK
+          schema:
+            type: object
+            properties:
+              id: { type: string }
+              name: { type: string }
+              rows: { type: integer }
+              created: { type: boolean }
+              url: { type: string }
+              updated: { type: string }
+securityDefinitions:
+  apiKey: { type: apiKey, in: header, name: x-api-key }
+security:
+  - apiKey: []

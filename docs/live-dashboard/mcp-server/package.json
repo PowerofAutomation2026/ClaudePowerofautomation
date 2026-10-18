@@ -1,0 +1,9 @@
+{
+  "name": "live-dashboard-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP server + REST API + dashboard host for Copilot Studio. No dependencies.",
+  "scripts": { "start": "node server.mjs", "test": "node test.mjs" },
+  "engines": { "node": ">=18" }
+}
