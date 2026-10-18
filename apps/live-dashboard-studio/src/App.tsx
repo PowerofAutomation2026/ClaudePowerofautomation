@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import {
-  applyFilters, autoDashboard, compareDatasets, datasetToCsv, defaultWidget, fromObjects, kpiValue, maxDate, series, uid, widgetIssue,
+  applyFilters, autoDashboard, compareDatasets, datasetToCsv, defaultWidget, fromObjectsAsync, kpiValue, maxDate, series, uid, widgetIssue,
 } from './engine'
 import type { Agg, Dataset, DateRange, Filter, Grain, Widget, WidgetType } from './engine'
 import { BarChart, DataTable, Donut, Kpi, LineChart, SeriesTable, colorMap, useTick } from './charts'
@@ -37,6 +37,8 @@ export default function App() {
   const [activeId, setActiveId] = useState<string | null>(null)
   const [ds, setDs] = useState<Dataset | null>(null)
   const [loading, setLoading] = useState(false)
+  const loadingRef = useRef(false)
+  const [progress, setProgress] = useState<{ f: number; msg: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [live, setLive] = useState(true)
@@ -63,6 +65,12 @@ export default function App() {
 
   useEffect(() => { document.documentElement.dataset.theme = theme; savePrefs({ theme }) }, [theme])
   const addLog = useCallback((m: string) => setLog((l) => [`${new Date().toLocaleTimeString()}  ${m}`, ...l].slice(0, 60)), [])
+
+  /** Save file data in this browser; big datasets are skipped (it would freeze the page) and the user is told. */
+  const saveData = useCallback(async (id: string, data: Dataset) => {
+    const saved = await putDataset(id, data)
+    if (!saved && data.rows.length > 100_000) setNotice(`${data.rows.length.toLocaleString()} rows is too big to keep in this browser, so the data is gone after a reload (the layout is kept). Add the file again next time, or load it from a database.`)
+  }, [])
 
   const persist = useCallback((fn: (list: DashboardDef[]) => DashboardDef[]) => {
     setDashboards((list) => { const next = fn(list); saveDashboards(next); return next })
@@ -93,33 +101,35 @@ export default function App() {
 
   const fetchFromSource = useCallback(async (def: DashboardDef): Promise<Dataset> => {
     const s = def.source
-    if (s.kind === 'demo') return fromObjects(def.name, await fetchSimulated(), def.id)
-    if (s.kind === 'db' && s.dbKey) return fromObjects(def.name, await fetchTable(s.dbKey, { top: s.top ?? 5000, filter: s.filter, orderBy: s.orderBy, select: s.select }), def.id)
-    if (s.kind === 'sql') return fromObjects(def.name, await runSqlQuery({ server: s.sqlServer ?? '', database: s.sqlDatabase ?? '', query: s.sqlQuery ?? '' }), def.id)
+    if (s.kind === 'demo') return fromObjectsAsync(def.name, await fetchSimulated(), def.id)
+    if (s.kind === 'db' && s.dbKey) { setProgress({ f: 0.05, msg: 'Reading rows from the database…' }); const rows = await fetchTable(s.dbKey, { top: s.top ?? 5000, filter: s.filter, orderBy: s.orderBy, select: s.select }); return fromObjectsAsync(def.name, rows, def.id, (f, msg) => setProgress({ f, msg })) }
+    if (s.kind === 'sql') { setProgress({ f: 0.05, msg: 'Running the query…' }); const rows = await runSqlQuery({ server: s.sqlServer ?? '', database: s.sqlDatabase ?? '', query: s.sqlQuery ?? '' }); return fromObjectsAsync(def.name, rows, def.id, (f, msg) => setProgress({ f, msg })) }
     const h = watch.current.get(def.id)
-    if (h) { const f = await h.getFile(); const r = await readFile(f, s.sheet); return { ...r.dataset, id: def.id, name: def.name } }
+    if (h) { const f = await h.getFile(); const r = await readFile(f, s.sheet, (f2, msg) => setProgress({ f: f2, msg })); return { ...r.dataset, id: def.id, name: def.name } }
     const cached = await getDataset(def.id)
     if (cached) return cached
     throw new Error('This dashboard\'s data is not stored in this browser. Use "Replace data" to add the file again.')
   }, [])
 
-  const refresh = useCallback(async (opts: { quiet?: boolean } = {}) => {
+  const refresh = useCallback(async (opts: { quiet?: boolean; manual?: boolean } = {}) => {
     const def = activeRef.current
     if (!def) return
+    if (loadingRef.current && !opts.manual) return       // a slow load is still running: do not pile another on top
     const my = ++reqId.current
+    loadingRef.current = true
     setLoading(true)
     try {
       const data = await fetchFromSource(def)
       if (my !== reqId.current) return
       acceptDataset(data, def, opts.quiet)
       setError(null)
-      if (def.source.kind === 'file' || def.source.kind === 'paste') void putDataset(def.id, data)
+      if (def.source.kind === 'file' || def.source.kind === 'paste') void saveData(def.id, data)
       addLog(`Loaded ${data.rows.length} rows from ${def.name}`)
     } catch (e) {
       if (my !== reqId.current) return
       setError(errMsg(e)); addLog('ERROR ' + errMsg(e))
-    } finally { if (my === reqId.current) setLoading(false) }
-  }, [acceptDataset, addLog, fetchFromSource])
+    } finally { if (my === reqId.current) { setLoading(false); loadingRef.current = false; setProgress(null) } }
+  }, [acceptDataset, addLog, fetchFromSource, saveData])
 
   /* open a dashboard: load its data */
   useEffect(() => {
@@ -156,11 +166,11 @@ export default function App() {
   const createDashboard = useCallback((data: Dataset, source: SourceDef, name = data.name, activate = true) => {
     const id = data.id
     const def: DashboardDef = { id, name, source, widgets: autoDashboard(data), filters: [], range: null, created: Date.now(), updated: Date.now() }
-    if (source.kind === 'file' || source.kind === 'paste') void putDataset(id, data)
+    if (source.kind === 'file' || source.kind === 'paste') void saveData(id, data)
     persist((list) => [def, ...list.filter((d) => d.id !== id)])
     if (activate) { justCreated.current = id; setDs(data); setActiveId(id); setError(null) }
     return def
-  }, [persist])
+  }, [persist, saveData])
 
   const handleFiles = useCallback(async (files: File[], replace: boolean) => {
     if (!files.length) return
@@ -168,12 +178,13 @@ export default function App() {
     let first = true
     for (const file of files) {
       try {
-        const r = await readFile(file)
+        setProgress({ f: 0, msg: `Reading ${file.name}…` })
+        const r = await readFile(file, undefined, (f, msg) => setProgress({ f, msg: `${file.name}: ${msg}` }))
         if (replace && activeRef.current && first) {
           const def = activeRef.current
           const next = { ...r.dataset, id: def.id, name: def.name }
           acceptDataset(next, def)
-          void putDataset(def.id, next)
+          void saveData(def.id, next)
           patchActive({ source: { ...def.source, kind: 'file', fileName: file.name, sheet: r.sheet } })
           addLog(`Replaced data with ${file.name} (${next.rows.length} rows)`)
         } else {
@@ -182,8 +193,9 @@ export default function App() {
         first = false
       } catch (e) { setError(`${file.name}: ${errMsg(e)}`); addLog('ERROR ' + file.name + ' ' + errMsg(e)) }
     }
+    setProgress(null)
     if (!replace && files.length > 1) setNotice(`${files.length} dashboards were created. Pick one in the list on the left.`)
-  }, [acceptDataset, addLog, createDashboard, patchActive])
+  }, [acceptDataset, addLog, createDashboard, patchActive, saveData])
 
   const onDrop = (e: DragEvent, replace: boolean) => {
     e.preventDefault(); setDragging(false)
@@ -296,6 +308,8 @@ export default function App() {
 
         <main className="main" {...(active ? dragProps(true) : {})}>
           {dragging && <div className="drop-overlay">{active ? 'Drop to replace the data (widgets stay)' : 'Drop files to build dashboards'}</div>}
+          {progress && <div className="progress" role="status" aria-live="polite"><div className="progress-bar"><i style={{ width: `${Math.round(progress.f * 100)}%` }} /></div><span>{progress.msg}</span></div>}
+          {ds?.truncatedFrom && <div className="banner warn" role="alert"><span><b>Only the first {ds.rows.length.toLocaleString()} of {ds.truncatedFrom.toLocaleString()} rows were loaded.</b> Totals cover just those rows. Filter or aggregate at the source (a database filter or view), or split the file.</span></div>}
           {error && <div className="banner error" role="alert"><span>{error}</span><button className="icon" onClick={() => setError(null)} aria-label="Dismiss">✕</button></div>}
           {notice && <div className="banner info"><span>{notice}</span><button className="icon" onClick={() => setNotice(null)} aria-label="Dismiss">✕</button></div>}
 
@@ -319,7 +333,7 @@ export default function App() {
                 <input className="dash-title" value={active.name} aria-label="Dashboard name" onChange={(e) => patchActive({ name: e.target.value })} />
                 <StatusChip def={active} ds={ds} loading={loading} live={live} error={!!error} lastLoaded={ds?.loadedAt ?? 0} />
                 <div className="spacer" />
-                <RefreshControls def={active} live={live} setLive={setLive} onInterval={(v) => patchActive({ source: { ...active.source, refreshSec: v } })} onNow={() => void refresh()} />
+                <RefreshControls def={active} live={live} setLive={setLive} onInterval={(v) => patchActive({ source: { ...active.source, refreshSec: v } })} onNow={() => void refresh({ manual: true })} />
                 <button className="btn" onClick={() => replaceInput.current?.click()}>⟳ Replace data</button>
                 <input ref={replaceInput} type="file" hidden accept=".csv,.tsv,.txt,.json,.xlsx" onChange={(e) => { void handleFiles([...(e.target.files ?? [])], true); e.target.value = '' }} />
                 {canWatchFiles() && <button className="btn" title="Pick a local file; the dashboard updates whenever you save it" onClick={async () => {

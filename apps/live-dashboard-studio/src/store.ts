@@ -1,4 +1,5 @@
 /** Saves dashboard definitions (localStorage) and file data (IndexedDB) in this browser. Every call is wrapped: storage can be blocked. */
+import { MAX_SAVED_ROWS } from './engine'
 import type { DateRange, Dataset, Filter, Widget } from './engine'
 
 export interface SourceDef {
@@ -55,8 +56,10 @@ function open(): Promise<IDBDatabase> {
     r.onerror = () => rej(r.error)
   })
 }
-export async function putDataset(id: string, ds: Dataset): Promise<void> {
-  try { const db = await open(); await new Promise<void>((res, rej) => { const tx = db.transaction(STORE, 'readwrite'); tx.objectStore(STORE).put(ds, id); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error) }) } catch { /* not persisted */ }
+/** Returns false when the dataset is too big to save (saving 100k+ rows would freeze the page). */
+export async function putDataset(id: string, ds: Dataset): Promise<boolean> {
+  if (ds.rows.length > MAX_SAVED_ROWS) { await delDataset(id); return false }
+  try { const db = await open(); await new Promise<void>((res, rej) => { const tx = db.transaction(STORE, 'readwrite'); tx.objectStore(STORE).put(ds, id); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error) }); return true } catch { return false }
 }
 export async function getDataset(id: string): Promise<Dataset | null> {
   try { const db = await open(); return await new Promise((res, rej) => { const q = db.transaction(STORE).objectStore(STORE).get(id); q.onsuccess = () => res((q.result as Dataset) ?? null); q.onerror = () => rej(q.error) }) } catch { return null }

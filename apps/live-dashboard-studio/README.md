@@ -13,7 +13,7 @@ A Power Apps **code app** (React + TypeScript) that turns data into a live dashb
 cd apps/live-dashboard-studio
 npm install
 npm run dev          # http://127.0.0.1:3100 : upload sample-sales.csv, or click "Try the live demo"
-npm test             # 22 engine tests (parsing, type detection, aggregation, auto layout)
+npm test             # 25 engine tests (parsing, type detection, aggregation, auto layout)
 npm run build        # type-check + bundle
 ```
 In the browser preview, files, pasted data and the simulated live demo work. Database tables need the app to run inside Power Apps.
@@ -54,13 +54,17 @@ Dashboard layouts live in this browser (localStorage); file data lives in Indexe
 
 ## Limits (be aware)
 - PDF tables are not read: export to CSV or Excel first. Old `.xls` is not supported (save as `.xlsx`).
-- Up to 200,000 rows per dataset in the browser; files up to 60 MB.
+- **Big data:** up to **200,000 rows** are kept in the browser (files up to 60 MB). If a file or query has more, the app shows a warning with the real numbers ("Only the first 200,000 of 300,000 rows were loaded") because totals then cover only the loaded rows. Cut the data down at the source: a database filter or view, or split the file.
+- Datasets above **100,000 rows are not saved** in the browser (saving would freeze the page); the layout is kept and you add the file again after a reload. Database dashboards reload from the database anyway.
+- Big files load in slices with a progress bar, so the page stays usable. Excel (.xlsx) files cannot be sliced by the library: very large workbooks can pause the page for several seconds, so use CSV for 100k+ rows.
 - Date detection: ISO (`2026-10-18`, with or without time) and `M/D/YYYY` (`D/M/YYYY` when the first part is above 12).
 - "Watch file" needs a Chromium browser and may be blocked inside the Power Apps frame; then use **Replace data**.
 - No sign-in layer of its own: access is whatever Power Apps sharing allows. Data shown comes from the user's own connections.
 
 ## Honest status
-Tested in this build: the data engine (22 unit tests, including 100k rows aggregated in under 1.5 s) and the full browser experience against the production bundle (upload CSV and Excel, paste, multi-file, cross-filtering, date range, replace-data with change deltas, saved layouts and data surviving reload, the live demo refreshing by itself, dark mode, phone width, no console errors).
+Tested in this build: the data engine (25 unit tests, including 100k rows aggregated in under 1.5 s and the row-cap warning) and the full browser experience against the production bundle (upload CSV and Excel, paste, multi-file, cross-filtering, date range, replace-data with change deltas, saved layouts and data surviving reload, the live demo refreshing by itself, dark mode, phone width, no console errors).
+
+**Measured with big files** (headless Chromium, production build): a 150,000-row CSV (7 MB) was ready in about 2 s with the longest page stall under 0.4 s and an exact total; a click-to-filter took about 160 ms and table search about 90 ms. A 300,000-row CSV loaded the first 200,000 rows in about 4 s and showed the warning. Your computer and Power Apps frame may be slower.
 
 **Not tested** (no tenant here): the real SQL / Oracle / Dataverse reads, `pac code push`, and the deploy script. The SDK calls follow the installed `@microsoft/power-apps` 1.5.0 typings, but the first run in your tenant is a pilot: open **Diagnostics**, add one small table, and check it loads. The `pac code add-data-source` flags (`-a`, `-c`, `-d`, `-t`) should be confirmed with `pac code add-data-source --help`; the script warns if `-d` is missing. Oracle is the least certain connector for code apps.
 

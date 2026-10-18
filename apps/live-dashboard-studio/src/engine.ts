@@ -11,7 +11,7 @@ export type Grain = 'day' | 'week' | 'month' | 'year'
 export type WidgetType = 'kpi' | 'bar' | 'line' | 'donut' | 'table'
 
 export interface Column { name: string; type: ColType; distinct: number; blanks: number }
-export interface Dataset { id: string; name: string; columns: Column[]; rows: Row[]; loadedAt: number }
+export interface Dataset { id: string; name: string; columns: Column[]; rows: Row[]; loadedAt: number; truncatedFrom?: number }
 
 export interface Widget {
   id: string
@@ -29,7 +29,8 @@ export interface Filter { col: string; values: string[] }
 export interface DateRange { col: string; days: number }   // last N days of the data (0 = all)
 export interface Point { label: string; value: number; n: number }
 
-export const MAX_ROWS = 200_000
+export const MAX_ROWS = 200_000          // rows kept in the browser; more are cut and the app says so
+export const MAX_SAVED_ROWS = 100_000    // larger datasets are not saved in this browser (avoids a long freeze)
 
 /* ------------------------------------------------------------------ parsing */
 
@@ -159,33 +160,112 @@ export function fromObjects(name: string, objs: Record<string, unknown>[], id = 
   for (const o of objs.slice(0, 500)) for (const k of Object.keys(o)) if (!seen.has(k)) { seen.add(k); keys.push(k) }
   const heads = cleanHeaders(keys)
   const matrix = objs.slice(0, MAX_ROWS).map((o) => keys.map((k) => o[k]))
-  return buildDataset(name, heads, matrix, id)
+  return buildDataset(name, heads, matrix, id, objs.length)
 }
 
 /** Build a typed dataset from a matrix whose first row is the header. */
 export function fromMatrix(name: string, matrix: unknown[][], id = uid('ds')): Dataset {
   if (matrix.length < 2) throw new Error('The data has only a header row or no rows.')
   const heads = cleanHeaders(matrix[0])
-  return buildDataset(name, heads, matrix.slice(1, MAX_ROWS + 1), id)
+  return buildDataset(name, heads, matrix.slice(1, MAX_ROWS + 1), id, matrix.length - 1)
 }
 
-function buildDataset(name: string, heads: string[], body: unknown[][], id: string): Dataset {
-  const columns: Column[] = heads.map((h, c) => {
-    const info = inferColumn(h, body.map((r) => r[c]))
-    return { name: h, ...info }
-  })
-  const rows: Row[] = body.map((r) => {
-    const o: Row = {}
-    columns.forEach((col, c) => {
-      const v = r[c]
-      if (blank(v)) o[col.name] = null
-      else if (col.type === 'number') o[col.name] = parseNumber(v)
-      else if (col.type === 'date') o[col.name] = parseDate(v)
-      else o[col.name] = typeof v === 'object' && !(v instanceof Date) ? JSON.stringify(v) : v instanceof Date ? (parseDate(v) ?? String(v)) : String(v)
-    })
-    return o
-  })
-  return { id, name, columns, rows, loadedAt: Date.now() }
+function makeRow(columns: Column[], r: unknown[]): Row {
+  const o: Row = {}
+  for (let c = 0; c < columns.length; c++) {
+    const col = columns[c]
+    const v = r[c]
+    if (blank(v)) o[col.name] = null
+    else if (col.type === 'number') o[col.name] = parseNumber(v)
+    else if (col.type === 'date') o[col.name] = parseDate(v)
+    else o[col.name] = typeof v === 'object' && !(v instanceof Date) ? JSON.stringify(v) : v instanceof Date ? (parseDate(v) ?? String(v)) : String(v)
+  }
+  return o
+}
+
+function finish(name: string, columns: Column[], rows: Row[], id: string, totalRows: number): Dataset {
+  const ds: Dataset = { id, name, columns, rows, loadedAt: Date.now() }
+  if (totalRows > rows.length) ds.truncatedFrom = totalRows
+  return ds
+}
+
+function buildDataset(name: string, heads: string[], body: unknown[][], id: string, totalRows = body.length): Dataset {
+  const columns: Column[] = heads.map((h, c) => ({ name: h, ...inferColumn(h, body.map((r) => r[c])) }))
+  return finish(name, columns, body.map((r) => makeRow(columns, r)), id, totalRows)
+}
+
+/* ---- the same work in slices that let the page breathe (no frozen UI on big files) ---- */
+
+export type Progress = (fraction: number, message: string) => void
+const yieldToUi = () => new Promise<void>((res) => setTimeout(res, 0))
+
+export async function parseDelimitedAsync(text: string, delim?: string, onProgress?: Progress): Promise<string[][]> {
+  const t = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
+  const d = delim ?? detectDelimiter(t)
+  const rows: string[][] = []
+  let row: string[] = []
+  let field = ''
+  let q = false
+  const SLICE = 500_000
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i]
+    if (q) {
+      if (c === '"') { if (t[i + 1] === '"') { field += '"'; i++ } else q = false } else field += c
+    } else if (c === '"' && field === '') q = true
+    else if (c === d) { row.push(field); field = '' }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && t[i + 1] === '\n') i++
+      row.push(field); field = ''; rows.push(row); row = []
+    } else field += c
+    if (i % SLICE === SLICE - 1) { onProgress?.(0.05 + 0.4 * (i / t.length), `Reading rows… ${rows.length.toLocaleString()}`); await yieldToUi() }
+  }
+  if (field !== '' || row.length) { row.push(field); rows.push(row) }
+  return rows.filter((r) => r.some((v) => v.trim() !== ''))
+}
+
+export async function fromMatrixAsync(name: string, matrix: unknown[][], onProgress?: Progress, id = uid('ds')): Promise<Dataset> {
+  if (matrix.length < 2) throw new Error('The data has only a header row or no rows.')
+  const heads = cleanHeaders(matrix[0])
+  const body = matrix.slice(1, MAX_ROWS + 1)
+  const columns: Column[] = []
+  for (let c = 0; c < heads.length; c++) {
+    columns.push({ name: heads[c], ...inferColumn(heads[c], body.map((r) => r[c])) })
+    onProgress?.(0.45 + 0.25 * ((c + 1) / heads.length), `Detecting column types… ${c + 1} of ${heads.length}`)
+    await yieldToUi()
+  }
+  const rows: Row[] = new Array(body.length)
+  const STEP = 20_000
+  for (let i = 0; i < body.length; i += STEP) {
+    const end = Math.min(i + STEP, body.length)
+    for (let k = i; k < end; k++) rows[k] = makeRow(columns, body[k])
+    onProgress?.(0.7 + 0.3 * (end / body.length), `Building ${end.toLocaleString()} of ${body.length.toLocaleString()} rows`)
+    await yieldToUi()
+  }
+  return finish(name, columns, rows, id, matrix.length - 1)
+}
+
+export async function fromObjectsAsync(name: string, objs: Record<string, unknown>[], id = uid('ds'), onProgress?: Progress): Promise<Dataset> {
+  if (objs.length === 0) throw new Error('No rows found.')
+  const keys: string[] = []
+  const seen = new Set<string>()
+  for (const o of objs.slice(0, 500)) for (const k of Object.keys(o)) if (!seen.has(k)) { seen.add(k); keys.push(k) }
+  const heads = cleanHeaders(keys)
+  const d = await fromMatrixAsync(name, [heads, ...objs.slice(0, MAX_ROWS + 1).map((o) => keys.map((k) => o[k]))], onProgress, id)
+  if (objs.length > MAX_ROWS) d.truncatedFrom = objs.length
+  return d
+}
+
+export async function datasetFromTextAsync(name: string, text: string, onProgress?: Progress): Promise<Dataset> {
+  const t = text.trim()
+  if (t.startsWith('[') || t.startsWith('{')) {
+    onProgress?.(0.2, 'Reading JSON…')
+    await yieldToUi()
+    const parsed = parseJsonRows(t)
+    if (parsed.length && Array.isArray(parsed[0])) return fromMatrixAsync(name, parsed as unknown[][], onProgress)
+    return fromObjectsAsync(name, parsed as Record<string, unknown>[], uid('ds'), onProgress)
+  }
+  const matrix = await parseDelimitedAsync(t, undefined, onProgress)
+  return fromMatrixAsync(name, matrix, onProgress)
 }
 
 export function datasetFromText(name: string, text: string): Dataset {

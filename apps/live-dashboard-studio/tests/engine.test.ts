@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import {
   parseDelimited, detectDelimiter, parseNumber, parseDate, datasetFromText, fromObjects, series, kpiValue, applyFilters,
   autoDashboard, autoGrain, widgetIssue, compareDatasets, datasetToCsv, makeDemoOrders, formatNumber, defaultWidget, bucket, weekStart,
+  datasetFromTextAsync, fromObjectsAsync, MAX_ROWS,
 } from '../src/engine.ts'
 import type { Widget } from '../src/engine.ts'
 
@@ -153,6 +154,30 @@ t('large data performance (100k rows aggregate < 1.5 s)', () => {
   const rows = applyFilters(ds, [{ col: 'Region', values: ['North'] }])
   w.forEach((x) => { if (x.type !== 'table' && x.type !== 'kpi') series(ds, rows, x); if (x.type === 'kpi') kpiValue(rows, x) })
   assert.ok(Date.now() - t0 < 1500, 'took ' + (Date.now() - t0) + ' ms')
+})
+
+const ta = async (name: string, fn: () => Promise<void>) => { try { await fn(); passed++ } catch (e) { console.error('FAIL', name, '\n ', (e as Error).message); process.exitCode = 1 } }
+await ta('async parse equals sync parse', async () => {
+  const sync = datasetFromText('s.csv', SALES), asyn = await datasetFromTextAsync('s.csv', SALES)
+  assert.deepEqual(asyn.columns, sync.columns); assert.deepEqual(asyn.rows, sync.rows)
+})
+await ta('async parse reports progress and yields', async () => {
+  const big = datasetToCsv(fromObjects('b', makeDemoOrders(60000, 2, new Date('2026-10-18'))))
+  const seen: number[] = []; let ticks = 0
+  const timer = setInterval(() => ticks++, 1)
+  const ds = await datasetFromTextAsync('b.csv', big, (f) => seen.push(f))
+  clearInterval(timer)
+  assert.equal(ds.rows.length, 60000); assert.ok(seen.length >= 4, 'progress callbacks: ' + seen.length)
+  assert.ok(seen.every((v, i) => i === 0 || v >= seen[i - 1] - 1e-9), 'progress never goes backwards')
+  assert.ok(ticks > 3, 'the event loop got to run during the parse (timer ticks: ' + ticks + ')')
+})
+await ta('more than the row cap is reported, never silently dropped', async () => {
+  const lines = ['Id,Region,Amount']
+  for (let i = 0; i < MAX_ROWS + 1234; i++) lines.push(`${i},${i % 2 ? 'N' : 'S'},1`)
+  const ds = await datasetFromTextAsync('huge.csv', lines.join('\n'))
+  assert.equal(ds.rows.length, MAX_ROWS); assert.equal(ds.truncatedFrom, MAX_ROWS + 1234)
+  const ok = await fromObjectsAsync('o', makeDemoOrders(500, 1, new Date('2026-10-18')))
+  assert.equal(ok.truncatedFrom, undefined, 'no flag when everything fits')
 })
 
 console.log(process.exitCode ? 'SOME TESTS FAILED' : `ALL ${passed} ENGINE TESTS PASSED`)

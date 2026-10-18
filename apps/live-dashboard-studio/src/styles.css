@@ -14,6 +14,7 @@
   --danger: #b42318;
   --danger-bg: #fef3f2;
   --info-bg: #eef4fd;
+  --warn-bg: #fff8e5;
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300;
   --other: #a9a8a0;
   --shadow: 0 1px 2px rgb(0 0 0 / 6%);
@@ -22,14 +23,14 @@
   :root:where(:not([data-theme='light'])) {
     color-scheme: dark;
     --bg: #121211; --surface-1: #1a1a19; --surface-2: #232321; --text-1: #f0efec; --text-2: #c3c2b7; --text-3: #9c9b94;
-    --border: #2e2e2c; --grid: #2a2a28; --accent: #3987e5; --on-accent: #0b0b0b; --danger: #f97066; --danger-bg: #2a1614; --info-bg: #14202e;
+    --border: #2e2e2c; --grid: #2a2a28; --accent: #3987e5; --on-accent: #0b0b0b; --danger: #f97066; --danger-bg: #2a1614; --info-bg: #14202e; --warn-bg: #2b2210;
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --other: #6d6c66; --shadow: none;
   }
 }
 :root[data-theme='dark'] {
   color-scheme: dark;
   --bg: #121211; --surface-1: #1a1a19; --surface-2: #232321; --text-1: #f0efec; --text-2: #c3c2b7; --text-3: #9c9b94;
-  --border: #2e2e2c; --grid: #2a2a28; --accent: #3987e5; --on-accent: #0b0b0b; --danger: #f97066; --danger-bg: #2a1614; --info-bg: #14202e;
+  --border: #2e2e2c; --grid: #2a2a28; --accent: #3987e5; --on-accent: #0b0b0b; --danger: #f97066; --danger-bg: #2a1614; --info-bg: #14202e; --warn-bg: #2b2210;
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --other: #6d6c66; --shadow: none;
 }
 
@@ -77,6 +78,7 @@ input, select, textarea { border: 1px solid var(--border); background: var(--sur
 
 .banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-radius: 8px; margin-bottom: 12px; }
 .banner.error { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
+.banner.warn { background: var(--warn-bg); border: 1px solid var(--s4); }
 .banner.info { background: var(--info-bg); border: 1px solid var(--border); }
 
 .welcome { max-width: 860px; margin: 40px auto; text-align: center; }
@@ -210,3 +212,7 @@ th.num button { text-align: right; }
   .card { break-inside: avoid; box-shadow: none; }
   .scroll { max-height: none; }
 }
+
+.progress { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-1); }
+.progress-bar { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+.progress-bar i { display: block; height: 100%; background: var(--accent); transition: width 0.2s; }

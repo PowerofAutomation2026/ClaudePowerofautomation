@@ -3,8 +3,8 @@
  * data SDK (SQL Server, Oracle, Dataverse ... added with `pac code add-data-source`), and a simulated live source.
  * No Azure app registration: database calls run on the signed-in user's own connector connection.
  */
-import { datasetFromText, fromMatrix, fromObjects, makeDemoOrders } from './engine'
-import type { Dataset } from './engine'
+import { datasetFromText, datasetFromTextAsync, fromMatrixAsync, fromObjects, fromObjectsAsync, makeDemoOrders } from './engine'
+import type { Dataset, Progress } from './engine'
 
 export const MAX_FILE_BYTES = 60 * 1024 * 1024
 
@@ -12,23 +12,26 @@ export const MAX_FILE_BYTES = 60 * 1024 * 1024
 
 export interface FileRead { dataset: Dataset; sheets?: string[]; sheet?: string }
 
-export async function readFile(file: File, sheet?: string): Promise<FileRead> {
+export async function readFile(file: File, sheet?: string, onProgress?: Progress): Promise<FileRead> {
   if (file.size > MAX_FILE_BYTES) throw new Error(`${file.name} is larger than 60 MB.`)
   const name = file.name
   const ext = name.toLowerCase().split('.').pop() ?? ''
   if (ext === 'pdf') throw new Error('PDF files cannot be read directly. Export the table from the PDF to CSV or Excel, or paste the text.')
   if (ext === 'xls') throw new Error('Old .xls files are not supported. Save the file as .xlsx or .csv and add it again.')
   if (ext === 'xlsx') {
+    onProgress?.(0.05, `Reading Excel file… ${(file.size / 1e6).toFixed(1)} MB (large workbooks can take a while)`)
     /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
     const mod: any = await import('read-excel-file')
     const sheets: string[] = await mod.readSheetNames(file)
     const chosen = sheet && sheets.includes(sheet) ? sheet : sheets[0]
     const rows: unknown[][] = await mod.default(file, { sheet: chosen })
     const trimmed = rows.filter((r) => r.some((c) => c !== null && c !== undefined && String(c).trim() !== ''))
-    return { dataset: fromMatrix(sheets.length > 1 ? `${name} · ${chosen}` : name, trimmed), sheets, sheet: chosen }
+    onProgress?.(0.4, 'Building the dashboard data…')
+    return { dataset: await fromMatrixAsync(sheets.length > 1 ? `${name} · ${chosen}` : name, trimmed, onProgress), sheets, sheet: chosen }
   }
+  onProgress?.(0.02, `Reading ${(file.size / 1e6).toFixed(1)} MB…`)
   const text = await file.text()
-  return { dataset: datasetFromText(name, text) }
+  return { dataset: await datasetFromTextAsync(name, text, onProgress) }
 }
 
 export const readPasted = (text: string, name = 'Pasted data') => datasetFromText(name, text)
@@ -187,4 +190,4 @@ export async function fetchSimulated(): Promise<Record<string, unknown>[]> {
   return sim.map((r) => ({ ...r }))
 }
 export const resetSimulated = () => { sim = null; simSeed++ }
-export { fromObjects }
+export { fromObjects, fromObjectsAsync, datasetFromText }

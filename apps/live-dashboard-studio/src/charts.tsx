@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { formatNumber } from './engine'
 import type { Cell, Column, Point, Row } from './engine'
 
@@ -111,8 +111,12 @@ export function LineChart({ points, unit }: { points: Point[]; unit: string }) {
   const ticks = geo.ticks
   const path = points.map((p, i) => `${i ? 'L' : 'M'}${geo.x(i).toFixed(1)},${geo.y(p.value).toFixed(1)}`).join(' ')
   const area = `${path} L${geo.x(points.length - 1).toFixed(1)},${geo.y(geo.lo).toFixed(1)} L${geo.x(0).toFixed(1)},${geo.y(geo.lo).toFixed(1)} Z`
-  const nLab = Math.max(2, Math.floor((w - L - Rm) / 92))
-  const labelIdx = new Set<number>(points.length <= nLab ? points.map((_, i) => i) : Array.from({ length: nLab }, (_, k) => Math.round((k * (points.length - 1)) / (nLab - 1))))
+  // evenly spaced x labels: one every `stride` points, at least ~92px apart; the last point is labelled only if it fits
+  const perPoint = points.length < 2 ? w : (w - L - Rm) / (points.length - 1)
+  const stride = Math.max(1, Math.ceil(92 / perPoint))
+  const labelIdx = new Set<number>(points.map((_, i) => i).filter((i) => i % stride === 0))
+  const lastLabel = Math.max(...labelIdx)
+  if ((points.length - 1 - lastLabel) * perPoint >= 92) labelIdx.add(points.length - 1)
   const last = points[points.length - 1]
   const onMove = (e: React.PointerEvent<SVGSVGElement>) => {
     const rect = e.currentTarget.getBoundingClientRect()
@@ -200,12 +204,13 @@ export function Donut({ points, colors, selected, onSelect, unit }: { points: Po
 export function DataTable({ columns, rows, limit = 200 }: { columns: Column[]; rows: Row[]; limit?: number }) {
   const [sort, setSort] = useState<{ col: string; dir: 1 | -1 } | null>(null)
   const [q, setQ] = useState('')
+  const dq = useDeferredValue(q)   // typing stays smooth on big tables: the filtering runs a beat later
   const sorted = useMemo(() => {
     let r = rows
-    if (q.trim()) { const s = q.toLowerCase(); r = r.filter((row) => columns.some((c) => String(row[c.name] ?? '').toLowerCase().includes(s))) }
+    if (dq.trim()) { const s = dq.toLowerCase(); r = r.filter((row) => columns.some((c) => String(row[c.name] ?? '').toLowerCase().includes(s))) }
     if (sort) { const { col, dir } = sort; r = [...r].sort((a, b) => { const x = a[col], y = b[col]; if (x === y) return 0; if (x === null) return 1; if (y === null) return -1; return (x < y ? -1 : 1) * dir }) }
     return r
-  }, [rows, sort, q, columns])
+  }, [rows, sort, dq, columns])
   return (
     <div className="table-wrap">
       <input className="table-search" placeholder="Search rows…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search rows" />
