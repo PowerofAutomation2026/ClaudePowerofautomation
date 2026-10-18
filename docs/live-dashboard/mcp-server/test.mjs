@@ -4,7 +4,7 @@ import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 import assert from 'node:assert/strict';
 const port = 3900 + Math.floor(Math.random() * 90), key = 'test-key-' + Math.random().toString(36).slice(2);
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ld-'));
-const srv = spawn(process.execPath, ['server.mjs'], { env: { ...process.env, API_KEY: key, PORT: port, DATA_DIR: dir }, stdio: 'inherit' });
+const srv = spawn(process.execPath, [new URL('./server.mjs', import.meta.url).pathname], { env: { ...process.env, API_KEY: key, PORT: port, DATA_DIR: dir }, stdio: 'inherit' });
 const base = 'http://127.0.0.1:' + port;
 const rpc = (method, params, id = 1, k = key) => fetch(base + '/mcp', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': k }, body: JSON.stringify({ jsonrpc: '2.0', id, method, params }) });
 const csv = fs.readFileSync(new URL('../../copilot-dashboard-agent/sample-sales.csv', import.meta.url), 'utf8');
