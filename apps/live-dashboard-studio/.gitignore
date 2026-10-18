@@ -1,0 +1,6 @@
+node_modules
+dist
+.deploy-logs
+.deploy-state
+.power
+power.config.json

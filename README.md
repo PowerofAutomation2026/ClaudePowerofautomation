@@ -233,3 +233,6 @@ Based on the connector schemas and Microsoft's inventory docs:
 ## v1.11.0 – agent flows and Copilot Studio "Workflows"
 Copilot Studio's **Workflows** page lists "workflow agent flows" (`microsoft.powerautomate/m365agentflows`); "agent flows" are `microsoft.powerautomate/agentflows`. Both are cloud flows with a Dataverse `workflow` row (`workflowEntityId`). The scan now reads them from the tenant inventory in every environment, shows them in the **Flows** tab with an "Agent flow" / "Workflow" tag and tags matching flows already found by the flow list.
 Transfer: the new owner is added as a CanEdit co-owner through the flow API **and**, for Dataverse-backed flows (solution, agent, workflow), the Dataverse `workflow` owner is set to the new owner through the Microsoft Dataverse connector (update row). The read-back confirms through the flow owner list or the Dataverse owner, whichever shows the new owner. If one route is refused the row says which one worked.
+
+## Other apps in this repo
+- [`apps/live-dashboard-studio`](apps/live-dashboard-studio): drop a file or connect SQL / Oracle and get a live dashboard (Power Apps code app, no app registration).
