@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import {
   parseDelimited, detectDelimiter, parseNumber, parseDate, datasetFromText, fromObjects, series, kpiValue, applyFilters,
   autoDashboard, autoGrain, widgetIssue, compareDatasets, datasetToCsv, makeDemoOrders, formatNumber, defaultWidget, bucket, weekStart,
@@ -110,6 +111,21 @@ t('auto dashboard picks sensible widgets', () => {
   assert.equal(kinds[0], 'kpi'); assert.ok(kinds.includes('line')); assert.ok(kinds.includes('bar')); assert.equal(kinds[kinds.length - 1], 'table')
   assert.ok(ws.every((w) => widgetIssue(ds, w) === null))
   assert.ok(ws.filter((w) => w.type === 'kpi').length >= 3)
+})
+t('auto dashboard puts team members and priority first (ServiceNow sample)', () => {
+  const ds = datasetFromText('sn.csv', fs.readFileSync(new URL('../samples/servicenow-incidents-5k.csv', import.meta.url), 'utf8'))
+  assert.equal(ds.rows.length, 5000)
+  assert.equal(ds.columns.find((c) => c.name === 'Opened')!.type, 'date'); assert.equal(ds.columns.find((c) => c.name === 'Number')!.type, 'text')
+  assert.equal(ds.columns.find((c) => c.name === 'Resolution Time (hrs)')!.type, 'number'); assert.equal(ds.columns.find((c) => c.name === 'Made SLA')!.type, 'text')
+  const ws = autoDashboard(ds)
+  const bars = ws.filter((w) => w.type === 'bar')
+  assert.equal(bars[0].dim, 'Assigned To', 'first bar is by team member: ' + bars.map((b) => b.dim))
+  assert.ok(bars.some((w) => w.dim === 'Priority'), 'priority chart present')
+  assert.ok(!bars.some((w) => w.dim === 'Closed By'), 'only one team-member chart')
+  assert.ok(ws.some((w) => w.type === 'kpi' && /Average Resolution Time/.test(w.title)), 'resolution time averaged')
+  assert.ok(!ws.some((w) => w.measure === 'SLA Target (hrs)'), 'SLA target not a measure')
+  const closed = series(ds, ds.rows, { id: 'w', type: 'bar', title: '', dim: 'Closed By', measure: 'Closed Count', agg: 'sum', topN: 40, sort: 'value', span: 2 })
+  assert.equal(closed.reduce((s, p) => s + p.value, 0), ds.rows.filter((r) => r.State === 'Closed').length)
 })
 t('auto dashboard with no numbers still works', () => {
   const ds = datasetFromText('x.csv', 'Name,City\nA,X\nB,Y\nC,X\nD,Y')

@@ -396,7 +396,9 @@ export function series(ds: Dataset, rows: Row[], w: Widget): Point[] {
 
 /* --------------------------------------------------------- auto dashboard */
 
-const AVG_LIKE = /(rate|pct|percent|ratio|avg|average|price|score|margin|temp|age)/i
+const PERSON_DIM = /(assigned to|closed by|resolved by|opened by|owner|agent|engineer|member|analyst|technician)/i
+const KEY_DIM = /(group|team|priority|category|status|state|department|region|product|channel|type|service)/i
+const AVG_LIKE = /(rate|pct|percent|%|ratio|avg|average|price|score|margin|temp|age|time|duration|elapsed)/i
 
 export function widgetIssue(ds: Dataset, w: Widget): string | null {
   const has = (n?: string) => !n || ds.columns.some((c) => c.name === n)
@@ -422,19 +424,23 @@ export function defaultWidget(type: WidgetType, ds: Dataset): Widget {
 
 export function autoDashboard(ds: Dataset): Widget[] {
   const out: Widget[] = []
-  const nums = ds.columns.filter((c) => c.type === 'number' && c.distinct > 1)
+  const minDistinct = ds.rows.length >= 30 ? 6 : 2          // skip near-constant numbers (flags, targets with 3-4 values) as KPI measures
+  const nums = ds.columns.filter((c) => c.type === 'number' && c.distinct >= minDistinct)
   const dates = ds.columns.filter((c) => c.type === 'date')
   const rowsN = ds.rows.length
   const cats = ds.columns
     .filter((c) => c.type === 'text' && c.distinct >= 2 && c.distinct <= 30 && (c.distinct <= 12 || c.distinct <= rowsN * 0.5))
-    .sort((a, b) => a.distinct - b.distinct)
+    .sort((a, b) => tier(a) - tier(b) || a.distinct - b.distinct)   // people first, then key dimensions, then the rest; yes/no flags last
+  function tier(c: Column): number { return c.distinct === 2 ? 3 : PERSON_DIM.test(c.name) ? 0 : KEY_DIM.test(c.name) ? 1 : 2 }
   const aggFor = (name: string): Agg => (AVG_LIKE.test(name) ? 'avg' : 'sum')
   const mk = (p: Partial<Widget> & Pick<Widget, 'type' | 'title'>): Widget => ({ id: uid('w'), agg: 'count', topN: 8, sort: 'value', span: 1, ...p })
 
   out.push(mk({ type: 'kpi', title: 'Rows', agg: 'count' }))
   nums.slice(0, 3).forEach((c) => out.push(mk({ type: 'kpi', title: `${aggFor(c.name) === 'avg' ? 'Average' : 'Total'} ${c.name}`, measure: c.name, agg: aggFor(c.name) })))
   if (dates[0] && nums[0]) out.push(mk({ type: 'line', title: `${nums[0].name} over ${dates[0].name}`, dim: dates[0].name, measure: nums[0].name, agg: aggFor(nums[0].name), span: 2 }))
-  cats.slice(0, 2).forEach((c, i) => {
+  let personChart = false
+  const barCols = cats.filter((c) => { if (tier(c) === 0) { if (personChart) return false; personChart = true } return true }).slice(0, 2)
+  barCols.forEach((c, i) => {
     const m = nums[i % Math.max(nums.length, 1)]
     out.push(mk({ type: 'bar', title: m ? `${m.name} by ${c.name}` : `Rows by ${c.name}`, dim: c.name, measure: m?.name, agg: m ? aggFor(m.name) : 'count', topN: 10 }))
   })

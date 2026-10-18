@@ -497,7 +497,7 @@ function WidgetCard({ w, ds, rows, filters, edit, prev, asTable, onToggleTable, 
         <>
           {w.type === 'kpi' && <Kpi value={kpiValue(rows, w)} previous={prev} />}
           {w.type === 'table' && <DataTable columns={ds.columns} rows={rows} />}
-          {w.type === 'bar' && (asTable ? <SeriesTable points={points} dimLabel={w.dim ?? ''} valueLabel={unit} /> : <BarChart points={points} selected={sel} onSelect={(l) => canFilter && l !== 'Other' && onFilter(w.dim!, l)} unit={unit} />)}
+          {w.type === 'bar' && (asTable ? <SeriesTable points={points} dimLabel={w.dim ?? ''} valueLabel={unit} /> : <BarChart points={points.filter((p) => p.value !== 0 || points.length === 1)} selected={sel} onSelect={(l) => canFilter && l !== 'Other' && onFilter(w.dim!, l)} unit={unit} />)}
           {w.type === 'line' && (asTable ? <SeriesTable points={points} dimLabel={w.dim ?? ''} valueLabel={unit} /> : <LineChart points={points} unit={unit} />)}
           {w.type === 'donut' && (asTable ? <SeriesTable points={points} dimLabel={w.dim ?? ''} valueLabel={unit} /> : <Donut points={points} colors={colors} selected={sel} onSelect={(l) => canFilter && l !== 'Other' && onFilter(w.dim!, l)} unit={unit} />)}
           {(w.type === 'bar' || w.type === 'donut') && canFilter && <div className="muted small hint">Click a {w.type === 'bar' ? 'bar' : 'slice'} to filter the whole dashboard.</div>}
