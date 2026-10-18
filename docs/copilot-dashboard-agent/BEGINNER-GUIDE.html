@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Beginner Guide: Dashboard Agent</title>
+<style>
+:root{--bg:#fff;--text:#1d2330;--muted:#475467;--accent:#1d4ed8;--card:#f2f4f7}
+@media (prefers-color-scheme:dark){:root{--bg:#111418;--text:#f2f4f7;--muted:#b0b8c4;--accent:#8ab4ff;--card:#1a1f27}}
+body{margin:0;padding:16px;background:var(--bg);color:var(--text);font:22px/1.6 system-ui,sans-serif;max-width:820px;margin-inline:auto}
+h1{font-size:40px;line-height:1.2}
+h2{font-size:32px;margin-top:44px;color:var(--accent)}
+li{margin:14px 0}
+.card{background:var(--card);border-radius:14px;padding:12px 24px}
+code{background:var(--card);padding:2px 8px;border-radius:6px;font-size:20px}
+pre{background:var(--card);padding:16px;border-radius:12px;font-size:19px;white-space:pre-wrap}
+.note{color:var(--muted);font-size:20px}
+</style></head><body>
+<h1>Build your first Copilot agent</h1>
+<p class="note">No coding. About 30 minutes. You need a Microsoft 365 work account with Copilot Studio.</p>
+
+<h2>Part 1: What you will make</h2>
+<ul class="card">
+<li>An agent that wakes up when a file lands in a SharePoint folder</li>
+<li>It reads the file and tells you the totals</li>
+<li>It gives you a link to a dashboard page</li>
+</ul>
+
+<h2>Part 2: Get ready</h2>
+<ul>
+<li>Open <b>SharePoint</b> and go to your team site</li>
+<li>Click <b>New, then Folder</b>, and name it <code>Dashboards-Inbox</code></li>
+<li>Download <code>sample-sales.csv</code> from this repo folder</li>
+<li>Open <b>copilotstudio.microsoft.com</b> and sign in</li>
+</ul>
+
+<h2>Part 3: Create the agent</h2>
+<ul>
+<li>Click <b>Create</b>, then <b>New agent</b></li>
+<li>Name it <code>Dashboard Builder</code></li>
+<li>In <b>Instructions</b>, paste this:</li>
+</ul>
+<pre>When a new file appears in Dashboards-Inbox, read it.
+Reply with: file name, number of rows, column names,
+the total of each number column, and 3 short insights.
+Never invent numbers. If you cannot read the file,
+say what went wrong.</pre>
+<ul><li>Click <b>Create</b></li></ul>
+
+<h2>Part 4: Make it wake up on new files</h2>
+<ul>
+<li>Open the agent, go to the <b>Overview</b> tab</li>
+<li>Find <b>Triggers</b> and click <b>Add trigger</b></li>
+<li>Pick <b>When a file is created (SharePoint)</b></li>
+<li>Choose your site and the <code>Dashboards-Inbox</code> folder</li>
+<li>Click <b>Create</b>, then <b>Publish</b></li>
+</ul>
+
+<h2>Part 5: Test it</h2>
+<ul>
+<li>Upload <code>sample-sales.csv</code> to <code>Dashboards-Inbox</code></li>
+<li>Open the agent's <b>Activity</b> tab and look for a new run</li>
+<li>The answer should say: <b>7 rows, Units 67, Revenue 2,090</b></li>
+<li>If the numbers are different, do not trust the agent. Tell it to re-read the file</li>
+</ul>
+
+<h2>Part 6: See the dashboard</h2>
+<ul>
+<li>Download <code>dashboard.html</code> and double-click it</li>
+<li>Click <b>Choose file</b> and pick <code>sample-sales.csv</code></li>
+<li>You will see totals, two charts and a table</li>
+<li>Later, a developer can host the page so the link refreshes by itself</li>
+</ul>
+
+<h2>If something goes wrong</h2>
+<ul class="card">
+<li>No run appears: check the folder name and that you clicked <b>Publish</b></li>
+<li>Agent cannot read the file: save the file as CSV, not Excel</li>
+<li>Numbers look wrong: check for text in number columns</li>
+</ul>
+<p class="note">Menu names change often. If a button has moved, search the Copilot Studio help for the same name.</p>
+</body></html>
