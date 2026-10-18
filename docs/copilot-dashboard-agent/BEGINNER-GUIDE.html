@@ -10,70 +10,86 @@ h2{font-size:32px;margin-top:44px;color:var(--accent)}
 li{margin:14px 0}
 .card{background:var(--card);border-radius:14px;padding:12px 24px}
 code{background:var(--card);padding:2px 8px;border-radius:6px;font-size:20px}
-pre{background:var(--card);padding:16px;border-radius:12px;font-size:19px;white-space:pre-wrap}
 .note{color:var(--muted);font-size:20px}
 </style></head><body>
 <h1>Build your first Copilot agent</h1>
-<p class="note">No coding. About 30 minutes. You need a Microsoft 365 work account with Copilot Studio.</p>
+<p class="note">No coding. About 30 minutes. You need a work account with Copilot Studio. Menu names change often; if a button moved, look for the same word nearby.</p>
 
-<h2>Part 1: What you will make</h2>
-<ul class="card">
-<li>An agent that wakes up when a file lands in a SharePoint folder</li>
-<li>It reads the file and tells you the totals</li>
-<li>It gives you a link to a dashboard page</li>
+<h2>Step 1: Get your files</h2>
+<ul>
+<li>Open this repo folder: <code>docs/copilot-dashboard-agent</code></li>
+<li>Download <code>skill/file-dashboard/SKILL.md</code> (the skill)</li>
+<li>Download <code>sample-sales.csv</code> (good test file)</li>
+<li>Download <code>sample-bad.csv</code> (bad test file)</li>
 </ul>
 
-<h2>Part 2: Get ready</h2>
+<h2>Step 2: Make a folder</h2>
 <ul>
-<li>Open <b>SharePoint</b> and go to your team site</li>
-<li>Click <b>New, then Folder</b>, and name it <code>Dashboards-Inbox</code></li>
-<li>Download <code>sample-sales.csv</code> from this repo folder</li>
-<li>Open <b>copilotstudio.microsoft.com</b> and sign in</li>
+<li>Open SharePoint and your team site</li>
+<li>Click <b>New</b>, then <b>Folder</b></li>
+<li>Name it <code>Dashboards-Inbox</code></li>
 </ul>
 
-<h2>Part 3: Create the agent</h2>
+<h2>Step 3: Create the agent</h2>
 <ul>
+<li>Go to <b>copilotstudio.microsoft.com</b> and sign in</li>
 <li>Click <b>Create</b>, then <b>New agent</b></li>
 <li>Name it <code>Dashboard Builder</code></li>
-<li>In <b>Instructions</b>, paste this:</li>
+<li>Use the new agent experience (skills need it)</li>
 </ul>
-<pre>When a new file appears in Dashboards-Inbox, read it.
-Reply with: file name, number of rows, column names,
-the total of each number column, and 3 short insights.
-Never invent numbers. If you cannot read the file,
-say what went wrong.</pre>
-<ul><li>Click <b>Create</b></li></ul>
 
-<h2>Part 4: Make it wake up on new files</h2>
+<h2>Step 4: Upload the skill</h2>
 <ul>
-<li>Open the agent, go to the <b>Overview</b> tab</li>
-<li>Find <b>Triggers</b> and click <b>Add trigger</b></li>
+<li>Open your agent and click the <b>Build</b> tab</li>
+<li>In the left list, click <b>Skills</b></li>
+<li>Click <b>Upload a skill</b></li>
+<li>Drag in <code>SKILL.md</code> or click to browse</li>
+<li>Wait for the green check (the file is checked for you)</li>
+<li>If it shows an error, make sure the file starts with <code>---</code> and has name and description</li>
+</ul>
+
+<h2>Step 5: Wake the agent on new files</h2>
+<ul>
+<li>Open the <b>Overview</b> tab</li>
+<li>Find <b>Triggers</b>, click <b>Add trigger</b></li>
 <li>Pick <b>When a file is created (SharePoint)</b></li>
-<li>Choose your site and the <code>Dashboards-Inbox</code> folder</li>
+<li>Choose your site and <code>Dashboards-Inbox</code></li>
 <li>Click <b>Create</b>, then <b>Publish</b></li>
 </ul>
 
-<h2>Part 5: Test it</h2>
+<h2>Step 6: Test the skill (chat)</h2>
 <ul>
-<li>Upload <code>sample-sales.csv</code> to <code>Dashboards-Inbox</code></li>
-<li>Open the agent's <b>Activity</b> tab and look for a new run</li>
-<li>The answer should say: <b>7 rows, Units 67, Revenue 2,090</b></li>
-<li>If the numbers are different, do not trust the agent. Tell it to re-read the file</li>
+<li>Open the test chat on the right of the agent screen</li>
+<li>Paste the text of <code>sample-sales.csv</code> and type: <b>Summarize this file</b></li>
+<li>Expected: <b>Rows 7, Units 67, Revenue 2,090, top region North (1,040)</b></li>
+<li>Now paste <code>sample-bad.csv</code></li>
+<li>Expected: a warning about the text values <b>eight</b> and <b>n/a</b>, and the blank region</li>
+<li>If numbers differ, the skill is wrong. Re-upload it and test again</li>
 </ul>
 
-<h2>Part 6: See the dashboard</h2>
+<h2>Step 7: Test the agent (real file)</h2>
+<ul>
+<li>Upload <code>sample-sales.csv</code> into <code>Dashboards-Inbox</code></li>
+<li>In the agent, open the <b>Activity</b> tab</li>
+<li>A new run should appear within a few minutes</li>
+<li>Open it and check the same numbers as Step 6</li>
+<li>Upload <code>sample-bad.csv</code> and check for the warnings</li>
+<li>Upload an empty file. Expected: it says the file is empty</li>
+</ul>
+
+<h2>Step 8: See the dashboard</h2>
 <ul>
 <li>Download <code>dashboard.html</code> and double-click it</li>
 <li>Click <b>Choose file</b> and pick <code>sample-sales.csv</code></li>
-<li>You will see totals, two charts and a table</li>
-<li>Later, a developer can host the page so the link refreshes by itself</li>
+<li>You see totals, two charts and a table</li>
+<li>For an always-updating link, a developer hosts the page (see <code>NO-POWERBI.md</code>)</li>
 </ul>
 
-<h2>If something goes wrong</h2>
+<h2>Test checklist</h2>
 <ul class="card">
-<li>No run appears: check the folder name and that you clicked <b>Publish</b></li>
-<li>Agent cannot read the file: save the file as CSV, not Excel</li>
-<li>Numbers look wrong: check for text in number columns</li>
+<li>Skill uploaded with no error</li>
+<li>Chat test passes for good and bad file</li>
+<li>Trigger test starts a run</li>
+<li>Dashboard page shows 7 rows</li>
 </ul>
-<p class="note">Menu names change often. If a button has moved, search the Copilot Studio help for the same name.</p>
 </body></html>

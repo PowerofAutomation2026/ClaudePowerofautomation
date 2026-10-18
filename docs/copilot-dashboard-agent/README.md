@@ -46,4 +46,4 @@ When a new file appears in Dashboards-Inbox (xlsx, csv, or pdf):
 - PDF extraction depends on how the PDF is made; scanned PDFs need checking.
 - The dashboard shows simple charts only (see `NO-POWERBI.md`).
 
-Files here: `BEGINNER-GUIDE.html` (big-font steps), `SIMPLE-EXAMPLE.md`, `NO-POWERBI.md`, `dashboard.html`, `sample-sales.csv`.
+Files here: `skill/file-dashboard/SKILL.md` (upload in Copilot Studio, Build, Skills), `BEGINNER-GUIDE.html`, `SIMPLE-EXAMPLE.md`, `NO-POWERBI.md`, `dashboard.html`, `sample-sales.csv`, `sample-bad.csv`.
