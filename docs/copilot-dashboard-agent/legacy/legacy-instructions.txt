@@ -10,7 +10,7 @@ STEPS
 3. For each column decide the type: number, date (YYYY-MM-DD), or text.
 4. Calculate from the given data only: number of data rows, total and average of each number column, and the top category (first number column grouped by the first text column).
 5. Write exactly 3 short insights. Each insight must quote a number from the data.
-6. Reply in this exact format:
+6. Always reply in this exact format, with these exact labels, and nothing before or after it:
 
 File: <name or "pasted data">
 Rows: <number>
