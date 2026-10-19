@@ -30,6 +30,17 @@ Deploy anywhere that serves HTTPS (`Dockerfile` included, e.g. Azure Container A
 your laptop use a dev tunnel: `devtunnel host -p 3000 --allow-anonymous` and set `PUBLIC_URL` to the tunnel URL.
 Copilot Studio can only reach public HTTPS endpoints, so `localhost` will not work.
 
+## Container deployment (e.g. Azure Container Apps)
+```bash
+docker build -t live-dashboard-mcp .
+docker run -p 3000:3000 -e API_KEY=... -e PUBLIC_URL=https://your-host -v dash-data:/data live-dashboard-mcp
+```
+- Mount a volume at `/data` (Azure Files on Container Apps) for `dashboards.json` and your `datasources.json`.
+- Run **one replica, minimum 1** (no scale-to-zero): dashboards live in memory/one file and the live page uses a long-lived stream.
+- Put secrets (`API_KEY`, `ANTHROPIC_API_KEY`, DB passwords) in the platform's secret store and reference them as env vars.
+- For SQL Server/Oracle, the container needs network access to the database (VNet integration for private databases), or use the Power Automate source instead.
+- Ingress must be HTTPS and allow long-lived responses (idle timeout above 30 s; the server sends a ping every 25 s).
+
 ## Add it to a Copilot Studio agent
 
 1. Open the agent → **Tools** → **Add a tool** → **New tool** → **Model Context Protocol**.
