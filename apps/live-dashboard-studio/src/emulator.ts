@@ -13,16 +13,16 @@ export type EmuEngineId = 'sql' | 'oracle' | 'teradata'
 export interface EmuRef { url: string; engine: EmuEngineId; dataset: string }
 export interface EmuTable { name: string; rows: number; columns: number }
 export interface EmuEngine { id: EmuEngineId; label: string; dialect: string; connector: string; dataset: string; tables: EmuTable[] }
-export interface EmuHealth { engines: EmuEngine[]; live: { running: boolean; rate: number; ticks?: number; inserted?: number } | null; apiKeyRequired: boolean; size: string; pageSize: number }
+export interface EmuHealth { files?: { feed: { running: boolean; appended: number }; list: string[] }; shares?: { count: number }; engines: EmuEngine[]; live: { running: boolean; rate: number; ticks?: number; inserted?: number } | null; apiKeyRequired: boolean; size: string; pageSize: number }
 
 export const DEFAULT_EMU_URL = 'http://127.0.0.1:3200'
 const keys = new Map<string, string>()
 const norm = (u: string) => u.trim().replace(/\/+$/, '')
 export const setEmuKey = (url: string, key: string) => { if (key) keys.set(norm(url), key); else keys.delete(norm(url)) }
 
-async function call(url: string, path: string, init: RequestInit = {}): Promise<any> {
+export async function emuCall(url: string, path: string, init: RequestInit = {}, extraHeaders: Record<string, string> = {}): Promise<any> {
   const base = norm(url)
-  const headers: Record<string, string> = { ...(init.headers as Record<string, string> | undefined) }
+  const headers: Record<string, string> = { ...(init.headers as Record<string, string> | undefined), ...extraHeaders }
   const k = keys.get(base)
   if (k) headers['x-api-key'] = k
   if (init.body) headers['content-type'] = 'application/json'
@@ -36,7 +36,11 @@ async function call(url: string, path: string, init: RequestInit = {}): Promise<
   return json
 }
 
+const call = emuCall
 export const emuHealth = (url: string): Promise<EmuHealth> => call(url, '/health')
+/** Add the stored API key (if any) to a request for a non-JSON resource such as a file download. */
+export const emuHeaders = (url: string): Record<string, string> => { const k = keys.get(norm(url)); return k ? { 'x-api-key': k } : {} }
+export const emuBase = norm
 
 const q = (obj: Record<string, string | number | undefined>) => {
   const p = new URLSearchParams()

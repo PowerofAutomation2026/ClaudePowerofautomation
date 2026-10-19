@@ -36,3 +36,6 @@ The app's `fetchTable()` and `runSqlQuery()` take a `DbRef` (`sdk` or `emulator`
 3. Build a dashboard from that table through *Power Apps connection*; note row count, a total and the load time.
 4. Mirror the same table into the emulator (same column names) or just compare behaviour: paging (does it load every row?), `$filter`/`$orderby` with your column names, `$top` beyond the connector's page size, datetime format, boolean columns.
 5. Anything that differs goes into the `shapeRow` / `emuPage` mapping (one place each) or the real-connection path (`sdkPage` in `src/sources.ts`).
+
+## File and share endpoints
+`/files/*` (folder, metadata, content) imitates the SharePoint / OneDrive operations the app uses for file watching (list folder, get file metadata, get file content). The real connectors' operation ids, response fields (for example `LastModified`, `ETag`) and size limits were built from documented behaviour, not verified against a live tenant: check with **Diagnostics** after deploying with `-SharePoint` / `-OneDrive`. `/shares/*` is a test-only stand-in for the SharePoint share store (one `<id>.lds.json` file per dashboard); in a real library, folder permissions are the access control.

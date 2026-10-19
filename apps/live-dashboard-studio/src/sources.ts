@@ -95,6 +95,28 @@ export function describeConnectors() {
   }
 }
 
+/** Connector operations by operation id (normalised), across every data source added to the app. */
+export interface SdkOp { ds: string; op: string; method: string; path: string; params: { name: string; in: string; required?: boolean }[] }
+export function sdkOps(): SdkOp[] {
+  const out: SdkOp[] = []
+  for (const [ds, info] of Object.entries<any>(dataSourcesInfo)) for (const [op, def] of Object.entries<any>(info?.apis ?? {})) out.push({ ds, op, method: String(def.method ?? '').toUpperCase(), path: String(def.path ?? ''), params: def.parameters ?? [] })
+  return out
+}
+export const normOp = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
+/** Run one connector operation; `values` are matched to the operation's parameter names (case-insensitive). */
+export async function sdkExecute(op: SdkOp, values: Record<string, unknown>): Promise<any> {
+  const params: Record<string, unknown> = {}
+  for (const p of op.params) {
+    const k = Object.keys(values).find((x) => x.toLowerCase() === String(p.name).toLowerCase())
+    if (k !== undefined) params[p.name] = values[k]
+    else if (p.in === 'header' && /content-?type/i.test(p.name) && 'body' in values) params[p.name] = 'application/json'
+  }
+  const c = await client()
+  const res: any = await c.executeAsync({ connectorOperation: { tableName: op.ds, operationName: op.op, parameters: params } })
+  if (!res?.success) throw new Error(errText(res?.error))
+  return res.data
+}
+
 let cachedClient: any = null
 async function client() {
   if (cachedClient) return cachedClient

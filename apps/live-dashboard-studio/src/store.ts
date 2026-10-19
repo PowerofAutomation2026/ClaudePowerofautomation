@@ -1,6 +1,8 @@
 /** Saves dashboard definitions (localStorage) and file data (IndexedDB) in this browser. Every call is wrapped: storage can be blocked. */
 import { MAX_SAVED_ROWS } from './engine'
 import type { DateRange, Dataset, Filter, Widget } from './engine'
+import type { FileLoc } from './files'
+import type { Permission, ShareConfig } from './share'
 
 export interface SourceDef {
   kind: 'file' | 'paste' | 'db' | 'sql' | 'demo'
@@ -15,12 +17,16 @@ export interface SourceDef {
   sqlServer?: string
   sqlDatabase?: string
   sqlQuery?: string
+  loc?: FileLoc                       // file on a server / SharePoint / OneDrive: checked every watchSec seconds and reloaded when it changes
+  watchSec?: number
   via?: 'sdk' | 'emulator'            // database sources: Power Apps connection (default) or the local emulator
   emuUrl?: string
   engine?: 'sql' | 'oracle' | 'teradata'
   dataset?: string
   refreshSec: number       // 0 = manual
 }
+/** A dashboard that also exists in the shared store. `syncedJson` is what the shared copy looked like at the last sync (to detect local edits). */
+export interface SharedLink { id: string; owner: string; permission: Permission; version: number; syncedJson: string; updatedBy?: string }
 export interface DashboardDef {
   id: string
   name: string
@@ -28,6 +34,7 @@ export interface DashboardDef {
   widgets: Widget[]
   filters: Filter[]
   range: DateRange | null
+  shared?: SharedLink
   created: number
   updated: number
 }
@@ -44,10 +51,11 @@ export function saveDashboards(list: DashboardDef[]): boolean {
   memory = list
   try { localStorage.setItem(KEY, JSON.stringify(list)); return true } catch { return false }
 }
-export function loadPrefs(): { theme?: 'light' | 'dark' } {
+export interface Prefs { theme?: 'light' | 'dark'; share?: ShareConfig }
+export function loadPrefs(): Prefs {
   try { return JSON.parse(localStorage.getItem(PREF) ?? '{}') } catch { return {} }
 }
-export function savePrefs(p: { theme?: 'light' | 'dark' }) { try { localStorage.setItem(PREF, JSON.stringify(p)) } catch { /* ignore */ } }
+export function savePrefs(p: Prefs) { try { localStorage.setItem(PREF, JSON.stringify({ ...loadPrefs(), ...p })) } catch { /* ignore */ } }
 
 /* IndexedDB for datasets of file sources (can be large) */
 const DB = 'lds', STORE = 'datasets'

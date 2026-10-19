@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import {
   parseDelimited, detectDelimiter, parseNumber, parseDate, datasetFromText, fromObjects, series, kpiValue, applyFilters,
   autoDashboard, autoGrain, widgetIssue, compareDatasets, datasetToCsv, makeDemoOrders, formatNumber, defaultWidget, bucket, weekStart,
-  datasetFromTextAsync, fromObjectsAsync, MAX_ROWS,
+  datasetFromTextAsync, fromObjectsAsync, MAX_ROWS, fingerprintRows,
 } from '../src/engine.ts'
 import type { Widget } from '../src/engine.ts'
 
@@ -205,6 +205,16 @@ await ta('more than the row cap is reported, never silently dropped', async () =
   assert.equal(ds.rows.length, MAX_ROWS); assert.equal(ds.truncatedFrom, MAX_ROWS + 1234)
   const ok = await fromObjectsAsync('o', makeDemoOrders(500, 1, new Date('2026-10-18')))
   assert.equal(ok.truncatedFrom, undefined, 'no flag when everything fits')
+})
+
+await ta('fingerprint: equal data = equal fingerprint, any change = different', async () => {
+  const a = makeDemoOrders(30000, 4, new Date('2026-10-18')); const b = a.map((r) => ({ ...r }))
+  assert.equal(await fingerprintRows(a), await fingerprintRows(b))
+  const c = b.map((r) => ({ ...r })); c[29999].Revenue = (c[29999].Revenue as number) + 1
+  assert.notEqual(await fingerprintRows(a), await fingerprintRows(c), 'a changed value in the last row')
+  const d = b.map((r) => ({ ...r })); d[1234].Region = 'Nowhere'; assert.notEqual(await fingerprintRows(a), await fingerprintRows(d), 'a changed value in the middle')
+  assert.notEqual(await fingerprintRows(a), await fingerprintRows(a.slice(0, 29999)), 'a missing row')
+  assert.notEqual(await fingerprintRows([{ a: 'ab', b: 'c' }]), await fingerprintRows([{ a: 'a', b: 'bc' }]), 'field boundaries matter')
 })
 
 console.log(process.exitCode ? 'SOME TESTS FAILED' : `ALL ${passed} ENGINE TESTS PASSED`)

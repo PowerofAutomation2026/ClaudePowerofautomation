@@ -4,7 +4,7 @@
  * shaped like the Power Platform connectors (tables, OData items with $filter/$orderby/$select/$top/$skiptoken,
  * and "execute SQL"). For testing dashboards; not a real database engine.
  *
- *   node src/server.mjs [--port 3200] [--size small|standard|big|<n>] [--no-live] [--live-rate 1] [--reseed]
+ *   node src/server.mjs [--no-feed] [--feed-sec 3] [--port 3200] [--size small|standard|big|<n>] [--no-live] [--live-rate 1] [--reseed]
  *                       [--data ./data] [--host 127.0.0.1] [--page-size 1000] [--timeout 20000] [--api-key KEY]
  */
 import http from 'node:http'
@@ -16,6 +16,8 @@ import { translate, engineError, SqlError } from './dialect.mjs'
 import { filterToSql, orderToSql, selectToSql, ODataError } from './odata.mjs'
 import { QueryPool } from './pool.mjs'
 import { LiveWriter } from './live.mjs'
+import { FileShare } from './files.mjs'
+import { ShareStore } from './shares.mjs'
 import { freshDb, SIZES } from '../seed/common.mjs'
 import { seedSqlServer } from '../seed/sqlserver.mjs'
 import { seedOracle } from '../seed/oracle.mjs'
@@ -24,13 +26,13 @@ import { seedTeradata } from '../seed/teradata.mjs'
 const here = path.dirname(fileURLToPath(import.meta.url))
 
 export function parseArgs(argv) {
-  const o = { port: 3200, host: '127.0.0.1', data: path.join(here, '..', 'data'), size: 'standard', live: true, liveRate: 1, reseed: false, seedOnly: false, pageSize: 1000, timeout: 20000, apiKey: '', quiet: false, seed: 20261018 }
+  const o = { port: 3200, host: '127.0.0.1', data: path.join(here, '..', 'data'), size: 'standard', live: true, liveRate: 1, reseed: false, seedOnly: false, pageSize: 1000, timeout: 20000, apiKey: '', quiet: false, seed: 20261018, feed: true, feedSec: 3 }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i], v = () => argv[++i]
     if (a === '--port') o.port = Number(v()); else if (a === '--host') o.host = v(); else if (a === '--data') o.data = path.resolve(v())
     else if (a === '--size') o.size = v(); else if (a === '--no-live') o.live = false; else if (a === '--live-rate') o.liveRate = Number(v())
     else if (a === '--reseed') o.reseed = true; else if (a === '--seed-only') o.seedOnly = true; else if (a === '--page-size') o.pageSize = Number(v())
-    else if (a === '--timeout') o.timeout = Number(v()); else if (a === '--api-key') o.apiKey = v(); else if (a === '--quiet') o.quiet = true; else if (a === '--seed') o.seed = Number(v())
+    else if (a === '--timeout') o.timeout = Number(v()); else if (a === '--api-key') o.apiKey = v(); else if (a === '--quiet') o.quiet = true; else if (a === '--no-feed') o.feed = false; else if (a === '--feed-sec') o.feedSec = Number(v()); else if (a === '--seed') o.seed = Number(v())
   }
   return o
 }
@@ -58,11 +60,21 @@ export async function startEmulator(opts) {
   const pool = new QueryPool(2, opts.timeout)
   const live = opts.live ? new LiveWriter(engines, { rate: opts.liveRate, seed: opts.seed + 7 }).init() : null
   live?.start()
+  const files = new FileShare(path.join(opts.data, 'files'), path.join(here, '..', 'files-seed'))
+  if (opts.feed) files.startFeed(opts.feedSec)
+  const shares = new ShareStore(path.join(opts.data, 'shares.json'))
 
-  const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET, POST, OPTIONS', 'access-control-allow-private-network': 'true', 'access-control-expose-headers': '*' }
+  const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS', 'access-control-allow-private-network': 'true', 'access-control-expose-headers': '*' }
   const send = (res, code, body, extra = {}) => { res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...CORS, ...extra }); res.end(JSON.stringify(body)) }
   const fail = (res, e, status, number, message) => send(res, status, { status, message, error: { message, code: number }, source: `emulator-${e?.id ?? 'server'}` })
-  const readBody = (req) => new Promise((resolve, reject) => { const c = []; let n = 0; req.on('data', (b) => { n += b.length; if (n > 1e6) { reject(new Error('body too large')); req.destroy() } else c.push(b) }); req.on('end', () => resolve(Buffer.concat(c).toString('utf8'))); req.on('error', reject) })
+  const readBodyBuffer = (req, max = 1e6) => new Promise((resolve, reject) => {
+    const c = []; let n = 0, over = false
+    req.on('data', (b) => { n += b.length; if (n > max) { over = true; c.length = 0; if (n > max * 4) req.destroy() } else if (!over) c.push(b) })   // drain a too-big body so the client gets a proper 413
+    req.on('end', () => { if (over) { const e = new Error('Request body too large'); e.status = 413; reject(e) } else resolve(Buffer.concat(c)) })
+    req.on('error', reject)
+  })
+  const readBody = async (req, max = 1e6) => (await readBodyBuffer(req, max)).toString('utf8')
+  const helpers = { send, fail, CORS, readBody, readBodyBuffer }
 
   const shapeValue = (e, v) => {
     if (typeof v === 'string' && e.dateT && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(v)) return v.replace(' ', 'T')
@@ -105,11 +117,13 @@ export async function startEmulator(opts) {
         return send(res, 200, {
           ok: true, name: 'db-emulator', version: '1.0.0', size: opts.size, pageSize: opts.pageSize, apiKeyRequired: !!opts.apiKey,
           live: live ? { running: live.running, rate: live.rate, ...live.stats } : null,
+          files: { feed: files.feedStats, list: files.list('/').filter((f) => !f.IsFolder).map((f) => f.Name) },
+          shares: { count: shares.items.size },
           engines: Object.values(engines).map((e) => ({ id: e.id, label: e.label, dialect: e.dialect, connector: e.connector, dataset: e.dataset, tables: [...e.tables.values()].map((t) => ({ name: e.display(t.schema, t.name), rows: e.count(t), columns: t.cols.length })) })),
         })
       }
       if (p === '/') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', ...CORS }); return res.end(statusPage(engines, opts)) }
-      if (opts.apiKey && (p.startsWith('/sql') || p.startsWith('/oracle') || p.startsWith('/teradata') || p.startsWith('/admin'))) {
+      if (opts.apiKey && (p.startsWith('/sql') || p.startsWith('/oracle') || p.startsWith('/teradata') || p.startsWith('/admin') || p.startsWith('/files') || p.startsWith('/shares'))) {
         const k = req.headers['x-api-key'] ?? String(req.headers.authorization ?? '').replace(/^Bearer\s+/i, '')
         if (k !== opts.apiKey) return fail(res, null, 401, 0, 'Missing or wrong API key (x-api-key header).')
       }
@@ -118,6 +132,8 @@ export async function startEmulator(opts) {
         if (req.method === 'POST') { const b = JSON.parse((await readBody(req)) || '{}'); if (b.action === 'pause') live.stop(); if (b.action === 'resume') live.start(); if (typeof b.rate === 'number' && b.rate >= 0 && b.rate <= 50) live.rate = b.rate }
         return send(res, 200, { running: live.running, rate: live.rate, ...live.stats })
       }
+      if (p.startsWith('/files')) { if (await files.handle(req, res, url, helpers)) return; return fail(res, null, 404, 0, 'Not found') }
+      if (p.startsWith('/shares')) { if (await shares.handle(req, res, url, helpers)) return; return fail(res, null, 404, 0, 'Not found') }
       const m = /^\/(sql|oracle|teradata)(?:\/(.*))?$/.exec(p)
       if (!m) return fail(res, null, 404, 0, 'Not found')
       const e = engines[m[1]]
@@ -180,7 +196,7 @@ export async function startEmulator(opts) {
   const port = server.address().port
   log(`\nDB emulator listening on http://${opts.host === '0.0.0.0' ? 'localhost' : opts.host}:${port}   (live data: ${live ? 'on' : 'off'})`)
   log('  /sql/datasets/emulator,SalesDW/tables   /oracle/datasets/EMULATOR%2FERPPROD/tables   /teradata/datasets/emulator%2FEDW_PROD/tables')
-  return { port, server, engines, live, pool, close() { live?.stop(); pool.close(); server.close(); for (const e of Object.values(engines)) try { e.ro?.close() } catch { /* ignore */ } for (const db of Object.values(live?.rw ?? {})) try { db.close() } catch { /* ignore */ } } }
+  return { port, server, engines, live, pool, files, shares, close() { live?.stop(); files.stopFeed(); pool.close(); server.close(); for (const e of Object.values(engines)) try { e.ro?.close() } catch { /* ignore */ } for (const db of Object.values(live?.rw ?? {})) try { db.close() } catch { /* ignore */ } } }
 }
 
 function statusPage(engines, opts) {

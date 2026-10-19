@@ -16,6 +16,8 @@
 .PARAMETER OracleTables    Oracle tables to expose, e.g. 'SALES.ORDERS'.
 .PARAMETER TeradataDataset  Teradata dataset value used by the Teradata connection (see README), needed with -TeradataTables.
 .PARAMETER TeradataTables   Teradata tables to expose, e.g. 'EDW_PROD.CALL_DETAIL_FACT'.
+.PARAMETER SharePoint      Add the SharePoint connector so the app can watch files in SharePoint libraries (auto-refresh when a file changes) and store shared dashboards there.
+.PARAMETER OneDrive        Add the OneDrive for Business connector so the app can watch files in OneDrive (auto-refresh).
 .PARAMETER DataverseTables Dataverse tables of this environment to expose, e.g. 'account','opportunity'.
 .PARAMETER SkipPrereqInstall  Don't try to install Node.js / Power Platform CLI automatically.
 
@@ -36,6 +38,8 @@ param(
   [string]$TeradataDataset,
   [string[]]$TeradataTables = @(),
   [string[]]$DataverseTables = @(),
+  [switch]$SharePoint,
+  [switch]$OneDrive,
   [switch]$SkipPrereqInstall
 )
 
@@ -136,6 +140,8 @@ $needed = @()
 if ($SqlTables.Count)    { $needed += @{ Label = 'SQL Server';       Apis = @('shared_sql');    Link = 'shared_sql' } }
 if ($OracleTables.Count) { $needed += @{ Label = 'Oracle Database';  Apis = @('shared_oracle'); Link = 'shared_oracle' } }
 if ($TeradataTables.Count) { $needed += @{ Label = 'Teradata';        Apis = @('shared_teradata'); Link = 'shared_teradata' } }
+if ($SharePoint) { $needed += @{ Label = 'SharePoint';        Apis = @('shared_sharepointonline'); Link = 'shared_sharepointonline' } }
+if ($OneDrive)   { $needed += @{ Label = 'OneDrive for Business'; Apis = @('shared_onedriveforbusiness'); Link = 'shared_onedriveforbusiness' } }
 if (-not $needed.Count -and -not $DataverseTables.Count) { Ok 'No database tables requested: files, pasted data and the demo work without any connection.' }
 
 function Get-Connections {
@@ -211,6 +217,10 @@ foreach ($n in $needed) {
     foreach ($t in $OracleTables) { Add-Source "Oracle $t" @('-a','shared_oracle','-c',$c.Id,'-d',$OracleDataset,'-t',$t) }
   } elseif ($c.Api -eq 'shared_teradata') {
     foreach ($t in $TeradataTables) { Add-Source "Teradata $t" @('-a','shared_teradata','-c',$c.Id,'-d',$TeradataDataset,'-t',$t) }
+  } elseif ($c.Api -eq 'shared_sharepointonline') {
+    Add-Source 'SharePoint' @('-a','shared_sharepointonline','-c',$c.Id)
+  } elseif ($c.Api -eq 'shared_onedriveforbusiness') {
+    Add-Source 'OneDrive for Business' @('-a','shared_onedriveforbusiness','-c',$c.Id)
   }
 }
 foreach ($t in $DataverseTables) { Add-Source "Dataverse $t" @('-a','dataverse','-t',$t) }
@@ -277,4 +287,4 @@ if ($playUrl) { Write-Host "Open it: $playUrl" -ForegroundColor Green }
 Write-Host "Or from https://make.powerapps.com/environments/$EnvironmentId/apps  (look for '$DisplayName')." -ForegroundColor Green
 Write-Host 'First launch: approve the connector consent prompts (only needed when database tables were added).' -ForegroundColor Gray
 Write-Host 'Keep power.config.json - it links this folder to the published app for future updates.' -ForegroundColor Gray
-Write-Host 'Add more tables later by re-running this script with the extra -SqlTables / -OracleTables / -DataverseTables.' -ForegroundColor Gray
+Write-Host 'Add more tables later by re-running this script with the extra -SqlTables / -OracleTables / -DataverseTables / -SharePoint / -OneDrive.' -ForegroundColor Gray

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import {
-  applyFilters, autoDashboard, compareDatasets, datasetToCsv, defaultWidget, fromObjectsAsync, kpiValue, maxDate, series, uid, widgetIssue,
+  applyFilters, autoDashboard, compareDatasets, datasetToCsv, defaultWidget, fingerprintRows, fromObjectsAsync, kpiValue, maxDate, series, uid, widgetIssue,
 } from './engine'
 import type { Agg, Dataset, DateRange, Filter, Grain, Widget, WidgetType } from './engine'
 import { BarChart, DataTable, Donut, Kpi, LineChart, SeriesTable, colorMap, useTick } from './charts'
@@ -10,8 +10,14 @@ import {
 import type { DbRef, DbSource, WatchHandle } from './sources'
 import { DEFAULT_EMU_URL, EMU_SQL_EXAMPLES, emuHealth, setEmuKey } from './emulator'
 import type { EmuHealth } from './emulator'
+import { Modal } from './ui'
+import { FileDialog } from './FileDialog'
+import { ShareDialog } from './ShareDialog'
+import { WATCH_CHOICES, fetchFileAt, locLabel, statFile } from './files'
+import { decodeLayout, encodeLayout, getDevUser, getMe, makeBackend, setDevUser } from './share'
+import type { Me, SharedDefinition, SharedSummary, ShareConfig, ShareEntry } from './share'
 import { delDataset, getDataset, loadDashboards, loadPrefs, putDataset, saveDashboards, savePrefs } from './store'
-import type { DashboardDef, SourceDef } from './store'
+import type { DashboardDef, SharedLink, SourceDef } from './store'
 
 declare const __BUILD__: string
 
@@ -47,13 +53,29 @@ export default function App() {
   const [live, setLive] = useState(true)
   const [edit, setEdit] = useState(false)
   const [editing, setEditing] = useState<Widget | null>(null)
-  const [dialog, setDialog] = useState<null | 'paste' | 'db' | 'diag'>(null)
+  const [dialog, setDialog] = useState<null | 'paste' | 'db' | 'diag' | 'file' | 'share' | 'who' | 'link'>(null)
   const [dragging, setDragging] = useState(false)
   const [tableView, setTableView] = useState<Record<string, boolean>>({})
   const [theme, setTheme] = useState<'light' | 'dark'>(() => loadPrefs().theme ?? (window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'))
   const [log, setLog] = useState<string[]>([])
   const [prevSnapshot, setPrevSnapshot] = useState<{ sig: string; map: Map<string, number> }>({ sig: '', map: new Map() })
   const [sideOpen, setSideOpen] = useState(true)
+  const [me, setMe] = useState<Me>(() => ({ email: getDevUser(), name: getDevUser(), source: 'dev' }))
+  const meRef = useRef(me); meRef.current = me
+  const [shareCfg, setShareCfg] = useState<ShareConfig>(() => loadPrefs().share ?? { kind: 'emulator', url: (() => { try { return localStorage.getItem('lds.emuUrl') ?? DEFAULT_EMU_URL } catch { return DEFAULT_EMU_URL } })() })
+  const [shared, setShared] = useState<SharedSummary[] | null>(null)
+  const [sharedErr, setSharedErr] = useState<string | null>(null)
+  const [shareInitial, setShareInitial] = useState<{ sharedWith: ShareEntry[]; everyone: 'none' | 'view' | 'edit' }>({ sharedWith: [], everyone: 'none' })
+  const [stale, setStale] = useState<Record<string, string>>({})        // local id -> "newer version by x exists"
+  const [snapDirty, setSnapDirty] = useState<Record<string, boolean>>({})   // data of a shared file dashboard replaced: the snapshot needs saving
+  const [nextAt, setNextAt] = useState<number | null>(null)
+  const [lastCheck, setLastCheck] = useState(0)
+  const [lastChange, setLastChange] = useState(0)
+  const [watchErr, setWatchErr] = useState<string | null>(null)
+  const dsRef = useRef<Dataset | null>(null)
+  const fpRef = useRef<Record<string, string>>({})                      // data fingerprint per dashboard: unchanged data is not rebuilt
+  const statRef = useRef<Record<string, string>>({})                    // file signature per dashboard
+  const failsRef = useRef(0)
   const watch = useRef<Map<string, WatchHandle>>(new Map())
   const reqId = useRef(0)
   const justCreated = useRef<string | null>(null)   // dashboard whose data was just loaded: do not load it twice
@@ -65,8 +87,13 @@ export default function App() {
   const active = useMemo(() => dashboards.find((d) => d.id === activeId) ?? null, [dashboards, activeId])
   const activeRef = useRef<DashboardDef | null>(null)
   activeRef.current = active
+  dsRef.current = ds
+  const dashRef = useRef(dashboards); dashRef.current = dashboards
 
   useEffect(() => { document.documentElement.dataset.theme = theme; savePrefs({ theme }) }, [theme])
+  useEffect(() => { void getMe().then(setMe) }, [])
+  useEffect(() => { savePrefs({ share: shareCfg }) }, [shareCfg])
+  const backend = useMemo(() => makeBackend(shareCfg, () => meRef.current.email), [shareCfg])
   const addLog = useCallback((m: string) => setLog((l) => [`${new Date().toLocaleTimeString()}  ${m}`, ...l].slice(0, 60)), [])
 
   /** Save file data in this browser; big datasets are skipped (it would freeze the page) and the user is told. */
@@ -102,20 +129,34 @@ export default function App() {
     })
   }, [snapshotKpis])
 
-  const fetchFromSource = useCallback(async (def: DashboardDef): Promise<Dataset> => {
+  /** Rows from a database / demo: skip the rebuild when nothing changed (returns null). */
+  const fromRows = useCallback(async (def: DashboardDef, rows: Record<string, unknown>[], force?: boolean): Promise<Dataset | null> => {
+    const fp = await fingerprintRows(rows)
+    if (!force && fpRef.current[def.id] === fp) return null
+    fpRef.current[def.id] = fp
+    return fromObjectsAsync(def.name, rows, def.id, (f, msg) => setProgress({ f, msg }))
+  }, [])
+
+  /** Load a dashboard's data. Returns null when the data is unchanged since the last load (and `force` is off). */
+  const fetchFromSource = useCallback(async (def: DashboardDef, opts: { force?: boolean } = {}): Promise<Dataset | null> => {
     const s = def.source
-    if (s.kind === 'demo') return fromObjectsAsync(def.name, await fetchSimulated(), def.id)
+    if (s.kind === 'demo') return fromRows(def, await fetchSimulated(), opts.force)
     const ref: DbRef = s.via === 'emulator' && s.emuUrl && s.engine && s.dataset ? { via: 'emulator', url: s.emuUrl, engine: s.engine, dataset: s.dataset } : { via: 'sdk' }
-    if (s.kind === 'db' && s.dbKey) { setProgress({ f: 0.05, msg: 'Reading rows from the database…' }); const rows = await fetchTable(s.dbKey, { top: s.top ?? 5000, filter: s.filter, orderBy: s.orderBy, select: s.select }, ref); return fromObjectsAsync(def.name, rows, def.id, (f, msg) => setProgress({ f, msg })) }
-    if (s.kind === 'sql') { setProgress({ f: 0.05, msg: 'Running the query…' }); const rows = await runSqlQuery({ server: s.sqlServer ?? '', database: s.sqlDatabase ?? '', query: s.sqlQuery ?? '' }, ref); return fromObjectsAsync(def.name, rows, def.id, (f, msg) => setProgress({ f, msg })) }
+    if (s.kind === 'db' && s.dbKey) { setProgress({ f: 0.05, msg: 'Reading rows from the database…' }); return fromRows(def, await fetchTable(s.dbKey, { top: s.top ?? 5000, filter: s.filter, orderBy: s.orderBy, select: s.select }, ref), opts.force) }
+    if (s.kind === 'sql') { setProgress({ f: 0.05, msg: 'Running the query…' }); return fromRows(def, await runSqlQuery({ server: s.sqlServer ?? '', database: s.sqlDatabase ?? '', query: s.sqlQuery ?? '' }, ref), opts.force) }
+    if (s.loc) {
+      const { read, stat } = await fetchFileAt(s.loc, s.sheet, (f, msg) => setProgress({ f, msg }))
+      statRef.current[def.id] = stat.signature
+      return { ...read.dataset, id: def.id, name: def.name }
+    }
     const h = watch.current.get(def.id)
     if (h) { const f = await h.getFile(); const r = await readFile(f, s.sheet, (f2, msg) => setProgress({ f: f2, msg })); return { ...r.dataset, id: def.id, name: def.name } }
     const cached = await getDataset(def.id)
     if (cached) return cached
     throw new Error('This dashboard\'s data is not stored in this browser. Use "Replace data" to add the file again.')
-  }, [])
+  }, [fromRows])
 
-  const refresh = useCallback(async (opts: { quiet?: boolean; manual?: boolean } = {}) => {
+  const refresh = useCallback(async (opts: { quiet?: boolean; manual?: boolean; force?: boolean } = {}) => {
     const def = activeRef.current
     if (!def) return
     if (loadingRef.current && !opts.manual) return       // a slow load is still running: do not pile another on top
@@ -123,14 +164,18 @@ export default function App() {
     loadingRef.current = true
     setLoading(true)
     try {
-      const data = await fetchFromSource(def)
+      const data = await fetchFromSource(def, { force: opts.force })
       if (my !== reqId.current) return
+      setLastCheck(Date.now()); failsRef.current = 0; setError(null)
+      if (data === null) { addLog(`${def.name}: no changes`); return }
+      const first = !dsRef.current
       acceptDataset(data, def, opts.quiet)
-      setError(null)
-      if (def.source.kind === 'file' || def.source.kind === 'paste') void saveData(def.id, data)
+      if (!first) setLastChange(Date.now())
+      if ((def.source.kind === 'file' && !def.source.loc) || def.source.kind === 'paste') void saveData(def.id, data)
       addLog(`Loaded ${data.rows.length} rows from ${def.name}`)
     } catch (e) {
       if (my !== reqId.current) return
+      failsRef.current++
       setError(errMsg(e)); addLog('ERROR ' + errMsg(e))
     } finally { if (my === reqId.current) { setLoading(false); loadingRef.current = false; setProgress(null) } }
   }, [acceptDataset, addLog, fetchFromSource, saveData])
@@ -141,18 +186,57 @@ export default function App() {
     justCreated.current = null
     if (!fresh) setDs(null)
     setError(null); setNotice(null); setEdit(false); setTableView({}); setPrevSnapshot({ sig: '', map: new Map() }); if (activeId) setSideOpen(false)
+    if (!fresh) { delete fpRef.current[activeId ?? '']; delete statRef.current[activeId ?? ''] }     // a just-created dashboard keeps the signature taken when it was loaded
+    setLastChange(0); setWatchErr(null); failsRef.current = 0
     if (!activeId || fresh) return
-    void refresh({ quiet: true })
+    void refresh({ quiet: true, force: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId])
 
-  /* live refresh loop */
+  /* live refresh loop for databases: self-scheduling, backs off after errors (x2 up to 5 min) */
   const sec = active?.source.refreshSec ?? 0
+  const isLoc = !!active?.source.loc
   useEffect(() => {
-    if (!active || !live || sec <= 0) return
-    const t = setInterval(() => { if (!document.hidden) void refresh() }, sec * 1000)
-    return () => clearInterval(t)
-  }, [active?.id, live, sec, refresh]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (!active || !live || sec <= 0 || isLoc) { setNextAt(null); return }
+    let stop = false
+    let timer: ReturnType<typeof setTimeout>
+    const schedule = (delaySec: number) => { setNextAt(Date.now() + delaySec * 1000); timer = setTimeout(tick, delaySec * 1000) }
+    const tick = async () => {
+      if (stop) return
+      if (!document.hidden) await refresh()
+      schedule(Math.min(300, sec * 2 ** Math.min(failsRef.current, 5)))
+    }
+    schedule(sec)
+    return () => { stop = true; clearTimeout(timer) }
+  }, [active?.id, live, sec, isLoc, refresh]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* files on a server / SharePoint / OneDrive: ask for a cheap signature, download only when it changed */
+  const loc = active?.source.loc
+  const watchSec = active?.source.watchSec ?? 10
+  useEffect(() => {
+    const id = active?.id
+    if (!id || !loc || !live) { if (loc) setNextAt(null); return }
+    let stop = false
+    let timer: ReturnType<typeof setTimeout>
+    let fails = 0
+    const tick = async () => {
+      if (stop) return
+      if (!document.hidden && !loadingRef.current) {
+        try {
+          const st = await statFile(loc)
+          if (stop) return
+          setLastCheck(Date.now()); setWatchErr(null); fails = 0
+          const known = statRef.current[id]
+          if (known === undefined) statRef.current[id] = st.signature
+          else if (st.signature !== known) { addLog(`File changed: ${st.name}`); await refresh({ force: true }) }
+        } catch (e) { fails++; setWatchErr(errMsg(e)) }
+      }
+      const delay = Math.min(300, watchSec * 2 ** Math.min(fails, 5))
+      setNextAt(Date.now() + delay * 1000); timer = setTimeout(tick, delay * 1000)
+    }
+    setNextAt(Date.now() + watchSec * 1000); timer = setTimeout(tick, watchSec * 1000)
+    return () => { stop = true; clearTimeout(timer) }
+  }, [active?.id, loc, watchSec, live, refresh]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* watched local file: poll its modified time every 2 s */
   useEffect(() => {
@@ -164,6 +248,133 @@ export default function App() {
     }, 2000)
     return () => clearInterval(t)
   }, [active?.id, watch.current.size, refresh]) // eslint-disable-line react-hooks/exhaustive-deps
+
+
+  /* ------------------------------------------------------------- sharing */
+  const defOf = (d: DashboardDef): SharedDefinition => ({ name: d.name, source: d.source, widgets: d.widgets, filters: d.filters, range: d.range })
+  const defJson = (d: Pick<DashboardDef, 'name' | 'source' | 'widgets' | 'filters' | 'range'>) => JSON.stringify({ name: d.name, source: d.source, widgets: d.widgets, filters: d.filters, range: d.range })
+  const isDirty = (d: DashboardDef | null) => !!d?.shared && d.shared.permission !== 'view' && (defJson(d) !== d.shared.syncedJson || !!snapDirty[d.id])
+  const needsSnapshot = (d: DashboardDef | null) => !!d && (d.source.kind === 'paste' || (d.source.kind === 'file' && !d.source.loc))
+  const snapshotOf = (): { columns: Dataset['columns']; rows: Dataset['rows'] } | null => (dsRef.current ? { columns: dsRef.current.columns, rows: dsRef.current.rows } : null)
+  const patchLocal = useCallback((id: string, patch: Partial<DashboardDef>) => persist((l) => l.map((d) => (d.id === id ? { ...d, ...patch } : d))), [persist])
+
+  const refreshShared = useCallback(async () => {
+    try { const list = await backend.list(); setShared(list); setSharedErr(null); try { localStorage.setItem('lds.shareOn', '1') } catch { /* ignore */ } return list }
+    catch (e) { setSharedErr(errMsg(e)); return null }
+  }, [backend])
+
+  /** Open (or update) the local copy of a shared dashboard. */
+  const openShared = useCallback(async (sum: SharedSummary, opts: { activate?: boolean } = {}) => {
+    try {
+      const existing = dashRef.current.find((d) => d.shared?.id === sum.id)
+      if (existing && opts.activate !== false) { setActiveId(existing.id); return }
+      const full = await backend.get(sum.id)
+      const localId = existing?.id ?? `sh_${sum.id}`
+      const link: SharedLink = { id: full.id, owner: full.owner, permission: full.permission, version: full.version, syncedJson: defJson(full.definition), updatedBy: full.updatedBy }
+      const def: DashboardDef = { id: localId, name: full.definition.name || full.name, source: full.definition.source, widgets: full.definition.widgets, filters: full.definition.filters ?? [], range: full.definition.range ?? null, shared: link, created: existing?.created ?? Date.now(), updated: Date.now() }
+      let data: Dataset | null = null
+      if (full.snapshot && needsSnapshot(def)) { data = { id: localId, name: def.name, columns: full.snapshot.columns, rows: full.snapshot.rows, loadedAt: Date.now() }; await putDataset(localId, data) }
+      delete fpRef.current[localId]
+      persist((l) => [def, ...l.filter((d) => d.id !== localId)]); setSnapDirty((x) => ({ ...x, [localId]: false }))
+      if (opts.activate !== false) { if (data) { justCreated.current = localId; setDs(data) } setActiveId(localId) }
+      else if (activeRef.current?.id === localId) { if (data) setDs(data); else void refresh({ force: true }) }
+      return full
+    } catch (e) { setError(errMsg(e)) }
+  }, [backend, persist, refresh])
+
+  /* keep shared dashboards in step with the shared store: pull newer versions, notice revoked access */
+  useEffect(() => {
+    const anyShared = dashboards.some((d) => d.shared)
+    let on = false
+    try { on = localStorage.getItem('lds.shareOn') === '1' } catch { /* ignore */ }
+    if (!anyShared && !on) return
+    let stop = false
+    const run = async () => {
+      if (stop || document.hidden) return
+      const list = await refreshShared()
+      if (!list || stop) return
+      for (const d of dashRef.current.filter((x) => x.shared)) {
+        const sum = list.find((x) => x.id === d.shared!.id)
+        if (!sum) { setNotice(`"${d.name}" is no longer shared with you. You keep a private copy.`); patchLocal(d.id, { shared: undefined }); continue }
+        if (sum.permission !== d.shared!.permission) patchLocal(d.id, { shared: { ...d.shared!, permission: sum.permission } })
+        if (sum.version > d.shared!.version) {
+          if (isDirty(d)) { setStale((s0) => ({ ...s0, [d.id]: `${sum.updatedBy} saved version ${sum.version}` })); continue }
+          setNotice(`"${sum.name}" was updated by ${sum.updatedBy} (version ${sum.version}).`)
+          await openShared(sum, { activate: false })
+        }
+      }
+    }
+    void run()
+    let every = 15
+    try { every = Math.max(1, Number(localStorage.getItem('lds.syncSec')) || 15) } catch { /* default */ }   // test override: localStorage lds.syncSec
+    const t = setInterval(run, every * 1000)
+    return () => { stop = true; clearInterval(t) }
+  }, [backend, dashboards.some((d) => d.shared)]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const publish = async (x: { sharedWith: ShareEntry[]; everyone: 'none' | 'view' | 'edit'; snapshot: boolean }): Promise<string | void> => {
+    const d = activeRef.current; if (!d) return 'Open a dashboard first.'
+    try {
+      const snap = x.snapshot && needsSnapshot(d) ? snapshotOf() : null
+      const full = await backend.create({ name: d.name, definition: defOf(d), sharedWith: x.sharedWith, everyone: x.everyone, snapshot: snap })
+      patchLocal(d.id, { shared: { id: full.id, owner: full.owner, permission: 'owner', version: full.version, syncedJson: defJson(d), updatedBy: full.updatedBy } })
+      setShareInitial({ sharedWith: full.sharedWith ?? [], everyone: full.everyone })
+      void refreshShared()
+    } catch (e) { return errMsg(e) }
+  }
+  const saveSharing = async (x: { sharedWith: ShareEntry[]; everyone: 'none' | 'view' | 'edit' }): Promise<string | void> => {
+    const d = activeRef.current; if (!d?.shared) return 'This dashboard is not shared yet.'
+    try { const full = await backend.update(d.shared.id, x); setShareInitial({ sharedWith: full.sharedWith ?? [], everyone: full.everyone }); patchLocal(d.id, { shared: { ...d.shared, version: d.shared.version === full.version - 1 ? full.version : d.shared.version } }); void refreshShared() } catch (e) { return errMsg(e) }
+  }
+  const stopSharing = async (): Promise<string | void> => {
+    const d = activeRef.current; if (!d?.shared) return
+    try { await backend.remove(d.shared.id); patchLocal(d.id, { shared: undefined }); setShareInitial({ sharedWith: [], everyone: 'none' }); void refreshShared() } catch (e) { return errMsg(e) }
+  }
+  const saveToShared = async () => {
+    const d = activeRef.current; if (!d?.shared) return
+    try {
+      const full = await backend.update(d.shared.id, { name: d.name, definition: defOf(d), snapshot: needsSnapshot(d) ? snapshotOf() : undefined, baseVersion: d.shared.version })
+      patchLocal(d.id, { shared: { ...d.shared, version: full.version, syncedJson: defJson(d), updatedBy: full.updatedBy } })
+      setStale((s0) => { const n = { ...s0 }; delete n[d.id]; return n }); setSnapDirty((x) => ({ ...x, [d.id]: false }))
+      setNotice(`Saved to the shared copy (version ${full.version}).`); void refreshShared()
+    } catch (e) { setError(errMsg(e)) }
+  }
+  const reloadShared = async () => {
+    const d = activeRef.current; if (!d?.shared) return
+    const sum = (await refreshShared())?.find((x) => x.id === d.shared!.id)
+    if (sum) { await openShared(sum, { activate: false }); setStale((s0) => { const n = { ...s0 }; delete n[d.id]; return n }); setNotice('Reloaded the shared version. Your unsaved changes were discarded.') }
+  }
+  const openShareDialog = async () => {
+    const d = activeRef.current
+    setDialog('share')
+    if (d?.shared) { const sum = (await refreshShared())?.find((x) => x.id === d.shared!.id); if (sum) setShareInitial({ sharedWith: sum.sharedWith ?? [], everyone: sum.everyone }) }
+    else setShareInitial({ sharedWith: [], everyone: 'none' })
+  }
+  const appLinkFor = (id: string) => { try { const u = new URL(location.href); u.searchParams.set('share', id); u.hash = ''; return u.toString() } catch { return `${location.href.split('#')[0]}?share=${id}` } }
+  const importLayoutText = (text: string) => {
+    try {
+      const raw = text.includes('#share=') ? text.slice(text.indexOf('#share=') + 7) : text.replace(/^share=/, '')
+      const d = decodeLayout(raw)
+      const def: DashboardDef = { id: uid('ds'), name: d.name, source: d.source, widgets: d.widgets, filters: d.filters, range: d.range, created: Date.now(), updated: Date.now() }
+      persist((l) => [def, ...l]); setActiveId(def.id)
+      if (needsSnapshot(def)) setNotice('Layout imported from the link. This dashboard reads a file or pasted data, so add your data with "Replace data".')
+      return null
+    } catch (e) { return errMsg(e) }
+  }
+  // open from a link: #share=<layout> imports a layout; ?share=<id> opens a shared dashboard
+  useEffect(() => {
+    const fromHash = () => { if (location.hash.startsWith('#share=')) { const err = importLayoutText(location.hash); history.replaceState(null, '', location.pathname + location.search); if (err) setError(err) } }
+    fromHash()
+    window.addEventListener('hashchange', fromHash)    // a layout link pasted into the address bar of an open tab
+    const id = new URLSearchParams(location.search).get('share')
+    if (id) void (async () => {
+      const list = await refreshShared()
+      const sum = list?.find((x) => x.id === id)
+      if (sum) await openShared(sum)
+      else if (list) setError('That shared dashboard was not found, or it is not shared with you.')
+    })()
+    return () => window.removeEventListener('hashchange', fromHash)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   /* ----------------------------------------------------------- create / open */
 
@@ -190,6 +401,7 @@ export default function App() {
           acceptDataset(next, def)
           void saveData(def.id, next)
           patchActive({ source: { ...def.source, kind: 'file', fileName: file.name, sheet: r.sheet } })
+          if (def.shared) setSnapDirty((x) => ({ ...x, [def.id]: true }))
           addLog(`Replaced data with ${file.name} (${next.rows.length} rows)`)
         } else {
           createDashboard(r.dataset, { kind: 'file', fileName: file.name, sheet: r.sheet, refreshSec: 0 }, r.dataset.name, first)
@@ -268,6 +480,7 @@ export default function App() {
   /* ------------------------------------------------------------------- views */
 
   const showWelcome = !active
+  const readOnly = active?.shared?.permission === 'view'
   const sig = JSON.stringify([active?.filters, active?.range])
 
   return (
@@ -276,6 +489,7 @@ export default function App() {
         <button className="icon burger" aria-label="Show or hide the dashboard list" aria-expanded={sideOpen} onClick={() => setSideOpen(!sideOpen)}>☰</button>
         <div className="brand"><span className="logo" aria-hidden>◧</span> Live Dashboard Studio</div>
         <div className="spacer" />
+        <button className="btn ghost who" onClick={() => (me.source === 'dev' ? setDialog('who') : undefined)} title={me.source === 'dev' ? 'Signed in as (test identity: click to change)' : me.email} aria-label={`Signed in as ${me.email}`}>👤 {me.name}{me.source === 'dev' ? ' (test)' : ''}</button>
         <button className="btn ghost" onClick={() => setDialog('diag')} title="Connection status and log">Diagnostics</button>
         <button className="btn ghost" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label="Toggle dark mode">{theme === 'dark' ? '☀ Light' : '☾ Dark'}</button>
       </header>
@@ -286,6 +500,7 @@ export default function App() {
           <button className="btn primary wide" onClick={() => fileInput.current?.click()}>⬆ Upload files…</button>
           <input ref={fileInput} type="file" hidden multiple accept=".csv,.tsv,.txt,.json,.xlsx" onChange={(e) => { void handleFiles([...(e.target.files ?? [])], false); e.target.value = '' }} />
           <button className="btn wide" onClick={() => setDialog('paste')}>📋 Paste data</button>
+          <button className="btn wide" onClick={() => setDialog('file')}>🔗 Watch a file on a server</button>
           <button className="btn wide" onClick={() => setDialog('db')}>🗄 Database (SQL / Oracle)</button>
           <button className="btn wide" onClick={() => void startDemo()}>✨ Try the live demo</button>
           <div className="drop-hint muted small">…or drag files anywhere on this panel</div>
@@ -296,15 +511,32 @@ export default function App() {
             {dashboards.map((d) => (
               <li key={d.id} className={d.id === activeId ? 'on' : ''}>
                 <button type="button" className="dash-open" onClick={() => setActiveId(d.id)}>
-                  <span className="dash-name">{d.name}</span>
+                  <span className="dash-name">{d.shared ? '🔗 ' : ''}{d.name}</span>
                   <span className="muted small">{kindLabel(d.source)}</span>
                 </button>
                 <button type="button" className="icon" aria-label={`Delete ${d.name}`} onClick={() => remove(d.id)}>✕</button>
               </li>
             ))}
           </ul>
+
+          <div className="side-title">Shared dashboards <button className="link" onClick={() => void refreshShared()} aria-label="Refresh shared dashboards">↻</button></div>
+          {shared === null && <div className="muted small">{sharedErr ? <span className="err">{sharedErr}</span> : <button className="link" onClick={() => void refreshShared()}>Load dashboards shared with you</button>}</div>}
+          {shared && shared.length === 0 && <div className="muted small">Nothing shared yet.</div>}
+          {shared && shared.length > 0 && (
+            <ul className="dash-list" aria-label="Shared dashboards">
+              {shared.map((x) => (
+                <li key={x.id} className={dashboards.find((d) => d.shared?.id === x.id)?.id === activeId ? 'on' : ''}>
+                  <button type="button" className="dash-open" onClick={() => void openShared(x)}>
+                    <span className="dash-name">{x.name}</span>
+                    <span className="muted small">{x.permission === 'owner' ? 'You share this' : `${x.owner} · ${x.permission === 'edit' ? 'can edit' : 'view only'}`}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
           <div className="side-foot muted small">
             <button className="link" onClick={() => importInput.current?.click()}>Import layout…</button>
+            <button className="link" onClick={() => setDialog('link')}>Open a share link…</button>
             <input ref={importInput} type="file" hidden accept=".json" onChange={(e) => { const f = e.target.files?.[0]; if (f) void importConfig(f); e.target.value = '' }} />
             <div>{__BUILD__}</div>
           </div>
@@ -334,13 +566,17 @@ export default function App() {
           {active && (
             <>
               <div className="dash-head">
-                <input className="dash-title" value={active.name} aria-label="Dashboard name" onChange={(e) => patchActive({ name: e.target.value })} />
-                <StatusChip def={active} ds={ds} loading={loading} live={live} error={!!error} lastLoaded={ds?.loadedAt ?? 0} />
+                <input className="dash-title" value={active.name} aria-label="Dashboard name" disabled={readOnly} onChange={(e) => patchActive({ name: e.target.value })} />
+                {active.shared && <span className="badge" title={`Shared by ${active.shared.owner}`}>🔗 {active.shared.permission === 'owner' ? 'Shared by you' : active.shared.permission === 'edit' ? `Shared by ${active.shared.owner} · you can edit` : `Shared by ${active.shared.owner} · view only`}</span>}
+                <StatusChip def={active} ds={ds} loading={loading} live={live} error={!!error} lastCheck={lastCheck} lastChange={lastChange} nextAt={nextAt} watchErr={watchErr} />
                 <div className="spacer" />
-                <RefreshControls def={active} live={live} setLive={setLive} onInterval={(v) => patchActive({ source: { ...active.source, refreshSec: v } })} onNow={() => void refresh({ manual: true })} />
-                <button className="btn" onClick={() => replaceInput.current?.click()}>⟳ Replace data</button>
+                <RefreshControls def={active} live={live} setLive={setLive} onInterval={(v) => patchActive({ source: { ...active.source, refreshSec: v } })} onWatch={(v) => patchActive({ source: { ...active.source, watchSec: v } })} onNow={() => void refresh({ manual: true, force: !!active.source.loc })} />
+                {isDirty(active) && <button className="btn primary" onClick={() => void saveToShared()} title="Publish your changes to the shared copy">⬆ Save to shared</button>}
+                {stale[active.id] && <button className="btn" onClick={() => void reloadShared()} title="Discard your changes and load the newer shared version">⟳ {stale[active.id]}: reload</button>}
+                <button className="btn" onClick={() => void openShareDialog()}>🔗 Share</button>
+                {!readOnly && !active.source.loc && <button className="btn" onClick={() => replaceInput.current?.click()}>⟳ Replace data</button>}
                 <input ref={replaceInput} type="file" hidden accept=".csv,.tsv,.txt,.json,.xlsx" onChange={(e) => { void handleFiles([...(e.target.files ?? [])], true); e.target.value = '' }} />
-                {canWatchFiles() && <button className="btn" title="Pick a local file; the dashboard updates whenever you save it" onClick={async () => {
+                {canWatchFiles() && !readOnly && !active.source.loc && <button className="btn" title="Pick a local file; the dashboard updates whenever you save it" onClick={async () => {
                   const h = await pickWatchableFile(); if (!h) return
                   watch.current.set(active.id, h); const f = await h.getFile()
                   patchActive({ source: { ...active.source, kind: 'file', fileName: f.name } }); await handleFiles([f], true); setNotice(`Watching ${f.name}: save the file and this dashboard updates within 2 seconds.`)
@@ -350,7 +586,7 @@ export default function App() {
                   <button onClick={exportConfig}>Dashboard layout (.json)</button>
                   <button onClick={() => window.print()}>Print / save as PDF</button>
                 </Menu>
-                <button className={`btn${edit ? ' primary' : ''}`} onClick={() => setEdit(!edit)}>{edit ? '✓ Done' : '✎ Edit'}</button>
+                {!readOnly && <button className={`btn${edit ? ' primary' : ''}`} onClick={() => setEdit(!edit)}>{edit ? '✓ Done' : '✎ Edit'}</button>}
               </div>
 
               {ds && (
@@ -375,12 +611,12 @@ export default function App() {
               {ds && (
                 <div className={`grid${loading ? ' reloading' : ''}`}>
                   {active.widgets.map((w, i) => (
-                    <WidgetCard key={w.id} w={w} ds={ds} rows={rows} filters={active.filters} edit={edit} prev={prevSnapshot.sig === sig ? (prevSnapshot.map.get(w.id) ?? null) : null}
+                    <WidgetCard key={w.id} w={w} ds={ds} rows={rows} filters={active.filters} edit={edit && !readOnly} prev={prevSnapshot.sig === sig ? (prevSnapshot.map.get(w.id) ?? null) : null}
                       asTable={!!tableView[w.id]} onToggleTable={() => setTableView((t) => ({ ...t, [w.id]: !t[w.id] }))}
                       onFilter={toggleFilter} onEdit={() => setEditing(w)} onRemove={() => removeWidget(w.id)}
                       onMove={(d) => moveWidget(w.id, d)} first={i === 0} last={i === active.widgets.length - 1} />
                   ))}
-                  {edit && (
+                  {edit && !readOnly && (
                     <div className="card add-card">
                       <b>Add a widget</b>
                       <div className="add-row">{WTYPES.map((t) => <button key={t.v} className="btn" onClick={() => setEditing(defaultWidget(t.v, ds))}>{t.t}</button>)}</div>
@@ -402,11 +638,28 @@ export default function App() {
         const id = uid('ds')
         const full: DashboardDef = { id, name: def.name, source: def.source, widgets: [], filters: [], range: null, created: Date.now(), updated: Date.now() }
         try {
-          const data = await fetchFromSource(full)
+          const data = await fetchFromSource(full, { force: true })
+          if (!data) throw new Error('The source returned no data.')
           createDashboard(data, def.source, def.name); setDialog(null)
         } catch (e) { return errMsg(e) } finally { setProgress(null) }
       }} />}
-      {dialog === 'diag' && <Diagnostics log={log} onClose={() => setDialog(null)} />}
+      {dialog === 'file' && <FileDialog onClose={() => setDialog(null)} onCreate={async (def) => {
+        const id = uid('ds')
+        const full: DashboardDef = { id, name: def.name, source: def.source, widgets: [], filters: [], range: null, created: Date.now(), updated: Date.now() }
+        try {
+          const data = await fetchFromSource(full, { force: true })
+          if (!data) throw new Error('The file returned no data.')
+          createDashboard(data, def.source, def.name); setDialog(null)
+        } catch (e) { return errMsg(e) } finally { setProgress(null) }
+      }} />}
+      {dialog === 'share' && active && (
+        <ShareDialog def={active} me={me} cfg={shareCfg} onCfg={setShareCfg} initial={shareInitial} rowCount={ds?.rows.length ?? 0}
+          needsSnapshot={needsSnapshot(active)} hasSnapshot={false} onPublish={publish} onSaveSharing={saveSharing} onStop={stopSharing}
+          appLink={active.shared ? appLinkFor(active.shared.id) : ''} layoutLink={`${location.href.split('#')[0].split('?')[0]}#share=${encodeLayout(defOf(active))}`} onClose={() => setDialog(null)} />
+      )}
+      {dialog === 'who' && <WhoDialog current={me.email} onClose={() => setDialog(null)} onSave={(email) => { setDevUser(email); setMe({ email, name: email, source: 'dev' }); setShared(null); setDialog(null) }} />}
+      {dialog === 'link' && <LinkDialog onClose={() => setDialog(null)} onOpen={(t) => { const err = importLayoutText(t); if (!err) setDialog(null); return err }} />}
+      {dialog === 'diag' && <Diagnostics log={log} me={me} share={{ label: backend.label, err: sharedErr, count: shared?.length ?? null }} onClose={() => setDialog(null)} />}
     </div>
   )
 
@@ -414,14 +667,15 @@ export default function App() {
     resetSimulated()
     const id = uid('ds')
     const full: DashboardDef = { id, name: 'Demo orders (simulated)', source: { kind: 'demo', refreshSec: 5 }, widgets: [], filters: [], range: null, created: Date.now(), updated: Date.now() }
-    const data = await fetchFromSource(full)
-    createDashboard(data, full.source, full.name)
+    const data = await fetchFromSource(full, { force: true })
+    if (data) createDashboard(data, full.source, full.name)
   }
 }
 
 /* ============================================================== components */
 
 function kindLabel(s: SourceDef): string {
+  if (s.kind === 'file' && s.loc) return `Watching · ${s.fileName ?? locLabel(s.loc)}`
   if (s.kind === 'file') return `File · ${s.fileName ?? ''}`
   if (s.kind === 'paste') return 'Pasted data'
   if (s.kind === 'demo') return 'Demo · live'
@@ -430,30 +684,34 @@ function kindLabel(s: SourceDef): string {
   return `${emu}${s.engine ? ENGINE_LABEL[s.engine] : (s.dbKind ?? 'Table')} · ${s.dbKey ?? ''}${s.refreshSec ? ' · live' : ''}`
 }
 
-function StatusChip({ def, ds, loading, live, error, lastLoaded }: { def: DashboardDef; ds: Dataset | null; loading: boolean; live: boolean; error: boolean; lastLoaded: number }) {
-  const auto = def.source.refreshSec > 0 && live
+function StatusChip({ def, ds, loading, live, error, lastCheck, lastChange, nextAt, watchErr }: { def: DashboardDef; ds: Dataset | null; loading: boolean; live: boolean; error: boolean; lastCheck: number; lastChange: number; nextAt: number | null; watchErr: string | null }) {
+  const isLoc = !!def.source.loc
+  const auto = isLoc || def.source.refreshSec > 0
+  const running = auto && live
+  const next = running && nextAt && !loading ? ` · next check in ${Math.max(0, Math.round((nextAt - Date.now()) / 1000))} s` : ''
+  const head = error ? 'Update failed' : watchErr ? 'Cannot check the file' : loading ? 'Updating…' : running ? (isLoc ? 'Watching' : 'Live') : ds ? 'Updated' : 'Loading'
+  const when = lastChange ? `changed ${ago(lastChange)}` : ds ? `loaded ${ago(ds.loadedAt)}` : ''
+  const checked = running && lastCheck && !loading ? ` · checked ${ago(lastCheck)}` : ''
   return (
-    <span className={`status${error ? ' bad' : auto ? ' live' : ''}`} aria-live="polite">
+    <span className={`status${error || watchErr ? ' bad' : running ? ' live' : ''}`} aria-live="polite" title={watchErr ?? undefined}>
       <i className="pulse" aria-hidden />
-      {error ? 'Update failed' : loading ? 'Updating…' : auto ? `Live · ${ago(lastLoaded)}` : ds ? `Updated ${ago(lastLoaded)}` : 'Loading'}
+      {head}{when ? ` · ${when}` : ''}{checked}{next}
       {ds && <span className="muted"> · {ds.rows.length.toLocaleString()} rows</span>}
     </span>
   )
 }
 
-function RefreshControls({ def, live, setLive, onInterval, onNow }: { def: DashboardDef; live: boolean; setLive: (b: boolean) => void; onInterval: (v: number) => void; onNow: () => void }) {
-  const file = def.source.kind === 'file' || def.source.kind === 'paste'
+function RefreshControls({ def, live, setLive, onInterval, onWatch, onNow }: { def: DashboardDef; live: boolean; setLive: (b: boolean) => void; onInterval: (v: number) => void; onWatch: (v: number) => void; onNow: () => void }) {
+  const loc = !!def.source.loc
+  const local = (def.source.kind === 'file' && !loc) || def.source.kind === 'paste'
+  if (local) return <div className="refresh" />
   return (
     <div className="refresh">
-      {!file && (
-        <>
-          <select value={def.source.refreshSec} aria-label="Refresh interval" onChange={(e) => onInterval(Number(e.target.value))}>
-            {REFRESH_CHOICES.map((r) => <option key={r.v} value={r.v}>{r.t}</option>)}
-          </select>
-          {def.source.refreshSec > 0 && <button className="btn" onClick={() => setLive(!live)} aria-pressed={live}>{live ? '⏸ Pause' : '▶ Resume'}</button>}
-          <button className="btn" onClick={onNow}>↻ Refresh now</button>
-        </>
-      )}
+      {loc
+        ? <select value={def.source.watchSec ?? 10} aria-label="Check the file" onChange={(e) => onWatch(Number(e.target.value))}>{WATCH_CHOICES.map((r) => <option key={r.v} value={r.v}>{r.t}</option>)}</select>
+        : <select value={def.source.refreshSec} aria-label="Refresh interval" onChange={(e) => onInterval(Number(e.target.value))}>{REFRESH_CHOICES.map((r) => <option key={r.v} value={r.v}>{r.t}</option>)}</select>}
+      {(loc || def.source.refreshSec > 0) && <button className="btn" onClick={() => setLive(!live)} aria-pressed={live}>{live ? '⏸ Pause' : '▶ Resume'}</button>}
+      <button className="btn" onClick={onNow}>{loc ? '↻ Check now' : '↻ Refresh now'}</button>
     </div>
   )
 }
@@ -512,18 +770,6 @@ function WidgetCard({ w, ds, rows, filters, edit, prev, asTable, onToggleTable, 
   )
 }
 const aggWord = (a: Agg) => ({ sum: 'Total', avg: 'Average', count: 'Count', min: 'Minimum', max: 'Maximum', distinct: 'Distinct' }[a])
-
-function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
-  useEffect(() => { const k = (e: KeyboardEvent) => e.key === 'Escape' && onClose(); window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k) }, [onClose])
-  return (
-    <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={`modal${wide ? ' wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
-        <header><h2>{title}</h2><button className="icon" onClick={onClose} aria-label="Close">✕</button></header>
-        {children}
-      </div>
-    </div>
-  )
-}
 
 function WidgetEditor({ w, ds, onSave, onClose, isNew }: { w: Widget; ds: Dataset; onSave: (w: Widget) => void; onClose: () => void; isNew: boolean }) {
   const [v, setV] = useState<Widget>(w)
@@ -706,7 +952,36 @@ function DbDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (d: { 
   )
 }
 
-function Diagnostics({ log, onClose }: { log: string[]; onClose: () => void }) {
+function WhoDialog({ current, onClose, onSave }: { current: string; onClose: () => void; onSave: (email: string) => void }) {
+  const [v, setV] = useState(current)
+  const ok = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim())
+  return (
+    <Modal title="Test identity" onClose={onClose}>
+      <div className="form">
+        <div className="muted small">Outside Power Apps there is no sign-in, so this is who the app pretends you are when you share or open shared dashboards. Inside Power Apps your own account is used automatically.</div>
+        <label>Email address<input value={v} onChange={(e) => setV(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && ok && onSave(v.trim().toLowerCase())} aria-label="Your email address" autoFocus /></label>
+      </div>
+      <footer className="modal-foot"><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={!ok} onClick={() => onSave(v.trim().toLowerCase())}>Use this identity</button></footer>
+    </Modal>
+  )
+}
+
+function LinkDialog({ onClose, onOpen }: { onClose: () => void; onOpen: (text: string) => string | null }) {
+  const [t, setT] = useState('')
+  const [err, setErr] = useState<string | null>(null)
+  return (
+    <Modal title="Open a share link" onClose={onClose} wide>
+      <div className="form">
+        <label>Paste a layout link someone sent you<textarea rows={5} value={t} onChange={(e) => setT(e.target.value)} placeholder="https://…#share=…" aria-label="Share link" autoFocus /></label>
+        <div className="muted small">Links to a shared dashboard (…?share=…) open from the address bar. A layout link brings the layout and the data source, not the data.</div>
+        {err && <div className="banner error" role="alert">{err}</div>}
+      </div>
+      <footer className="modal-foot"><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={!t.trim()} onClick={() => setErr(onOpen(t.trim()))}>Open</button></footer>
+    </Modal>
+  )
+}
+
+function Diagnostics({ log, me, share, onClose }: { log: string[]; me: Me; share: { label: string; err: string | null; count: number | null }; onClose: () => void }) {
   const info = useMemo(() => describeConnectors(), [])
   return (
     <Modal title="Diagnostics" onClose={onClose} wide>
@@ -716,6 +991,8 @@ function Diagnostics({ log, onClose }: { log: string[]; onClose: () => void }) {
         {info.tables.length ? <ul>{info.tables.map((t) => <li key={t.key}><b>{t.key}</b> · {t.kind.toUpperCase()} · {t.tableId}</li>)}</ul> : <div className="muted">None.</div>}
         <h4>Connectors (operations)</h4>
         {info.connectors.length ? <ul>{info.connectors.map((c) => <li key={c.key}>{c.key} · {c.operations} operations</li>)}</ul> : <div className="muted">None.</div>}
+        <h4>Sharing</h4>
+        <ul><li>Signed in as <b>{me.email}</b> ({me.source === 'powerapps' ? 'Power Apps account' : 'test identity'})</li><li>Shared store: {share.label}{share.err ? <span className="err"> · {share.err}</span> : share.count !== null ? ` · ${share.count} dashboards visible` : ' · not loaded yet'}</li></ul>
         <h4>Recent activity</h4>
         <pre className="logbox">{log.length ? log.join('\n') : 'Nothing yet.'}</pre>
       </div>

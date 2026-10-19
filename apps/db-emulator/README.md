@@ -43,6 +43,12 @@ Same pattern for `/{engine}/` = `sql`, `oracle`, `teradata`:
 
 Error bodies look like the connectors': `{ status, message, error: { message, code }, source }`. Details and known differences: **CONNECTOR-COMPAT.md**.
 
+## Files and sharing endpoints (for the app's auto-refresh and Share features)
+- `GET /files/folder?path=` lists files (from `<data>/files`, seeded from `files-seed/`: `sample-sales.csv`, `sample-sales.xlsx`); `GET /files/metadata?path=x.csv` returns name, size, modified time and ETag; `GET /files/content?path=x.csv` returns the file with `ETag` / `Last-Modified` (304 on `If-None-Match`); `PUT` writes it (413 above 25 MB); `DELETE` removes it. This mimics a SharePoint / OneDrive library closely enough to test "reload when the file changes".
+- A background feed appends rows to `sales-feed.csv` every `--feed-sec` seconds (default 3; appends to `sales-feed.csv`); turn it off with `--no-feed`.
+- `/shares` is a small share store: `GET /shares` (those visible to the `x-user` header), `POST` create, `GET/PUT/DELETE /shares/<id>` with view / edit / everyone permissions, optimistic version check (409 on conflict; definitions up to 2 MB) and optional data snapshots (up to 12 MB). Requests need an `x-user` email header (401 without). It trusts the `x-user` header: **testing only**.
+- `/health` reports `files` and `shares`.
+
 ## SQL coverage (what the translators understand)
 Read-only: one `SELECT` or `WITH ... SELECT`. Everything else is refused (INSERT, UPDATE, DELETE, DDL, EXEC, PRAGMA ...); queries run on a read-only connection in a separate process that is killed on timeout.
 

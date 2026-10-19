@@ -5,7 +5,7 @@ import path from 'node:path'
 import { startEmulator, parseArgs } from '../src/server.mjs'
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'emu-'))
-const base = parseArgs([]); Object.assign(base, { data: dir, size: 'small', live: false, quiet: true, port: 0 })
+const base = parseArgs([]); Object.assign(base, { data: dir, size: 'small', live: false, feed: false, quiet: true, port: 0 })
 let passed = 0, failed = 0
 const t = async (name, fn) => { try { await fn(); passed++ } catch (e) { failed++; console.error('FAIL', name, '\n  ', e.message.split('\n').slice(0, 4).join('\n   ')) } }
 
@@ -152,6 +152,73 @@ await t('CORS and metadata', async () => {
   const g = await call('GET', `${ds('sql')}/tables`); assert.equal(g.headers.get('access-control-allow-origin'), '*')
   assert.match(await (await fetch(U + '/')).text(), /DB emulator/)
 })
+
+const as = (user) => ({ 'x-user': user })
+const raw = async (method, p, body, headers = {}) => { const r = await fetch(U + p, { method, headers, body }); return { status: r.status, headers: r.headers, buf: Buffer.from(await r.arrayBuffer()) } }
+await t('files: folder, metadata, content, ETag / 304, write, delete', async () => {
+  const list = (await call('GET', '/files/folder?path=/')).json.value
+  assert.ok(list.some((f) => f.Name === 'sample-sales.csv') && list.some((f) => f.Name === 'sample-sales.xlsx'), 'seed files: ' + list.map((f) => f.Name))
+  const meta = (await call('GET', '/files/metadata?path=sample-sales.csv')).json
+  assert.ok(meta.ETag && meta.Size > 100 && /^\d{4}-\d\d-\d\dT/.test(meta.LastModified) && meta.Path === '/sample-sales.csv')
+  const got = await raw('GET', '/files/content?path=sample-sales.csv')
+  assert.equal(got.status, 200); assert.equal(got.headers.get('etag'), meta.ETag); assert.match(got.buf.toString(), /^Date,Region,Product,Units,Revenue/)
+  assert.equal((await raw('GET', '/files/content?path=sample-sales.csv', undefined, { 'if-none-match': meta.ETag })).status, 304)
+  const put = await raw('PUT', '/files/content?path=reports/q4.csv', 'a,b\n1,2\n3,4\n'); assert.equal(put.status, 200)
+  const m2 = (await call('GET', '/files/metadata?path=reports/q4.csv')).json; assert.equal(m2.Size, 12)
+  await new Promise((r) => setTimeout(r, 20))
+  await raw('PUT', '/files/content?path=reports/q4.csv', 'a,b\n1,2\n3,4\n5,6\n')
+  const m3 = (await call('GET', '/files/metadata?path=reports/q4.csv')).json; assert.notEqual(m3.ETag, m2.ETag, 'ETag changes when the file changes')
+  assert.equal((await raw('GET', '/files/content?path=reports/q4.csv', undefined, { 'if-none-match': m2.ETag })).status, 200, 'old ETag no longer matches')
+  assert.ok((await call('GET', '/files/folder?path=reports')).json.value.some((f) => f.Name === 'q4.csv'))
+  assert.equal((await raw('DELETE', '/files/content?path=reports/q4.csv')).status, 200)
+  assert.equal((await call('GET', '/files/metadata?path=reports/q4.csv')).status, 404)
+})
+await t('files: traversal, bad type and oversize are refused', async () => {
+  for (const p of ['../package.json', '..%2Fpackage.json', '%2e%2e/%2e%2e/etc/passwd', 'a/../../x', '/etc/passwd', 'x%00.csv']) {
+    const r = await call('GET', `/files/content?path=${p}`); assert.ok([400, 404].includes(r.status), `${p} -> ${r.status}`)
+    if (r.status === 200) assert.fail(p)
+  }
+  assert.equal((await raw('PUT', '/files/content?path=evil.exe', 'x')).status, 400)
+  assert.equal((await raw('PUT', '/files/content?path=../escape.csv', 'x')).status, 400)
+  assert.equal((await raw('PUT', '/files/content?path=big.csv', Buffer.alloc(26 * 1024 * 1024, 97))).status, 413)
+  assert.ok(!fs.existsSync(path.join(dir, 'escape.csv')))
+})
+await t('shares: create, visibility, permissions, versions, everyone, delete', async () => {
+  const body = { name: 'Team SLA', definition: { widgets: [1, 2], source: { kind: 'db' } }, sharedWith: [{ user: 'Bob@Example.com', permission: 'view' }, { user: 'carol@example.com', permission: 'edit' }, { user: 'alice@example.com', permission: 'edit' }], everyone: 'none' }
+  const c = await call('POST', '/shares', body, as('alice@example.com')); assert.equal(c.status, 201)
+  const id = c.json.id; assert.equal(c.json.owner, 'alice@example.com'); assert.equal(c.json.version, 1); assert.equal(c.json.permission, 'owner')
+  assert.deepEqual(c.json.sharedWith.map((x) => x.user), ['bob@example.com', 'carol@example.com'], 'emails normalised, owner not listed')
+  const lst = async (u) => (await call('GET', '/shares', undefined, as(u))).json.value
+  assert.equal((await lst('alice@example.com'))[0].sharedWith.length, 2)
+  const bob = (await lst('bob@example.com')).find((x) => x.id === id); assert.equal(bob.permission, 'view'); assert.equal(bob.sharedWith, undefined, 'only the owner sees who else has access')
+  assert.equal((await lst('carol@example.com')).find((x) => x.id === id).permission, 'edit')
+  assert.equal((await lst('dave@example.com')).length, 0); assert.equal((await call('GET', `/shares/${id}`, undefined, as('dave@example.com'))).status, 404)
+  assert.deepEqual((await call('GET', `/shares/${id}`, undefined, as('bob@example.com'))).json.definition.widgets, [1, 2])
+  assert.equal((await call('PUT', `/shares/${id}`, { definition: { widgets: [] }, baseVersion: 1 }, as('bob@example.com'))).status, 403, 'viewer cannot change')
+  const e1 = await call('PUT', `/shares/${id}`, { definition: { widgets: [1, 2, 3], source: { kind: 'db' } }, baseVersion: 1 }, as('carol@example.com')); assert.equal(e1.status, 200); assert.equal(e1.json.version, 2); assert.equal(e1.json.updatedBy, 'carol@example.com')
+  const stale = await call('PUT', `/shares/${id}`, { definition: { widgets: [9] }, baseVersion: 1 }, as('alice@example.com')); assert.equal(stale.status, 409); assert.match(stale.json.message, /Version conflict/)
+  assert.equal((await call('PUT', `/shares/${id}`, { everyone: 'view' }, as('carol@example.com'))).status, 403, 'editor cannot change sharing')
+  assert.equal((await call('PUT', `/shares/${id}`, { everyone: 'view' }, as('alice@example.com'))).status, 200)
+  const dave = (await lst('dave@example.com')).find((x) => x.id === id); assert.equal(dave.permission, 'view', '"everyone" gives view')
+  assert.equal((await call('PUT', `/shares/${id}`, { sharedWith: [{ user: 'bob@example.com', permission: 'edit' }] }, as('alice@example.com'))).json.sharedWith[0].permission, 'edit')
+  assert.equal((await call('DELETE', `/shares/${id}`, undefined, as('bob@example.com'))).status, 403)
+  assert.equal((await call('DELETE', `/shares/${id}`, undefined, as('alice@example.com'))).status, 200)
+  assert.equal((await lst('bob@example.com')).length, 0); assert.equal((await lst('dave@example.com')).length, 0)
+})
+await t('shares: validation, identity and snapshot limits', async () => {
+  assert.equal((await call('GET', '/shares')).status, 401); assert.equal((await call('GET', '/shares', undefined, as('not-an-email'))).status, 401)
+  const a = as('alice@example.com')
+  assert.equal((await call('POST', '/shares', { name: '', definition: {} }, a)).status, 400)
+  assert.equal((await call('POST', '/shares', { name: 'x'.repeat(121), definition: {} }, a)).status, 400)
+  assert.equal((await call('POST', '/shares', { name: 'x', definition: {}, sharedWith: [{ user: 'nope', permission: 'view' }] }, a)).status, 400)
+  assert.equal((await call('POST', '/shares', { name: 'x', definition: {}, sharedWith: [{ user: 'a@b.co', permission: 'admin' }] }, a)).status, 400)
+  assert.equal((await call('POST', '/shares', { name: 'x', definition: {}, everyone: 'all' }, a)).status, 400)
+  const snap = await call('POST', '/shares', { name: 'snap', definition: { source: { kind: 'file' } }, snapshot: { columns: [{ name: 'a' }], rows: [{ a: 1 }, { a: 2 }] } }, a); assert.equal(snap.status, 201); assert.equal(snap.json.hasSnapshot, true)
+  assert.equal((await call('GET', `/shares/${snap.json.id}`, undefined, a)).json.snapshot.rows.length, 2)
+  const big = await call('POST', '/shares', { name: 'big', definition: {}, snapshot: { s: 'x'.repeat(13 * 1024 * 1024) } }, a); assert.equal(big.status, 413)
+  await call('DELETE', `/shares/${snap.json.id}`, undefined, a)
+  assert.equal((await call('POST', '/shares', '{bad', a)).status, 400)
+})
 emu.close()
 
 // ---- separate instances: timeout, api key, live writer ----
@@ -164,12 +231,24 @@ await t('runaway query is stopped by the timeout and the server stays usable', a
   const o = await fetch(u + `/oracle/datasets/${encodeURIComponent(DS.oracle)}/query/sql`, { method: 'POST', body: JSON.stringify({ query: 'SELECT COUNT(*) FROM SALES.ORDERS a, SALES.ORDERS b, SALES.ORDERS c' }) }); assert.match((await o.json()).message, /ORA-01013/)
   e2.close()
 })
+await t('feed: sales-feed.csv keeps growing like an upstream export', async () => {
+  const e2 = await startEmulator({ ...base, feed: true, feedSec: 0.4 })
+  const u = `http://127.0.0.1:${e2.port}`
+  const meta = async () => (await (await fetch(u + '/files/metadata?path=sales-feed.csv')).json())
+  const m1 = await meta(); await new Promise((r) => setTimeout(r, 1700)); const m2 = await meta()
+  assert.ok(m2.Size > m1.Size && m2.ETag !== m1.ETag, `${m1.Size} -> ${m2.Size}`)
+  const text = await (await fetch(u + '/files/content?path=sales-feed.csv')).text(); assert.ok(text.split('\n').length > 500)
+  assert.ok((await (await fetch(u + '/health')).json()).files.feed.appended >= 5)
+  e2.close()
+})
 await t('optional API key', async () => {
   const e2 = await startEmulator({ ...base, apiKey: 'secret' })
   const u = `http://127.0.0.1:${e2.port}`
   assert.equal((await fetch(u + '/sql/datasets')).status, 401)
   assert.equal((await fetch(u + '/sql/datasets', { headers: { 'x-api-key': 'secret' } })).status, 200)
   assert.equal((await fetch(u + '/sql/datasets', { headers: { authorization: 'Bearer secret' } })).status, 200)
+  assert.equal((await fetch(u + '/files/folder?path=/')).status, 401); assert.equal((await fetch(u + '/shares', { headers: { 'x-user': 'a@b.co' } })).status, 401)
+  assert.equal((await fetch(u + '/shares', { headers: { 'x-user': 'a@b.co', 'x-api-key': 'secret' } })).status, 200)
   assert.equal((await fetch(u + '/health')).status, 200)
   e2.close()
 })

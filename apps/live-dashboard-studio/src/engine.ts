@@ -461,6 +461,29 @@ export function compareDatasets(prev: Dataset | null, next: Dataset) {
   }
 }
 
+/* -------------------------------------------------------------- change detection */
+
+/** Cheap hash over every value, in slices so the page stays responsive. Equal fingerprint = nothing changed since the last refresh. */
+export async function fingerprintRows(rows: Record<string, unknown>[]): Promise<string> {
+  let h = 0x811c9dc5
+  const STEP = 20_000
+  for (let i = 0; i < rows.length; i += STEP) {
+    const end = Math.min(rows.length, i + STEP)
+    for (let k = i; k < end; k++) {
+      const row = rows[k]
+      for (const key in row) {
+        const v = row[key]
+        const str = v === null || v === undefined ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v)
+        for (let j = 0; j < str.length; j++) h = Math.imul(h ^ str.charCodeAt(j), 16777619)
+        h = Math.imul(h ^ 31, 16777619)
+      }
+      h = Math.imul(h ^ 10, 16777619)
+    }
+    if (end < rows.length) await new Promise<void>((res) => setTimeout(res, 0))
+  }
+  return `${rows.length}:${(h >>> 0).toString(16)}`
+}
+
 /* ----------------------------------------------------------------- format */
 
 export function formatNumber(n: number, compact = true): string {
