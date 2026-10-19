@@ -14,7 +14,7 @@ const missing = (pkg) => new Error(`This data source needs the optional dependen
 export function sqlServerProvider() {
   const pools = new Map();
   return {
-    async fetch(cfg, queryText) {
+    async fetch(cfg, queryText, _name, params) {
       let sql;
       try { ({ default: sql } = await import('mssql')); } catch { throw missing('mssql'); }
       const key = cfg.__name;
@@ -27,7 +27,9 @@ export function sqlServerProvider() {
         pools.set(key, pool);
       }
       try {
-        const res = await pool.request().query(assertReadOnly(queryText));
+        const req = pool.request();
+        for (const [k, v] of Object.entries(params ?? {})) req.input(k, v);
+        const res = await req.query(assertReadOnly(queryText));
         return normalizeRows(res.recordset ?? []);
       } catch (e) {
         if (e.code === 'ESOCKET' || e.code === 'ECONNCLOSED') { pools.delete(key); pool.close().catch(() => {}); }
@@ -40,7 +42,7 @@ export function sqlServerProvider() {
 export function oracleProvider() {
   const pools = new Map();
   return {
-    async fetch(cfg, queryText) {
+    async fetch(cfg, queryText, _name, params) {
       let oracledb;
       try { ({ default: oracledb } = await import('oracledb')); } catch { throw missing('oracledb'); }
       const key = cfg.__name;
@@ -53,7 +55,7 @@ export function oracleProvider() {
       const conn = await pool.getConnection();
       try {
         conn.callTimeout = 30_000;
-        const res = await conn.execute(assertReadOnly(queryText), [], { maxRows: MAX_ROWS, outFormat: oracledb.OUT_FORMAT_OBJECT });
+        const res = await conn.execute(assertReadOnly(queryText), params ?? {}, { maxRows: MAX_ROWS, outFormat: oracledb.OUT_FORMAT_OBJECT });
         return normalizeRows(res.rows ?? []);
       } finally { await conn.close().catch(() => {}); }
     },

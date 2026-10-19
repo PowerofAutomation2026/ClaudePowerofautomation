@@ -64,8 +64,13 @@ export class Engine {
       for (const { d, w } of targets) {
         const q = w.binding.query ?? '';
         try {
-          if (!cache.has(q)) cache.set(q, await this.registry.fetchRows(source, w.binding.query));
-          this.apply(d, w, cache.get(q));
+          if (w.binding.table) {
+            const r = await this.registry.fetchPlanned(source, w.type, w.binding); // structured query, pushed down to the database
+            this.apply(d, w, r.rows, r.resultBinding);
+          } else {
+            if (!cache.has(q)) cache.set(q, await this.registry.fetchRows(source, w.binding.query));
+            this.apply(d, w, cache.get(q));
+          }
         } catch (e) {
           if (throwOnError) throw e;
           this.fail(d, w, e);
@@ -74,9 +79,9 @@ export class Engine {
     } finally { this.running.delete(key); }
   }
 
-  apply(d, w, rows) {
+  apply(d, w, rows, binding = w.binding) {
     const before = JSON.stringify([w.value, w.labels, w.series, w.columns, w.rows, w.error]);
-    const data = compute(w.type, w.binding, rows);
+    const data = compute(w.type, binding, rows);
     this.store.upsertWidget(d.id, { widget_id: w.id, ...data }, { silent: true });
     delete w.error;
     w.refreshedAt = new Date().toISOString();

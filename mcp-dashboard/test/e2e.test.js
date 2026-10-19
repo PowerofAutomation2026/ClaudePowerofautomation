@@ -25,9 +25,9 @@ test('build, live-update and view a dashboard', async () => {
   const c = await connect();
   assert.ok((await c.listTools()).tools.length >= 8);
   const { data: d } = await call(c, 'build_dashboard', { title: 'Sales', widgets: [
-    { type: 'kpi', title: 'Revenue', value: 1200, unit: '$', delta: 4.2 },
+    { type: 'kpi', title: 'Revenue', value: '1200', unit: '$', delta: 4.2 },
     { type: 'line', title: 'Trend', labels: ['a', 'b'], values: [1, 2] },
-    { type: 'table', title: 'Top', columns: ['n', 'v'], rows: [['x', 1]] },
+    { type: 'table', title: 'Top', columns: ['n', 'v'], rows: [['x', '1']] },
   ] });
   assert.match(d.url, /^http:\/\/localhost:3911\/d\/\w+\?t=\w+$/);
   const line = d.widgets.find((w) => w.type === 'line');

@@ -16,7 +16,7 @@ const widgetFields = {
   widget_id: z.string().optional().describe('Existing widget id to update in place. Omit to create a new widget.'),
   span: z.number().int().min(1).max(4).optional().describe('Grid columns to span (1-4). Default 1 for kpi, 2 for charts, 4 for tables.'),
   subtitle: z.string().optional(),
-  value: z.union([z.number(), z.string()]).optional().describe('kpi: the headline number, e.g. 1284 or "98.2"'),
+  value: z.string().optional().describe('kpi: the headline number as text, e.g. "1284" or "98.2"'),
   unit: z.string().optional().describe('kpi/chart unit suffix, e.g. "%", "ms", "$"'),
   delta: z.number().optional().describe('kpi: change vs. previous period, e.g. 4.2 or -1.5'),
   good_direction: z.enum(['up', 'down']).optional().describe('kpi: whether an increase is good (default up). Controls green/red colouring of delta.'),
@@ -26,8 +26,11 @@ const widgetFields = {
   series: z.array(z.object({ name: z.string(), values: z.array(z.number()) })).optional()
     .describe('line/bar: multiple series; each has one number per label. Use instead of "values".'),
   columns: z.array(z.string()).optional().describe('table: column headers'),
-  rows: z.array(z.array(z.union([z.string(), z.number(), z.boolean(), z.null()]))).optional().describe('table: rows of cells matching columns'),
+  rows: z.array(z.array(z.string())).optional().describe('table: rows of cells (as text) matching columns'),
   text: z.string().optional().describe('text widget body'),
+  warn_at: z.number().optional().describe('kpi: value at which the tile turns amber'),
+  critical_at: z.number().optional().describe('kpi: value at which the tile turns red (and an alert is sent if configured)'),
+  bad_when: z.enum(['above', 'below']).optional().describe('kpi: are values above or below the thresholds bad? (default above)'),
 };
 
 const defaultSpan = { kpi: 1, line: 2, bar: 2, pie: 2, table: 4, text: 2 };
@@ -37,8 +40,8 @@ export function createServer(store, urlFor, { generate = generateDashboardSpec, 
     { name: 'live-dashboard', version: '1.0.0' },
     {
       instructions:
-        'Build and update live dashboards. Typical flow: build_dashboard (one call, with widgets) -> give the user the returned "url". ' +
-        'The page updates in real time, so to refresh numbers call upsert_widget with the widget_id, or append_point for streaming series. ' +
+        'Build and update live dashboards. With connected data: list_datasources -> (list_tables -> describe_table | describe_datasource) -> create_dashboard -> bind_widget per widget; the numbers are computed by the server and refresh automatically. ' +
+        'With data the user typed in chat: build_dashboard, then upsert_widget / append_point to update. You never write SQL. ' +
         'Always share the full url with the user; never invent one.',
     },
   );
@@ -103,6 +106,22 @@ export function createServer(store, urlFor, { generate = generateDashboardSpec, 
     return text({ rowCount: rows.length, columns: Object.keys(rows[0] ?? {}), sample: rows.slice(0, 5) });
   }));
 
+  server.registerTool('list_tables', {
+    title: 'List tables of a database source',
+    description: 'Browse the tables and views the admin allows on a SQL Server / Oracle source, so you can bind widgets to them without knowing the schema in advance. Optional search filters by name.',
+    inputSchema: { source: z.string(), search: z.string().optional().describe('Case-insensitive text to look for in schema.table') },
+  }, guard(async ({ source, search }) => {
+    const all = (await sources.tables(source)).map((t) => `${t.schema}.${t.name}`);
+    const hits = search ? all.filter((t) => t.toLowerCase().includes(search.toLowerCase())) : all;
+    return text({ count: hits.length, tables: hits.slice(0, 200), truncated: hits.length > 200 });
+  }));
+
+  server.registerTool('describe_table', {
+    title: 'Describe a table',
+    description: 'Return the columns (name and type) of an allowed table plus 5 sample rows. Call this before bind_widget with "table".',
+    inputSchema: { source: z.string(), table: z.string().describe('schema.table as returned by list_tables') },
+  }, guard(async ({ source, table }) => text(await sources.describeTable(source, table))));
+
   server.registerTool('bind_widget', {
     title: 'Bind a widget to a live data source',
     description: 'Create (or update, with widget_id) a widget whose data comes from a configured data source and refreshes automatically while the dashboard is open. ' +
@@ -112,6 +131,9 @@ export function createServer(store, urlFor, { generate = generateDashboardSpec, 
       type: z.enum(['kpi', 'line', 'bar', 'pie', 'table']), title: z.string(),
       source: z.string().describe('Data source name from list_datasources'),
       query: z.string().optional().describe('Named query, required when the source has several'),
+      table: z.string().optional().describe('SQL Server / Oracle: schema.table to read directly (see list_tables). Aggregation happens in the database. Use instead of query.'),
+      filters: z.array(z.object({ column: z.string(), op: z.string().describe('eq, ne, gt, gte, lt, lte, contains, in (comma-separated values), is_null, not_null'), value: z.string().optional() })).optional()
+        .describe('table mode only: filters combined with AND'),
       column: z.string().optional().describe('kpi: column to aggregate'),
       agg: z.enum(AGGS).optional().describe('sum (default), avg, min, max, count, first, last'),
       label: z.string().optional().describe('line/bar/pie: column for x-axis labels or slice names'),
@@ -122,15 +144,16 @@ export function createServer(store, urlFor, { generate = generateDashboardSpec, 
       columns: z.array(z.string()).optional().describe('table: columns to show (default all, max 12)'),
       order_by: z.string().optional().describe('table: column to sort by'), desc: z.boolean().optional(),
       unit: z.string().optional(), subtitle: z.string().optional(), span: z.number().int().min(1).max(4).optional(),
+      warn_at: widgetFields.warn_at, critical_at: widgetFields.critical_at, bad_when: widgetFields.bad_when,
     },
   }, guard(async (a, extra) => {
-    const { dashboard_id, widget_id, type, title, source, query, unit, subtitle, span, ...mapping } = a;
+    const { dashboard_id, widget_id, type, title, source, query, table, unit, subtitle, span, warn_at, critical_at, bad_when, ...mapping } = a;
     store.get(dashboard_id);
-    const binding = { source, ...(query && { query }), ...Object.fromEntries(Object.entries(mapping).filter(([, v]) => v !== undefined)) };
-    const rows = await sources.fetchRows(source, query);
-    if (!rows.length) throw new Error('The data source returned no rows, so there is nothing to chart yet.');
-    const data = compute(type, binding, rows); // validates the column mapping with a readable error
-    const w = store.upsertWidget(dashboard_id, { widget_id, type, title, unit, subtitle, span: span ?? defaultSpan[type], ...data, good_direction: undefined }, { silent: true });
+    const binding = { source, ...(query && { query }), ...(table && { table }), ...Object.fromEntries(Object.entries(mapping).filter(([, v]) => v !== undefined)) };
+    const { rows, resultBinding } = table ? await sources.fetchPlanned(source, type, binding) : { rows: await sources.fetchRows(source, query), resultBinding: binding };
+    if (!rows.length && type !== 'kpi') throw new Error('The data source returned no rows, so there is nothing to show yet.');
+    const data = compute(type, resultBinding, rows); // validates the column mapping with a readable error
+    const w = store.upsertWidget(dashboard_id, { widget_id, type, title, unit, subtitle, span: span ?? defaultSpan[type], ...data, warn_at, critical_at, bad_when }, { silent: true });
     w.binding = binding; w.refreshedAt = new Date().toISOString(); delete w.error;
     const d = store.get(dashboard_id);
     store.touch(d, { kind: 'widget', id: w.id });
@@ -206,6 +229,12 @@ export function createServer(store, urlFor, { generate = generateDashboardSpec, 
     description: 'Change a dashboard title or description.',
     inputSchema: { dashboard_id: z.string(), title: z.string().optional(), description: z.string().optional() },
   }, guard(({ dashboard_id, ...patch }, extra) => text(view(store.update(dashboard_id, patch), extra))));
+
+  server.registerTool('rotate_link', {
+    title: 'Revoke and reissue the share link',
+    description: 'Invalidate the current viewer link of a dashboard and return a new one. Use when a link was shared by mistake.',
+    inputSchema: { dashboard_id: z.string() },
+  }, guard(({ dashboard_id }, extra) => text(view(store.rotateToken(dashboard_id), extra))));
 
   server.registerTool('delete_dashboard', {
     title: 'Delete a dashboard',

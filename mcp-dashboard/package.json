@@ -1,6 +1,6 @@
 {
   "name": "live-dashboard-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "MCP server that lets any agent (Copilot Studio, Claude, ...) build and update live dashboards",
   "type": "module",
   "main": "src/server.js",
@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node src/server.js",
     "stdio": "node src/server.js --stdio",
-    "test": "node --test test/e2e.test.js test/ai.test.js test/sources.test.js"
+    "test": "node --test test/e2e.test.js test/ai.test.js test/sources.test.js test/features.test.js test/oauth.test.js test/discovery.test.js"
   },
   "engines": {
     "node": ">=18"

@@ -22,11 +22,15 @@ svg{width:100%;height:auto;display:block}svg text{fill:var(--mute);font-size:10p
 table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}th{color:var(--mute);font-weight:600;position:sticky;top:0;background:var(--card)}
 .scroll{max-height:360px;overflow:auto}.text{white-space:pre-wrap}
 .meta{float:right;font-size:11px;color:var(--mute);text-transform:none;letter-spacing:0;font-weight:400}.err{color:var(--bad);font-size:12px;margin:0 0 6px}
+.kpi.warn{color:#d97706}.kpi.crit{color:var(--bad)}.kpi.ok{color:var(--ink)}
+.spark{display:block;width:100%;height:28px;margin-top:6px}.spark path{fill:none;stroke:var(--c0);stroke-width:1.6}
+.tools{display:flex;gap:8px;margin-left:12px}.btn{background:var(--card);color:var(--mute);border:1px solid var(--line);border-radius:6px;padding:3px 9px;font:inherit;font-size:12px;cursor:pointer}.btn:hover{color:var(--ink)}
+.card .btn{float:right;margin:-3px 0 4px 8px}
 .empty{max-width:1280px;margin:60px auto;text-align:center;color:var(--mute)}
 @media(max-width:900px){main{grid-template-columns:repeat(2,1fr)}.s3,.s4{grid-column:span 2!important}}
 @media(max-width:560px){main{grid-template-columns:1fr}.card{grid-column:span 1!important}}
 </style></head><body>
-<header><h1 id="t">Loading…</h1><span class="pill"><span class="dot" id="dot"></span><span id="st">connecting</span></span><p id="d"></p></header>
+<header><h1 id="t">Loading…</h1><span class="tools"><button class="btn" id="fs" title="Fullscreen">⛶ Fullscreen</button></span><span class="pill"><span class="dot" id="dot"></span><span id="st">connecting</span></span><p id="d"></p></header>
 <main id="m"></main><div class="empty" id="e" hidden>No widgets yet — ask your agent to add some.</div>
 <script>
 const q=new URLSearchParams(location.search),id=location.pathname.split('/').pop(),tok=q.get('t')||'';
@@ -48,14 +52,18 @@ function pie(w){const vals=w.series[0].values.map(v=>Math.max(0,v||0)),tot=vals.
  vals.forEach((v,i)=>{const b=a+v/tot*2*Math.PI,big=b-a>Math.PI?1:0,p=(R,t)=>(cx+R*Math.cos(t)).toFixed(1)+' '+(cy+R*Math.sin(t)).toFixed(1);if(v/tot>.9999)svg.append(S('circle',{cx,cy,r:(r+r2)/2,fill:'none',stroke:C(i),'stroke-width':r-r2}));else if(v>0)svg.append(S('path',{d:'M'+p(r,a)+'A'+r+' '+r+' 0 '+big+' 1 '+p(r,b)+'L'+p(r2,b)+'A'+r2+' '+r2+' 0 '+big+' 0 '+p(r2,a)+'Z',fill:C(i)},S('title',{},w.labels[i]+': '+w.series[0].values[i]+' ('+Math.round(v/tot*100)+'%)')));a=b});
  svg.append(S('text',{x:cx,y:cy+4,'text-anchor':'middle',style:'font-size:14px;font-weight:600;fill:var(--ink)'},fmt(tot)));
  w.labels.slice(0,10).forEach((l,i)=>{svg.append(S('rect',{x:190,y:14+i*16,width:9,height:9,rx:2,fill:C(i)}),S('text',{x:204,y:22+i*16},(l.length>14?l.slice(0,13)+'…':l)+' '+Math.round(vals[i]/tot*100)+'%'))});return svg}
-function kpi(w){const g=w.goodDirection==='down'?-1:1,d=w.delta;return[el('div',{class:'kpi'},typeof w.value==='number'?fmt(w.value):w.value,w.unit?el('small',{},w.unit):''),d!=null?el('div',{class:'delta '+(d===0?'':d*g>0?'good':'bad')},(d>0?'▲ +':d<0?'▼ ':'')+d):'']}
+function spark(h){if(!h||h.length<2)return'';const lo=Math.min(...h),hi=Math.max(...h),r=hi-lo||1,d=h.map((v,i)=>(i?'L':'M')+(i/(h.length-1)*100).toFixed(1)+' '+(26-(v-lo)/r*24).toFixed(1)).join('');const s=S('svg',{viewBox:'0 0 100 28',preserveAspectRatio:'none',class:'spark'});s.append(S('path',{d,'vector-effect':'non-scaling-stroke'}));return s}
+function kpi(w){const g=w.goodDirection?(w.goodDirection==='down'?-1:1):w.thresholds?(w.thresholds.bad==='below'?1:-1):1,d=w.delta,tr=d==null&&w.trend&&w.trend.pct!=null?w.trend.pct:null,x=d??tr,u=d==null&&tr!=null?'%':'';
+ return[el('div',{class:'kpi '+(w.status||'')},typeof w.value==='number'?fmt(w.value):w.value,w.unit?el('small',{},w.unit):''),x!=null?el('div',{class:'delta '+(x===0?'':x*g>0?'good':'bad'),title:d==null?'change since previous reading':''},(x>0?'▲ +':x<0?'▼ ':'')+x+u):'',spark(w.history)]}
 function table(w){return el('div',{class:'scroll'},el('table',{},el('thead',{},el('tr',{},w.columns.map(c=>el('th',{},c)))),el('tbody',{},w.rows.map(r=>el('tr',{},w.columns.map((_,i)=>el('td',{},String(r[i]??''))))))))}
+function csv(w){const q=v=>'"'+String(v??'').replace(/"/g,'""')+'"',t=[w.columns.map(q).join(',')].concat(w.rows.map(r=>r.map(q).join(','))).join('\\n'),a=document.createElement('a');a.href=URL.createObjectURL(new Blob([t],{type:'text/csv'}));a.download=(w.title||'table').replace(/[^\\w-]+/g,'_')+'.csv';a.click();URL.revokeObjectURL(a.href)}
 const R={kpi,line,bar,pie,table,text:w=>el('div',{class:'text'},w.text)};
 let prev={};
 function render(d){document.title=d.title;t.textContent=d.title;document.getElementById('d').textContent=d.description||'';e.hidden=d.widgets.length>0;
  const next={};m.replaceChildren(...d.widgets.map(w=>{const{refreshedAt,...rest}=w,sig=JSON.stringify(rest);next[w.id]=sig;let body;try{body=R[w.type](w)}catch(x){body=el('div',{class:'sub'},'Could not render: '+x.message)}
-  const c=el('div',{class:'card s'+(w.span||1),style:'grid-column:span '+(w.span||1)},el('h2',{},w.title,w.binding&&w.refreshedAt?el('span',{class:'meta',title:'Auto-refreshing from '+w.binding.source},'↻ '+new Date(w.refreshedAt).toLocaleTimeString()):''),w.error?el('div',{class:'err'},'Refresh failed, showing last data: '+w.error):'',w.subtitle?el('div',{class:'sub'},w.subtitle):'',body);
-  if(prev[w.id]&&prev[w.id]!==sig){c.classList.add('flash');setTimeout(()=>c.classList.remove('flash'),900)}return c}));prev=next}
+  const c=el('div',{class:'card s'+(w.span||1),style:'grid-column:span '+(w.span||1)},el('h2',{},w.title,w.type==='table'?el('button',{class:'btn',onclick:'void 0'},'⬇ CSV'):'',w.binding&&w.refreshedAt?el('span',{class:'meta',title:'Auto-refreshing from '+w.binding.source},'↻ '+new Date(w.refreshedAt).toLocaleTimeString()):''),w.error?el('div',{class:'err'},'Refresh failed, showing last data: '+w.error):'',w.subtitle?el('div',{class:'sub'},w.subtitle):'',body);
+  const bt=c.querySelector('.btn');if(bt)bt.onclick=()=>csv(w);if(prev[w.id]&&prev[w.id]!==sig){c.classList.add('flash');setTimeout(()=>c.classList.remove('flash'),900)}return c}));prev=next}
+document.getElementById('fs').onclick=()=>document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen?.();
 const t=document.getElementById('t'),m=document.getElementById('m'),e=document.getElementById('e'),dot=document.getElementById('dot'),st=document.getElementById('st');
 function live(on,msg){dot.classList.toggle('on',on);st.textContent=msg}
 fetch('/api/d/'+id+'?t='+encodeURIComponent(tok)).then(r=>r.ok?r.json():Promise.reject(r.status)).then(render).catch(s=>{t.textContent=s===404?'Dashboard not found':'Access denied'});

@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { toNum } from './sources/rows.js';
 
 export const WIDGET_TYPES = ['kpi', 'line', 'bar', 'pie', 'table', 'text'];
 const MAX_POINTS = 500;
@@ -103,6 +104,10 @@ export class Store extends EventEmitter {
       if (input.delta !== undefined) w.delta = num(input.delta);
       if (input.good_direction !== undefined) w.goodDirection = input.good_direction;
       if (w.value === undefined) throw new Error('kpi widgets need "value"');
+      if (input.warn_at !== undefined || input.critical_at !== undefined || input.bad_when !== undefined) {
+        w.thresholds = { ...w.thresholds, ...(input.warn_at !== undefined && { warn: input.warn_at }), ...(input.critical_at !== undefined && { crit: input.critical_at }), ...(input.bad_when && { bad: input.bad_when }) };
+      }
+      this.trackKpi(d, w);
     } else if (type === 'text') {
       if (input.text !== undefined) w.text = String(input.text).slice(0, 4000);
       if (w.text === undefined) throw new Error('text widgets need "text"');
@@ -133,6 +138,28 @@ export class Store extends EventEmitter {
     if (!silent) this.touch(d, { kind: 'widget', id: w.id });
     return w;
   }
+
+  /** Keep a short history (sparkline), the change vs. the previous reading, and the threshold status of a kpi. */
+  trackKpi(d, w) {
+    const n = toNum(w.value);
+    if (!Number.isFinite(n)) { delete w.status; return; }
+    const h = (w.history ??= []);
+    const prev = h.at(-1);
+    if (prev !== n) { h.push(n); if (h.length > 40) h.shift(); }
+    const before = h.length > 1 ? h.at(-2) : undefined;
+    if (before !== undefined && prev !== n || (before !== undefined && w.trend)) {
+      w.trend = before === 0 ? { change: n - before } : { change: n - before, pct: Math.round(((n - before) / Math.abs(before)) * 1000) / 10 };
+    }
+    const t = w.thresholds;
+    if (t && (t.warn !== undefined || t.crit !== undefined)) {
+      const sign = t.bad === 'below' ? -1 : 1;
+      const hit = (lim) => lim !== undefined && sign * n >= sign * lim;
+      const status = hit(t.crit) ? 'crit' : hit(t.warn) ? 'warn' : 'ok';
+      if (status !== w.status) { const from = w.status; w.status = status; this.emit('status', d, w, from, status); }
+    } else delete w.status;
+  }
+
+  rotateToken(id) { const d = this.get(id); d.token = rid(12); this.touch(d, { kind: 'meta' }); return d; }
 
   /** Append one live point to a line/bar widget. `values` maps series name -> number. */
   appendPoint(id, widgetId, label, values, maxPoints = 60) {

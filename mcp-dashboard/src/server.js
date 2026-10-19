@@ -7,6 +7,9 @@ import { Store } from './store.js';
 import { createServer } from './tools.js';
 import { Registry } from './sources/index.js';
 import { Engine } from './engine.js';
+import { OAuth } from './oauth.js';
+import { Alerts } from './alerts.js';
+import { setupPage, connectorSwagger, connectorProperties, agentInstructions } from './setup.js';
 import { VIEWER_HTML } from './ui.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -30,8 +33,10 @@ const safeEq = (a = '', b = '') => {
 const store = new Store(DATA_FILE);
 const sources = Registry.fromFile(process.env.DATASOURCES_FILE ?? './datasources.json');
 const engine = new Engine(store, sources);
+new Alerts(store, { url: process.env.ALERT_WEBHOOK_URL, linkFor: (d) => linkFor(d) });
 engine.start();
 const toolOpts = { sources, engine };
+const oauth = API_KEY ? new OAuth({ apiKey: API_KEY }) : null;
 
 /** Base url used for the links returned to agents. */
 function baseUrl(req) {
@@ -64,9 +69,19 @@ const readBody = (req) => new Promise((resolve, reject) => {
   req.on('error', reject);
 });
 
+const readForm = async (req) => {
+  const chunks = []; let n = 0;
+  for await (const c of req) { n += c.length; if (n > 100_000) throw Object.assign(new Error('Body too large'), { code: 413 }); chunks.push(c); }
+  const raw = Buffer.concat(chunks).toString();
+  if ((req.headers['content-type'] ?? '').includes('json')) { try { return JSON.parse(raw || '{}'); } catch { throw Object.assign(new Error('Invalid JSON'), { code: 400 }); } }
+  return Object.fromEntries(new URLSearchParams(raw));
+};
+const clientIp = (req) => String(req.headers['x-forwarded-for'] ?? req.socket.remoteAddress ?? '').split(',')[0].trim();
+
 function authed(req, url) {
   if (!API_KEY) return true;
   const bearer = /^Bearer (.+)$/i.exec(req.headers.authorization ?? '')?.[1];
+  if (bearer && oauth?.verifyAccess(bearer)) return true; // OAuth (dynamic discovery) access token
   return safeEq(bearer ?? req.headers['x-api-key'] ?? url.searchParams.get('key') ?? '', API_KEY);
 }
 const canView = (d, url) => safeEq(url.searchParams.get('t') ?? '', d.token);
@@ -79,7 +94,7 @@ async function handle(req, res) {
     if (path === '/healthz') return send(res, 200, { ok: true });
 
     if (path === '/mcp') {
-      if (!authed(req, url)) { res.setHeader('www-authenticate', 'Bearer'); return send(res, 401, { error: 'unauthorized' }); }
+      if (!authed(req, url)) { res.setHeader('www-authenticate', oauth ? oauth.challenge(baseUrl(req)) : 'Bearer'); return send(res, 401, { error: 'unauthorized' }); }
       if (req.method !== 'POST') return send(res, 405, { jsonrpc: '2.0', error: { code: -32000, message: 'Method not allowed (stateless server, use POST)' }, id: null });
       // Stateless: a fresh server + transport per request, so it scales out and survives restarts.
       const body = await readBody(req);
@@ -90,7 +105,32 @@ async function handle(req, res) {
       return transport.handleRequest(req, res, body);
     }
 
-    if (path === '/') {
+    if (oauth) {
+      const base = baseUrl(req);
+      if (path.startsWith('/.well-known/oauth-protected-resource')) return send(res, 200, oauth.protectedResource(base));
+      if (path === '/.well-known/oauth-authorization-server') return send(res, 200, oauth.serverMetadata(base));
+      if (path === '/register' && req.method === 'POST') { const r = oauth.register(await readForm(req)); return send(res, r.status, r.body); }
+      if (path === '/authorize') {
+        if (req.method === 'GET') {
+          const q = Object.fromEntries(url.searchParams);
+          const chk = oauth.checkAuthorize(q);
+          return chk.error ? send(res, 400, `<!doctype html><meta charset="utf-8"><p>${chk.error}</p>`, 'text/html; charset=utf-8') : send(res, 200, oauth.consentPage(q, chk.client), 'text/html; charset=utf-8');
+        }
+        if (req.method === 'POST') {
+          const r = oauth.authorize(await readForm(req), clientIp(req));
+          if (r.redirect) { res.writeHead(302, { location: r.redirect, 'cache-control': 'no-store' }); return res.end(); }
+          return send(res, r.status, r.html, 'text/html; charset=utf-8');
+        }
+      }
+      if (path === '/token' && req.method === 'POST') { const r = oauth.token(await readForm(req), req.headers.authorization); return send(res, r.status, r.body); }
+    }
+
+    if (path === '/') return send(res, 200, setupPage(baseUrl(req), { oauth: !!oauth }), 'text/html; charset=utf-8');
+    if (path === '/copilot-studio/connector.swagger.json') return send(res, 200, connectorSwagger(baseUrl(req)));
+    if (path === '/copilot-studio/connector.properties.json') return send(res, 200, connectorProperties());
+    if (path === '/copilot-studio/agent-instructions.md') return send(res, 200, agentInstructions(), 'text/markdown; charset=utf-8');
+
+    if (path === '/dashboards') {
       if (!authed(req, url)) return send(res, 401, 'Add ?key=<API_KEY> to list dashboards.', 'text/plain');
       const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
       const items = store.list().map((d) => `<li><a href="${esc(linkFor(d, req))}">${esc(d.title)}</a> <small>${d.widgets.length} widgets</small></li>`).join('') || '<li>No dashboards yet.</li>';
