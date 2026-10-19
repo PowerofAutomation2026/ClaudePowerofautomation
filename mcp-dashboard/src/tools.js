@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { WIDGET_TYPES } from './store.js';
+import { generateDashboardSpec } from './ai.js';
 
 const text = (obj) => ({ content: [{ type: 'text', text: typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2) }] });
 const fail = (e) => ({ isError: true, content: [{ type: 'text', text: e.message ?? String(e) }] });
@@ -29,7 +30,7 @@ const widgetFields = {
 
 const defaultSpan = { kpi: 1, line: 2, bar: 2, pie: 2, table: 4, text: 2 };
 
-export function createServer(store, urlFor) {
+export function createServer(store, urlFor, { generate = generateDashboardSpec } = {}) {
   const server = new McpServer(
     { name: 'live-dashboard', version: '1.0.0' },
     {
@@ -58,6 +59,30 @@ export function createServer(store, urlFor) {
     try {
       for (const w of widgets) store.upsertWidget(d.id, { ...w, span: w.span ?? defaultSpan[w.type] });
     } catch (e) { store.delete(d.id); throw e; }
+    return text(view(d, extra));
+  }));
+
+  server.registerTool('generate_dashboard', {
+    title: 'Generate a dashboard with Claude',
+    description: 'Describe the dashboard you want and optionally paste raw data (CSV, JSON or text). This server asks Claude (Anthropic) to design the dashboard, computes the KPIs/charts/tables from the data, and returns the live url. ' +
+      'Pass dashboard_id to regenerate an existing dashboard in place, so its link stays the same.',
+    inputSchema: {
+      prompt: z.string().describe('What the dashboard should show, e.g. "Weekly sales by region with top 10 customers"'),
+      data: z.string().optional().describe('Raw data to base it on: CSV, JSON or plain text'),
+      dashboard_id: z.string().optional().describe('Existing dashboard to rebuild in place'),
+    },
+  }, guard(async ({ prompt, data, dashboard_id }, extra) => {
+    const old = dashboard_id ? store.get(dashboard_id) : null;
+    const spec = await generate({ prompt, data, existing: old && { title: old.title, widgets: old.widgets.map(({ id, ...w }) => w) } });
+    const d = old ?? store.create({ title: spec.title, description: spec.description });
+    const before = old ? structuredClone(old.widgets) : [];
+    try {
+      if (old) { old.widgets = []; store.update(d.id, { title: spec.title, description: spec.description }); }
+      for (const w of spec.widgets) store.upsertWidget(d.id, { ...w, span: w.span ?? defaultSpan[w.type] });
+    } catch (e) {
+      if (old) { old.widgets = before; store.update(d.id, {}); } else store.delete(d.id);
+      throw e;
+    }
     return text(view(d, extra));
   }));
 

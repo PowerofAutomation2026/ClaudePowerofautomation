@@ -4,14 +4,19 @@
   "description": "MCP server that lets any agent (Copilot Studio, Claude, ...) build and update live dashboards",
   "type": "module",
   "main": "src/server.js",
-  "bin": { "live-dashboard-mcp": "src/server.js" },
+  "bin": {
+    "live-dashboard-mcp": "src/server.js"
+  },
   "scripts": {
     "start": "node src/server.js",
     "stdio": "node src/server.js --stdio",
-    "test": "node --test test/e2e.test.js"
+    "test": "node --test test/e2e.test.js test/ai.test.js"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.135.0",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "zod": "^3.23.8"
   }
