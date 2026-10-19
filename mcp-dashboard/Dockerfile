@@ -3,6 +3,7 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev
 COPY src ./src
+COPY datasources.example.json ./
 ENV PORT=3000 DATA_FILE=/data/dashboards.json
 VOLUME /data
 EXPOSE 3000

@@ -47,6 +47,11 @@ export class Store extends EventEmitter {
     this.emit('change', d.id, change);
   }
 
+  viewers = new Map();
+  viewerCount(id) { return this.viewers.get(id) ?? 0; }
+  viewerJoin(id) { const n = this.viewerCount(id) + 1; this.viewers.set(id, n); this.emit('viewer', id, n); }
+  viewerLeave(id) { const n = Math.max(0, this.viewerCount(id) - 1); n ? this.viewers.set(id, n) : this.viewers.delete(id); this.emit('viewer', id, n); }
+
   create({ title, description = '' }) {
     const d = {
       id: rid(5), token: rid(12), title: String(title).slice(0, 120), description: String(description).slice(0, 500),
@@ -81,7 +86,7 @@ export class Store extends EventEmitter {
   }
 
   /** Create or merge a widget. Omitted fields keep their current value when the widget already exists. */
-  upsertWidget(id, input) {
+  upsertWidget(id, input, { silent = false } = {}) {
     const d = this.get(id);
     const existing = input.widget_id ? d.widgets.find((w) => w.id === input.widget_id) : null;
     const type = input.type ?? existing?.type;
@@ -125,7 +130,7 @@ export class Store extends EventEmitter {
       if (input.unit !== undefined) w.unit = String(input.unit).slice(0, 12);
     }
     if (!existing) d.widgets.push(w);
-    this.touch(d, { kind: 'widget', id: w.id });
+    if (!silent) this.touch(d, { kind: 'widget', id: w.id });
     return w;
   }
 

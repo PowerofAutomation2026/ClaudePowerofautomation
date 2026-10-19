@@ -1,0 +1,43 @@
+{
+  "pollWithoutViewers": false,
+  "sources": {
+    "sales_csv": {
+      "type": "csv",
+      "description": "Daily sales export (CSV on a file share or any HTTPS URL)",
+      "location": "/data/sales.csv",
+      "refreshSeconds": 30
+    },
+    "budget_xlsx": {
+      "type": "excel",
+      "description": "Finance budget workbook",
+      "location": "https://files.example.com/budget.xlsx",
+      "headers": { "authorization": "env:BUDGET_FILE_AUTH" },
+      "sheet": "Budget",
+      "refreshSeconds": 300
+    },
+    "erp_sql": {
+      "type": "sqlserver",
+      "description": "ERP reporting database (use a READ-ONLY login)",
+      "connection": { "server": "sql01.contoso.com", "database": "ERP", "user": "env:ERP_USER", "password": "env:ERP_PASSWORD", "options": { "encrypt": true, "trustServerCertificate": false } },
+      "queries": {
+        "orders_by_day": "SELECT CAST(OrderDate AS date) AS day, COUNT(*) AS orders, SUM(Total) AS revenue FROM dbo.Orders WHERE OrderDate >= DATEADD(day,-30,GETDATE()) GROUP BY CAST(OrderDate AS date)",
+        "top_customers": "SELECT TOP 20 Customer, SUM(Total) AS revenue FROM dbo.Orders GROUP BY Customer ORDER BY revenue DESC"
+      },
+      "refreshSeconds": 30
+    },
+    "hr_oracle": {
+      "type": "oracle",
+      "description": "HR Oracle database (use a READ-ONLY account)",
+      "connection": { "user": "env:HR_USER", "password": "env:HR_PASSWORD", "connectString": "oracle01.contoso.com:1521/HRPDB" },
+      "queries": { "headcount": "SELECT department, COUNT(*) AS people FROM employees GROUP BY department" },
+      "refreshSeconds": 120
+    },
+    "pp_flow": {
+      "type": "powerautomate",
+      "description": "Power Automate flow wrapping the SQL Server / Oracle / Excel Online connectors (works through the on-premises data gateway)",
+      "url": "env:PP_FLOW_URL",
+      "queries": { "open_cases": "", "stock_levels": "" },
+      "refreshSeconds": 60
+    }
+  }
+}

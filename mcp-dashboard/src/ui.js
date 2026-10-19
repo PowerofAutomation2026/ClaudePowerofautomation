@@ -21,6 +21,7 @@ svg{width:100%;height:auto;display:block}svg text{fill:var(--mute);font-size:10p
 .legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;font-size:12px;color:var(--mute)}.legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}
 table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}th{color:var(--mute);font-weight:600;position:sticky;top:0;background:var(--card)}
 .scroll{max-height:360px;overflow:auto}.text{white-space:pre-wrap}
+.meta{float:right;font-size:11px;color:var(--mute);text-transform:none;letter-spacing:0;font-weight:400}.err{color:var(--bad);font-size:12px;margin:0 0 6px}
 .empty{max-width:1280px;margin:60px auto;text-align:center;color:var(--mute)}
 @media(max-width:900px){main{grid-template-columns:repeat(2,1fr)}.s3,.s4{grid-column:span 2!important}}
 @media(max-width:560px){main{grid-template-columns:1fr}.card{grid-column:span 1!important}}
@@ -52,8 +53,8 @@ function table(w){return el('div',{class:'scroll'},el('table',{},el('thead',{},e
 const R={kpi,line,bar,pie,table,text:w=>el('div',{class:'text'},w.text)};
 let prev={};
 function render(d){document.title=d.title;t.textContent=d.title;document.getElementById('d').textContent=d.description||'';e.hidden=d.widgets.length>0;
- const next={};m.replaceChildren(...d.widgets.map(w=>{const sig=JSON.stringify(w);next[w.id]=sig;let body;try{body=R[w.type](w)}catch(x){body=el('div',{class:'sub'},'Could not render: '+x.message)}
-  const c=el('div',{class:'card s'+(w.span||1),style:'grid-column:span '+(w.span||1)},el('h2',{},w.title),w.subtitle?el('div',{class:'sub'},w.subtitle):'',body);
+ const next={};m.replaceChildren(...d.widgets.map(w=>{const{refreshedAt,...rest}=w,sig=JSON.stringify(rest);next[w.id]=sig;let body;try{body=R[w.type](w)}catch(x){body=el('div',{class:'sub'},'Could not render: '+x.message)}
+  const c=el('div',{class:'card s'+(w.span||1),style:'grid-column:span '+(w.span||1)},el('h2',{},w.title,w.binding&&w.refreshedAt?el('span',{class:'meta',title:'Auto-refreshing from '+w.binding.source},'↻ '+new Date(w.refreshedAt).toLocaleTimeString()):''),w.error?el('div',{class:'err'},'Refresh failed, showing last data: '+w.error):'',w.subtitle?el('div',{class:'sub'},w.subtitle):'',body);
   if(prev[w.id]&&prev[w.id]!==sig){c.classList.add('flash');setTimeout(()=>c.classList.remove('flash'),900)}return c}));prev=next}
 const t=document.getElementById('t'),m=document.getElementById('m'),e=document.getElementById('e'),dot=document.getElementById('dot'),st=document.getElementById('st');
 function live(on,msg){dot.classList.toggle('on',on);st.textContent=msg}

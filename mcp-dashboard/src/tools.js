@@ -2,6 +2,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { WIDGET_TYPES } from './store.js';
 import { generateDashboardSpec } from './ai.js';
+import { compute, AGGS } from './binding.js';
+import { Registry } from './sources/index.js';
 
 const text = (obj) => ({ content: [{ type: 'text', text: typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2) }] });
 const fail = (e) => ({ isError: true, content: [{ type: 'text', text: e.message ?? String(e) }] });
@@ -30,7 +32,7 @@ const widgetFields = {
 
 const defaultSpan = { kpi: 1, line: 2, bar: 2, pie: 2, table: 4, text: 2 };
 
-export function createServer(store, urlFor, { generate = generateDashboardSpec } = {}) {
+export function createServer(store, urlFor, { generate = generateDashboardSpec, sources = new Registry({}), engine = null } = {}) {
   const server = new McpServer(
     { name: 'live-dashboard', version: '1.0.0' },
     {
@@ -86,6 +88,67 @@ export function createServer(store, urlFor, { generate = generateDashboardSpec }
     return text(view(d, extra));
   }));
 
+  server.registerTool('list_datasources', {
+    title: 'List data sources',
+    description: 'List the data sources the server admin has connected (CSV, Excel, SQL Server, Oracle, Power Automate flows) with their named queries. Use bind_widget to make a widget auto-refresh from one.',
+    inputSchema: {},
+  }, guard(() => text(sources.list().length ? sources.list() : 'No data sources are configured on this server (see datasources.example.json).')));
+
+  server.registerTool('describe_datasource', {
+    title: 'Preview a data source',
+    description: 'Fetch a data source now and return its column names, row count and the first 5 rows, so you can choose columns for bind_widget.',
+    inputSchema: { source: z.string(), query: z.string().optional().describe('Named query (SQL Server / Oracle / flow sources)') },
+  }, guard(async ({ source, query }) => {
+    const rows = await sources.fetchRows(source, query);
+    return text({ rowCount: rows.length, columns: Object.keys(rows[0] ?? {}), sample: rows.slice(0, 5) });
+  }));
+
+  server.registerTool('bind_widget', {
+    title: 'Bind a widget to a live data source',
+    description: 'Create (or update, with widget_id) a widget whose data comes from a configured data source and refreshes automatically while the dashboard is open. ' +
+      'kpi: column + agg. line/bar/pie: label column + values column(s) + agg (rows are grouped by label). table: columns, order_by, limit. Call describe_datasource first to see the column names.',
+    inputSchema: {
+      dashboard_id: z.string(), widget_id: z.string().optional(),
+      type: z.enum(['kpi', 'line', 'bar', 'pie', 'table']), title: z.string(),
+      source: z.string().describe('Data source name from list_datasources'),
+      query: z.string().optional().describe('Named query, required when the source has several'),
+      column: z.string().optional().describe('kpi: column to aggregate'),
+      agg: z.enum(AGGS).optional().describe('sum (default), avg, min, max, count, first, last'),
+      label: z.string().optional().describe('line/bar/pie: column for x-axis labels or slice names'),
+      values: z.array(z.string()).optional().describe('line/bar/pie: one or more numeric columns'),
+      group: z.boolean().optional().describe('line/bar/pie: group rows by label and aggregate (default true)'),
+      sort: z.enum(['none', 'label', 'value_desc', 'value_asc']).optional(),
+      limit: z.number().int().min(1).max(500).optional().describe('Max points/rows to show'),
+      columns: z.array(z.string()).optional().describe('table: columns to show (default all, max 12)'),
+      order_by: z.string().optional().describe('table: column to sort by'), desc: z.boolean().optional(),
+      unit: z.string().optional(), subtitle: z.string().optional(), span: z.number().int().min(1).max(4).optional(),
+    },
+  }, guard(async (a, extra) => {
+    const { dashboard_id, widget_id, type, title, source, query, unit, subtitle, span, ...mapping } = a;
+    store.get(dashboard_id);
+    const binding = { source, ...(query && { query }), ...Object.fromEntries(Object.entries(mapping).filter(([, v]) => v !== undefined)) };
+    const rows = await sources.fetchRows(source, query);
+    if (!rows.length) throw new Error('The data source returned no rows, so there is nothing to chart yet.');
+    const data = compute(type, binding, rows); // validates the column mapping with a readable error
+    const w = store.upsertWidget(dashboard_id, { widget_id, type, title, unit, subtitle, span: span ?? defaultSpan[type], ...data, good_direction: undefined }, { silent: true });
+    w.binding = binding; w.refreshedAt = new Date().toISOString(); delete w.error;
+    const d = store.get(dashboard_id);
+    store.touch(d, { kind: 'widget', id: w.id });
+    engine?.ensure(source);
+    return text({ widget_id: w.id, url: urlFor(d, extra), refreshEverySeconds: sources.refreshSeconds(source), preview: data });
+  }));
+
+  server.registerTool('refresh_now', {
+    title: 'Refresh bound widgets now',
+    description: 'Re-read the data sources for every bound widget on a dashboard immediately, instead of waiting for the next automatic refresh.',
+    inputSchema: { dashboard_id: z.string() },
+  }, guard(async ({ dashboard_id }) => {
+    if (!engine) throw new Error('Data sources are not enabled on this server.');
+    engine.lastRun.delete(dashboard_id);
+    await engine.refreshDashboard(dashboard_id);
+    return text('refreshed');
+  }));
+
   server.registerTool('create_dashboard', {
     title: 'Create an empty dashboard',
     description: 'Create an empty dashboard and return its live url. Add widgets with upsert_widget.',
@@ -114,6 +177,7 @@ export function createServer(store, urlFor, { generate = generateDashboardSpec }
   }, guard(({ dashboard_id, ...w }, extra) => {
     const existing = w.widget_id && store.get(dashboard_id).widgets.some((x) => x.id === w.widget_id);
     const widget = store.upsertWidget(dashboard_id, { ...w, span: w.span ?? (existing ? undefined : defaultSpan[w.type]) });
+    if (widget.binding && ['value', 'labels', 'values', 'series', 'columns', 'rows'].some((k) => w[k] !== undefined)) delete widget.binding; // static data replaces a live binding
     return text({ widget_id: widget.id, url: urlFor(store.get(dashboard_id), extra) });
   }));
 

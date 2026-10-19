@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node src/server.js",
     "stdio": "node src/server.js --stdio",
-    "test": "node --test test/e2e.test.js test/ai.test.js"
+    "test": "node --test test/e2e.test.js test/ai.test.js test/sources.test.js"
   },
   "engines": {
     "node": ">=18"
@@ -19,5 +19,10 @@
     "@anthropic-ai/sdk": "^0.135.0",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "zod": "^3.23.8"
+  },
+  "optionalDependencies": {
+    "exceljs": "^4.4.0",
+    "mssql": "^12.7.10",
+    "oracledb": "^26.0.0"
   }
 }

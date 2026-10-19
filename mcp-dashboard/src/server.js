@@ -5,6 +5,8 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { Store } from './store.js';
 import { createServer } from './tools.js';
+import { Registry } from './sources/index.js';
+import { Engine } from './engine.js';
 import { VIEWER_HTML } from './ui.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -26,6 +28,10 @@ const safeEq = (a = '', b = '') => {
 };
 
 const store = new Store(DATA_FILE);
+const sources = Registry.fromFile(process.env.DATASOURCES_FILE ?? './datasources.json');
+const engine = new Engine(store, sources);
+engine.start();
+const toolOpts = { sources, engine };
 
 /** Base url used for the links returned to agents. */
 function baseUrl(req) {
@@ -39,7 +45,7 @@ const linkFor = (d, req) => `${baseUrl(req)}/d/${d.id}?t=${d.token}`;
 if (stdio) {
   // For Claude Desktop / Claude Code: `node src/server.js --stdio`. Viewer links need the web server too.
   http.createServer(handle).listen(PORT, HOST, () => console.error(`viewer on :${PORT}`));
-  await createServer(store, (d) => linkFor(d)).connect(new StdioServerTransport());
+  await createServer(store, (d) => linkFor(d), toolOpts).connect(new StdioServerTransport());
 } else {
   http.createServer(handle).listen(PORT, HOST, () => {
     console.error(`Live Dashboard MCP listening on ${HOST}:${PORT}\n  MCP endpoint: ${PUBLIC_URL ?? `http://localhost:${PORT}`}/mcp`);
@@ -77,7 +83,7 @@ async function handle(req, res) {
       if (req.method !== 'POST') return send(res, 405, { jsonrpc: '2.0', error: { code: -32000, message: 'Method not allowed (stateless server, use POST)' }, id: null });
       // Stateless: a fresh server + transport per request, so it scales out and survives restarts.
       const body = await readBody(req);
-      const server = createServer(store, (d) => linkFor(d, req));
+      const server = createServer(store, (d) => linkFor(d, req), toolOpts);
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
       res.on('close', () => { transport.close(); server.close(); });
       await server.connect(transport);
@@ -107,8 +113,9 @@ async function handle(req, res) {
         res.write(`data: ${JSON.stringify(change.kind === 'deleted' ? { deleted: true } : store.dashboards.get(d.id))}\n\n`);
       };
       store.on('change', onChange);
+      store.viewerJoin(d.id);
       const beat = setInterval(() => res.write(': ping\n\n'), 25_000);
-      req.on('close', () => { clearInterval(beat); store.off('change', onChange); });
+      req.on('close', () => { clearInterval(beat); store.off('change', onChange); store.viewerLeave(d.id); });
       return;
     }
 
