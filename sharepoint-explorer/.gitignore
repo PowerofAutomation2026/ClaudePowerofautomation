@@ -1,0 +1,8 @@
+node_modules
+dist
+.deploy-logs
+dist-zip
+.power
+.deploy-state
+power.config.json
+src/generated
