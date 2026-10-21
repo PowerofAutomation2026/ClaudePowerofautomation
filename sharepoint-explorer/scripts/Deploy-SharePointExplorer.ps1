@@ -105,13 +105,6 @@ try {
   }
   $OwnerUpn = @($OwnerUpn | ForEach-Object { $_ -split '[,;]' } | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ })
   if (-not $OwnerUpn.Count) { throw 'At least one owner is required.' }
-  if (-not $ConfigSiteUrl -and -not $NonInteractive) {
-    Write-Host '    A SharePoint site is needed for the shared settings and to register the connector (e.g. https://contoso.sharepoint.com/sites/Apps).' -ForegroundColor Gray
-    $ConfigSiteUrl = (Read-Host 'Config site URL').Trim()
-  }
-  if ($ConfigSiteUrl) { $ConfigSiteUrl = $ConfigSiteUrl.TrimEnd('/') }
-  $appConfig = [ordered]@{ owners = $OwnerUpn; configSiteUrl = "$ConfigSiteUrl"; configList = 'SPX_Config' }
-  [System.IO.File]::WriteAllText((Join-Path $root 'src\appconfig.json'), (($appConfig | ConvertTo-Json -Depth 4) + "`n"), $utf8NoBom)
   Ok "Owners: $($OwnerUpn -join ', ')"
 
   # ---------- 5. install + init ----------
@@ -160,6 +153,21 @@ try {
     if (++$attempt -ge 10) { throw 'SharePoint connection still missing after 10 checks.' }
   }
   $conn = @(Get-Connections) | Where-Object { $_.Api -eq $api } | Select-Object -First 1
+  # No config site given: discover one from the user's own SharePoint connection (asked only if discovery finds nothing)
+  if (-not $ConfigSiteUrl) {
+    foreach ($cmd in @(@('code','list-datasets','-a',$api,'-c',$conn.Id), @('code','list-datasets','--apiId',$api,'--connectionId',$conn.Id))) {
+      $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+      $dsOut = (& pac @cmd 2>&1) | Out-String
+      $ErrorActionPreference = $prev
+      $urls = @([regex]::Matches($dsOut, 'https://[A-Za-z0-9.\-]+\.sharepoint\.[a-z]+/[^\s"''|,;]*') | ForEach-Object { $_.Value.TrimEnd('/') } | Select-Object -Unique)
+      if ($urls.Count) { $ConfigSiteUrl = ($urls | Where-Object { $_ -match '/(sites|teams)/' } | Select-Object -First 1); if (-not $ConfigSiteUrl) { $ConfigSiteUrl = $urls[0] }; Ok "Using SharePoint site $ConfigSiteUrl for shared settings"; break }
+    }
+  }
+  if (-not $ConfigSiteUrl -and -not $NonInteractive) { $ConfigSiteUrl = (Read-Host 'Could not detect a SharePoint site. Config site URL (e.g. https://contoso.sharepoint.com/sites/Apps)').Trim() }
+  if ($ConfigSiteUrl) { $ConfigSiteUrl = $ConfigSiteUrl.TrimEnd('/') }
+  $appConfig = [ordered]@{ owners = $OwnerUpn; configSiteUrl = "$ConfigSiteUrl"; configList = 'SPX_Config' }
+  [System.IO.File]::WriteAllText((Join-Path $root 'src\appconfig.json'), (($appConfig | ConvertTo-Json -Depth 4) + "`n"), $utf8NoBom)
+
   function Add-Source([string[]]$Extra) {   # true when pac accepted it (or it is already there)
     $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     $o = (& pac code add-data-source -a $api -c $conn.Id @Extra 2>&1) | Out-String
