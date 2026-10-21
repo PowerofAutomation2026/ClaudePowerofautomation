@@ -3,6 +3,8 @@ import { cellText, odataQuote } from './util'
 
 export const emptyQuery = (): Query => ({ search: '', clauses: [], sort: { field: 'ID', dir: 'desc' }, folders: false })
 
+/** Library folder browsing applies only when no search/filter is active (search always covers the whole library). */
+export const isFolderMode = (q: Query) => !!q.folder && !q.search && !q.clauses.length
 export const isDefaultQuery = (q: Query) => !q.search && !q.clauses.length
 
 export const OPS_BY_KIND: Record<string, { op: Clause['op']; label: string }[]> = {
@@ -193,4 +195,10 @@ export function buildFilter(q: Query, fields: SpField[], isLibrary: boolean, ext
     if (s) parts.push(s)
   }
   return parts.join(' and ')
+}
+
+/** Folder view sorting: folders first, then the chosen sort (default: name). Whole folder is in memory, so this is instant. */
+export function sortFolderRows(rows: Row[], q: Query, fields: SpField[]): Row[] {
+  const sorted = sortRows(rows, q.sort.field === 'ID' && q.sort.dir === 'desc' ? { ...q, sort: { field: 'FileLeafRef', dir: 'asc' }, search: '' } : { ...q, search: '' }, fields, true)
+  return [...sorted.filter((r) => r.FSObjType === 1), ...sorted.filter((r) => r.FSObjType !== 1)]
 }

@@ -188,7 +188,7 @@ export function useShortcuts(handlers: Record<string, (e: KeyboardEvent) => void
     const down = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement
       const typing = t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable
-      const key = (e.ctrlKey || e.metaKey ? 'mod+' : '') + e.key.toLowerCase()
+      const key = (e.ctrlKey || e.metaKey ? 'mod+' : '') + (e.shiftKey && (e.ctrlKey || e.metaKey) ? 'shift+' : '') + e.key.toLowerCase()
       const h = ref.current[key]
       if (h && (!typing || key.startsWith('mod+'))) h(e)
     }

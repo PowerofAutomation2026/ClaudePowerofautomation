@@ -3,7 +3,13 @@ import { Engine, LOCAL_MAX } from './engine'
 import { chooseBackend } from './services'
 import type { Access, AppConfig, Backend, Clause, Query, Role, Row, SourceConfig, SpField, ViewDef } from './types'
 import { roleLabel } from './access'
-import { ItemForm } from './components/ItemForm'
+import { ItemPanel } from './components/ItemPanel'
+import { ActionMenu, Breadcrumb, FolderPicker, NameDialog, UploadDialog, collectDropped, fromPicker, type MenuItem, type UploadItem } from './components/Library'
+import { PermissionsDialog } from './components/Permissions'
+import { BulkDialog, SearchEverywhere } from './components/Tools'
+import { downloadUrl, itemUrl } from './components/Drawer'
+import { FolderIcon } from './components/FileGlyph'
+import type { PermTarget } from './types'
 import { ViewsMenu } from './components/ViewsMenu'
 import { searchTokens } from './query'
 import { fmt, lsGet, lsSet, relTime, sameUser, uid } from './util'
@@ -39,7 +45,8 @@ function pickColumns(fields: SpField[], isLibrary: boolean): string[] {
   return out
 }
 const defaultVisible = (fields: SpField[], loaded: string[], isLibrary: boolean) => {
-  const v = loaded.filter((n) => !fields.find((f) => f.internal === n)?.system).slice(0, 8)
+  const title = isLibrary ? 'FileLeafRef' : 'Title'
+  const v = [...new Set([...loaded.filter((n) => n === title), ...loaded.filter((n) => !fields.find((f) => f.internal === n)?.system)])].slice(0, 8)
   for (const n of isLibrary ? ['Modified', 'Editor'] : ['Modified']) if (loaded.includes(n) && !v.includes(n)) v.push(n)
   return v
 }
@@ -56,7 +63,7 @@ function Shell() {
   const [srcErr, setSrcErr] = useState('')
   const [theme, setTheme] = useState<ThemePref>(lsGet('spx.theme', 'system'))
   const [fs, setFs] = useState<number>(lsGet('spx.fs', 16))
-  const [view, setView] = useState<'table' | 'cards'>(lsGet('spx.view', 'table'))
+  const [view, setView] = useState<'table' | 'cards' | 'tiles'>(lsGet('spx.view', 'table'))
   const [visible, setVisible] = useState<string[]>([])
   const [widths, setWidths] = useState<Record<string, number>>({})
   const [selected, setSelected] = useState<Set<number>>(new Set())
@@ -65,9 +72,19 @@ function Shell() {
   const [exp, setExp] = useState<ExportFormat | null>(null)
   const [live, setLive] = useState<boolean>(lsGet('spx.live', false))
   const searchRef = useRef<HTMLInputElement>(null)
-  const [access, setAccess] = useState<Access>({ role: 'reader', canAdd: false, canEdit: false, canDelete: false, groups: [], isSiteAdmin: false, reason: 'Checking your permissions…' })
+  const [access, setAccess] = useState<Access>({ role: 'reader', canAdd: false, canEdit: false, canDelete: false, canManage: false, groups: [], isSiteAdmin: false, reason: 'Checking your permissions…' })
   const [viewsAll, setViewsAll] = useState<{ shared: ViewDef[]; mine: ViewDef[] }>({ shared: [], mine: [] })
-  const [newItem, setNewItem] = useState(false)
+  const [panel, setPanel] = useState<{ row: Row | null } | null>(null)
+  const [menu, setMenu] = useState<{ row: Row; at: DOMRect } | null>(null)
+  const [uploads, setUploads] = useState<UploadItem[] | null>(null)
+  const [nameDlg, setNameDlg] = useState<{ mode: 'folder' | 'rename'; row?: Row } | null>(null)
+  const [picker, setPicker] = useState<{ mode: 'Move' | 'Copy'; row: Row } | null>(null)
+  const [perm, setPerm] = useState<{ target: PermTarget; title: string } | null>(null)
+  const [bulk, setBulk] = useState<Row[] | null>(null)
+  const [everywhere, setEverywhere] = useState<string | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const fileIn = useRef<HTMLInputElement>(null)
+  const dirIn = useRef<HTMLInputElement>(null)
   const [confirmDel, setConfirmDel] = useState<Row[] | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -109,7 +126,7 @@ function Shell() {
       setVisible(vis.length ? vis : defaultVisible(fields, select, cur.isLibrary))
       setWidths(lsGet(`spx.w.${s.id}`, {}))
       setSrc(cur); setEngine(eng); lsSet('spx.active', s.id)
-      boot.backend.getAccess(cur, config!, boot.who.upn).then(setAccess).catch(() => setAccess((a) => ({ ...a, role: 'reader', canAdd: false, canEdit: false, canDelete: false, reason: 'Could not read your permissions: read-only.' })))
+      boot.backend.getAccess(cur, config!, boot.who.upn).then(setAccess).catch(() => setAccess((a) => ({ ...a, role: 'reader', canAdd: false, canEdit: false, canDelete: false, canManage: false, reason: 'Could not read your permissions: read-only.' })))
       if (goTab) setTab(goTab)
       void eng.start()
     } catch (e) { setSrcErr((e as Error).message); setEngine(null) } finally { setLoadingSrc(false) }
@@ -170,18 +187,42 @@ function Shell() {
   const applyView = (v: ViewDef) => { setVisible(v.cols.filter((c) => engine?.select.includes(c))); setView(v.layout); change(v.q) }
 
   /* ------------------------------------------------ writing data (permission-gated; SharePoint enforces it again) */
-  const saveItem = async (id: number, values: Record<string, unknown>) => {
+  const saveItem = async (id: number | null, values: Record<string, unknown>, files: File[], again: boolean) => {
     if (!engine || !boot) return
-    await boot.backend.updateItem(engine.src, engine.fields, id, values)
-    const fresh = await boot.backend.getItem(engine.src, engine.fields, id)
-    if (fresh) engine.patchRow(fresh)
-    toast('good', 'Saved')
+    let rid = id
+    if (id == null) rid = await boot.backend.createItem(engine.src, engine.fields, values)
+    else if (Object.keys(values).length) await boot.backend.updateItem(engine.src, engine.fields, id, values)
+    let failed = 0
+    for (const f of files) { try { await boot.backend.addAttachment(engine.src, rid!, f) } catch { failed++ } }
+    if (id != null) { const fresh = await boot.backend.getItem(engine.src, engine.fields, id); if (fresh) engine.patchRow(fresh) } else void engine.refresh()
+    toast(failed ? 'warn' : 'good', id == null ? 'Item created' : 'Saved' + (failed ? ` — ${failed} attachment(s) failed` : ''))
+    if (!again) { setPanel(null); if (id != null) setOpen((o) => o) }
   }
-  const createItem = async (values: Record<string, unknown>) => {
-    if (!engine || !boot) return
-    setBusy(true)
-    try { await boot.backend.createItem(engine.src, engine.fields, values); setNewItem(false); toast('good', 'Item created'); void engine.refresh() }
-    catch (e) { toast('bad', (e as Error).message) } finally { setBusy(false) }
+  const libRoot = src?.url ?? ''
+  const curFolder = engine?.q.folder ?? libRoot
+  const origin = src ? new URL(src.siteUrl).origin : ''
+  const rowName = (r: Row) => String(r.FileLeafRef ?? r.Title ?? `#${r.__id}`)
+  const openRow = (r: Row) => { if (src?.isLibrary && r.FSObjType === 1 && r.FileRef) { engine?.openFolder(String(r.FileRef)); setSelected(new Set()) } else setOpen(r) }
+  const actionsFor = (r: Row): MenuItem[] => {
+    if (!engine || !src) return []
+    const isFolder = r.FSObjType === 1, lib = src.isLibrary
+    return [
+      { label: isFolder ? 'Open folder' : 'Details', icon: isFolder ? <FolderIcon size={16} /> : 'info', run: () => openRow(r) },
+      { label: lib ? 'Edit properties' : 'Edit item', icon: '✎', hidden: !access.canEdit, run: () => setPanel({ row: r }) },
+      { label: 'Rename', icon: 'A', hidden: !(lib && access.canEdit), run: () => setNameDlg({ mode: 'rename', row: r }) },
+      { label: 'Move to…', icon: '↦', hidden: !(lib && access.canEdit), run: () => setPicker({ mode: 'Move', row: r }) },
+      { label: 'Copy to…', icon: 'copy', hidden: !(lib && access.canEdit && !isFolder), run: () => setPicker({ mode: 'Copy', row: r }) },
+      { label: 'Download', icon: 'download', hidden: !(lib && !isFolder), run: () => window.open(downloadUrl(engine, r), '_blank', 'noopener') },
+      { label: 'Copy link', icon: 'copy', run: () => navigator.clipboard?.writeText(itemUrl(engine, r)).then(() => toast('good', 'Link copied')) },
+      { label: access.canManage ? 'Manage access' : 'Who has access', icon: 'lock', sep: true, run: () => setPerm({ target: { kind: 'item', id: r.__id, name: rowName(r) }, title: rowName(r) }) },
+      { label: 'Delete', icon: 'trash', danger: true, sep: true, hidden: !access.canDelete, run: () => setConfirmDel([r]) },
+    ]
+  }
+  const startUpload = (items: UploadItem[]) => { if (items.length) setUploads(items) }
+  const onDrop = async (e: React.DragEvent) => {
+    e.preventDefault(); setDragging(false)
+    if (!src?.isLibrary || !access.canAdd) { toast('warn', access.canAdd ? 'Drop files onto a library to upload.' : 'You have read-only access.'); return }
+    startUpload(await collectDropped(e.dataTransfer))
   }
   const deleteRows = async () => {
     if (!engine || !boot || !confirmDel) return
@@ -195,12 +236,18 @@ function Shell() {
   useShortcuts({
     '/': (e) => { e.preventDefault(); setTab('data'); setTimeout(() => searchRef.current?.focus(), 30) },
     'mod+k': (e) => { e.preventDefault(); setPalette(true) },
+    'mod+shift+f': (e) => { e.preventDefault(); setEverywhere('') },
+    n: (e) => { if (access.canAdd && src && !src.isLibrary && tab === 'data') { e.preventDefault(); setPanel({ row: null }) } },
   })
   const cmds: Cmd[] = useMemo(() => {
     const c: Cmd[] = [
       { id: 'dash', label: 'Go to Dashboard', icon: 'chart', run: () => setTab('dashboard') },
       { id: 'data', label: 'Go to Data', icon: 'table', run: () => setTab('data') },
       { id: 'conn', label: isOwner ? 'Connect a list or library' : 'Data source info', icon: 'plug', run: () => setTab('connect') },
+      { id: 'every', label: 'Search everywhere (all lists + Power Platform community)', icon: 'search', run: () => setEverywhere('') },
+      ...(access.canAdd && src && !src.isLibrary ? [{ id: 'new', label: 'New item', hint: 'N', icon: 'plus' as const, run: () => setPanel({ row: null }) }] : []),
+      ...(access.canAdd && src?.isLibrary ? [{ id: 'nf', label: 'New folder', icon: 'lib' as const, run: () => setNameDlg({ mode: 'folder' }) }, { id: 'up', label: 'Upload files', icon: 'download' as const, run: () => fileIn.current?.click() }] : []),
+      ...(access.canManage && src ? [{ id: 'acc', label: 'Manage access to this ' + (src.isLibrary ? 'library' : 'list'), icon: 'lock' as const, run: () => setPerm({ target: { kind: 'list' }, title: src.label }) }] : []),
       { id: 'search', label: 'Search items', hint: '/', icon: 'search', run: () => { setTab('data'); setTimeout(() => searchRef.current?.focus(), 30) } },
       { id: 'csv', label: 'Export CSV', icon: 'download', run: () => setExp('csv') },
       { id: 'json', label: 'Export JSON', icon: 'download', run: () => setExp('json') },
@@ -213,7 +260,7 @@ function Shell() {
     ]
     for (const s of config?.sources ?? []) c.push({ id: 'src-' + s.id, label: `Open: ${s.label}`, hint: s.isLibrary ? 'library' : 'list', icon: s.isLibrary ? 'lib' : 'list', run: () => void openSource(s, 'dashboard') })
     return c
-  }, [config, live, view, isOwner, engine]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [config, live, view, isOwner, engine, access, src]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ------------------------------------------------ render */
   if (bootErr) return <main style={{ padding: 24 }}><div className="banner bad" role="alert"><Icon n="info" /><div><b>Could not start.</b> {bootErr}</div></div></main>
@@ -260,6 +307,7 @@ function Shell() {
         <button className="btn" aria-pressed={live} onClick={() => setLive(!live)} title="Live pulse: check for new and changed items every 20 seconds" disabled={!engine}>
           <span className={`live-dot${live ? '' : ' off'}`} aria-hidden="true" /><span className="lbl-t">Live</span>{live && engine && engine.pendingNew > 0 && <span className="pill accent">{engine.pendingNew}</span>}
         </button>
+        <button className="btn" onClick={() => setEverywhere('')} title="Search every connected list and the Power Platform community (Ctrl+Shift+F)"><Icon n="search" /><span className="lbl-t">Search all</span></button>
         <button className="btn icon" onClick={() => setPalette(true)} aria-label="Command palette (Ctrl+K)" title="Command palette (Ctrl+K)"><Icon n="cmd" /></button>
         <Menu icon={theme === 'dark' ? 'moon' : theme === 'contrast' ? 'contrast' : 'sun'} label={<span className="lbl-t">Display</span>}>
           {(close) => <div role="group" aria-label="Display settings">
@@ -296,6 +344,14 @@ function Shell() {
         {!loadingSrc && engine && src && tab === 'data' && (
           <section aria-label="Data">
             {engine.error && <div className="banner bad" role="alert"><Icon n="info" /><div style={{ flex: 1 }}>{engine.error}</div><button className="btn sm" onClick={() => void engine.refresh()}>Retry</button></div>}
+            {src.isLibrary && src.url && (
+              <div className="row" style={{ marginBottom: 8, minHeight: 34 }}>
+                {engine.q.folder
+                  ? (engine.q.search || engine.q.clauses.length ? <span className="pill accent">Searching the whole library — clear the search to return to folders</span> : <Breadcrumb root={libRoot} rootLabel={src.label} path={engine.q.folder} onGo={(p) => { engine.openFolder(p); setSelected(new Set()) }} />)
+                  : <span className="pill">All files in {src.label}, every folder</span>}
+                {access.canAdd && <span className="muted small">Drag files or folders here to upload</span>}
+              </div>
+            )}
             <FilterBar engine={engine} version={ver} fields={engine.fields.filter((f) => engine.select.includes(f.internal))} searchRef={searchRef} onChange={change} />
             <div className="bar">
               <span className="muted" role="status">
@@ -305,9 +361,25 @@ function Shell() {
               </span>
               {engine.pendingNew > 0 && <button className="btn sm primary" onClick={() => engine.absorbNew()}><Icon n="refresh" size={14} />{engine.pendingNew} new — show</button>}
               <span className="grow" />
-              {access.canAdd && !src.isLibrary && <button className="btn sm primary" onClick={() => setNewItem(true)}><Icon n="plus" size={14} />New item</button>}
+              {access.canAdd && !src.isLibrary && <button className="btn sm primary" onClick={() => setPanel({ row: null })}><Icon n="plus" size={14} />New item</button>}
+              {access.canAdd && src.isLibrary && (
+                <Menu icon="plus" label={<span><b>New</b></span>}>
+                  {(close) => <div>
+                    <button onClick={() => { close(); setNameDlg({ mode: 'folder' }) }}><FolderIcon size={18} />Folder</button>
+                    <button onClick={() => { close(); fileIn.current?.click() }}><Icon n="download" size={16} />Upload files…</button>
+                    <button onClick={() => { close(); dirIn.current?.click() }}><Icon n="lib" size={16} />Upload folder…</button>
+                  </div>}
+                </Menu>
+              )}
+              {access.canEdit && selected.size > 1 && <button className="btn sm" onClick={() => setBulk(engine.rows.filter((r) => selected.has(r.__id)))}>✎ Edit {selected.size}</button>}
+              {(access.canManage || access.role === 'admin') && <button className="btn sm" onClick={() => setPerm({ target: { kind: 'list' }, title: src.label })}><Icon n="lock" size={14} />Access</button>}
               {access.canDelete && selected.size > 0 && <button className="btn sm danger" onClick={() => setConfirmDel(engine.rows.filter((r) => selected.has(r.__id)))}><Icon n="trash" size={14} />Delete {selected.size}</button>}
-              {src.isLibrary && <button className="btn sm" aria-pressed={engine.q.folders} onClick={() => change({ folders: !engine.q.folders })}><Icon n="lib" size={14} />Folders</button>}
+              {src.isLibrary && src.url && (
+                <div role="group" aria-label="Library layout" className="row" style={{ gap: 2 }}>
+                  <button className="btn sm" aria-pressed={!!engine.q.folder} onClick={() => engine.setBrowse(true)}><FolderIcon size={15} />Folders</button>
+                  <button className="btn sm" aria-pressed={!engine.q.folder} onClick={() => engine.setBrowse(false)}><Icon n="list" size={14} />All files</button>
+                </div>
+              )}
               <ViewsMenu views={srcViews} access={access} cfg={config} upn={boot.who.upn} onApply={applyView} onSave={saveView} onDelete={(v) => void deleteView(v)} />
               <Menu icon="cols" label={<span className="lbl-t">Columns</span>}>
                 {() => <div role="group" aria-label="Visible columns">{engine.select.map((n) => { const f = engine.fields.find((x) => x.internal === n)!; return <label key={n} className="item"><input type="checkbox" checked={visible.includes(n)} onChange={() => toggleCol(n)} />{f.title}</label> })}</div>}
@@ -315,16 +387,20 @@ function Shell() {
               <div role="group" aria-label="Layout" className="row" style={{ gap: 2 }}>
                 <button className="btn icon" aria-pressed={view === 'table'} aria-label="Table view" onClick={() => { setView('table'); lsSet('spx.view', 'table') }}><Icon n="table" /></button>
                 <button className="btn icon" aria-pressed={view === 'cards'} aria-label="Card view" onClick={() => { setView('cards'); lsSet('spx.view', 'cards') }}><Icon n="cards" /></button>
+                {src.isLibrary && <button className="btn icon" aria-pressed={view === 'tiles'} aria-label="Tile view" onClick={() => { setView('tiles'); lsSet('spx.view', 'tiles') }}><Icon n="grid" /></button>}
               </div>
               <Menu icon="download" label={<span className="lbl-t">Export</span>}>
                 {(close) => <div>{(['csv', 'json', 'pdf'] as const).map((f) => <button key={f} onClick={() => { close(); setExp(f) }}><Icon n="download" />{f.toUpperCase()}{f === 'pdf' && <span className="muted small" style={{ marginLeft: 'auto' }}>report</span>}</button>)}</div>}
               </Menu>
             </div>
 
-            <Grid engine={engine} version={ver} cols={cols} selected={selected} widths={widths} setWidth={setWidth} tokens={tokens} view={view} isLibrary={src.isLibrary}
-              onToggle={(id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })}
-              onToggleAll={() => setSelected((s) => (engine.rows.every((r) => s.has(r.__id)) ? new Set() : new Set(engine.rows.map((r) => r.__id))))}
-              onOpen={setOpen} onSort={sortBy} />
+            <div className="dropzone" onDragOver={(e) => { if (src.isLibrary && e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true) } }} onDragLeave={(e) => { if (e.currentTarget === e.target) setDragging(false) }} onDrop={(e) => void onDrop(e)}>
+              {dragging && <div className="dropveil" role="status"><div><FolderIcon size={44} /><div>Drop to upload to <b>{decodeURIComponent(curFolder.split('/').pop() ?? '')}</b></div></div></div>}
+              <Grid engine={engine} version={ver} cols={cols} selected={selected} widths={widths} setWidth={setWidth} tokens={tokens} view={src.isLibrary || view !== 'tiles' ? view : 'table'} isLibrary={src.isLibrary} origin={boot.backend.mode === 'live' ? origin : undefined}
+                onToggle={(id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })}
+                onToggleAll={() => setSelected((s) => (engine.rows.every((r) => s.has(r.__id)) ? new Set() : new Set(engine.rows.map((r) => r.__id))))}
+                onOpen={openRow} onSort={sortBy} onMenu={(row, at) => setMenu({ row, at })} />
+            </div>
             <div className="gfoot" style={{ borderRadius: 12, border: '1px solid var(--line)', marginTop: 8 }}>
               <span>{selected.size ? <b>{fmt(selected.size)} selected</b> : 'Click a row for details · ↑↓ to move · Space to select'}</span>
               {engine.mode === 'server' && <label className="row" style={{ flex: 1, minWidth: 220 }}>Jump
@@ -334,19 +410,26 @@ function Shell() {
             </div>
           </section>
         )}
+      {menu && engine && <ActionMenu at={menu.at} title={rowName(menu.row)} items={actionsFor(menu.row)} onClose={() => setMenu(null)} />}
       </main>
 
       {open && engine && (() => {
         const i = engine.rows.findIndex((r) => r.__id === open.__id)
-        return <Drawer engine={engine} row={open} index={Math.max(0, i)} access={access} onSave={saveItem} onDelete={(r) => setConfirmDel([r])} onClose={() => setOpen(null)} onNav={(d) => { const n = engine.rows[i + d]; if (n) setOpen(n) }} />
+        return <Drawer engine={engine} row={open} index={Math.max(0, i)} actions={actionsFor(open).filter((a) => a.label !== 'Details' && a.label !== 'Copy link' && a.label !== 'Download')} onClose={() => setOpen(null)} onNav={(d) => { const n = engine.rows[i + d]; if (n) setOpen(n) }} />
       })()}
       {exp && engine && src && <ExportDialog engine={engine} cols={cols} selected={selected} title={src.label} initial={exp} onClose={() => setExp(null)} />}
-      {newItem && engine && (
-        <Modal title="New item" onClose={() => setNewItem(false)}>
-          <h2 style={{ marginBottom: 12 }}>New item in “{src?.label}”</h2>
-          <ItemForm fields={engine.fields.filter((f) => engine.select.includes(f.internal))} row={null} busy={busy} onCancel={() => setNewItem(false)} onSubmit={(v) => void createItem(v)} />
-        </Modal>
-      )}
+      {panel && engine && <ItemPanel engine={engine} row={panel.row} onClose={() => setPanel(null)} onSave={(v, f, again) => saveItem(panel.row ? panel.row.__id : null, v, f, again)} />}
+      {uploads && engine && src && <UploadDialog backend={boot.backend} src={src} dest={curFolder} items={uploads} onClose={() => setUploads(null)} onDone={() => void engine.refresh()} />}
+      {nameDlg && engine && src && (nameDlg.mode === 'folder'
+        ? <NameDialog title="New folder" label="Folder name" cta="Create" onClose={() => setNameDlg(null)} onSubmit={async (n) => { await boot.backend.createFolder(src, curFolder, n); toast('good', `Folder “${n}” created`); void engine.refresh() }} />
+        : <NameDialog title={nameDlg.row?.FSObjType === 1 ? 'Rename folder' : 'Rename file'} label="New name" initial={rowName(nameDlg.row!)} cta="Rename" onClose={() => setNameDlg(null)} onSubmit={async (n) => { await boot.backend.renameItem(src, engine.fields, nameDlg.row!.__id, n); toast('good', 'Renamed'); void engine.refresh() }} />)}
+      {picker && engine && src && <FolderPicker backend={boot.backend} src={src} root={libRoot} start={curFolder} title={`${picker.mode} “${rowName(picker.row)}” to…`} onClose={() => setPicker(null)}
+        onPick={async (dest) => { const m = picker; setPicker(null); try { await (m.mode === 'Move' ? boot.backend.moveItem(src, m.row, dest) : boot.backend.copyItem(src, m.row, dest)); toast('good', `${m.mode === 'Move' ? 'Moved' : 'Copied'} to ${decodeURIComponent(dest.split('/').pop() ?? '')}`); void engine.refresh() } catch (e) { toast('bad', (e as Error).message) } }} />}
+      {perm && engine && src && <PermissionsDialog backend={boot.backend} src={src} target={perm.target} title={perm.title} canManage={access.canManage} onClose={() => setPerm(null)} />}
+      {bulk && engine && <BulkDialog engine={engine} rows={bulk} onClose={() => setBulk(null)} onDone={() => { setBulk(null); setSelected(new Set()) }} />}
+      {everywhere !== null && config && <SearchEverywhere backend={boot.backend} sources={config.sources} initial={everywhere} onClose={() => setEverywhere(null)} onOpen={async (s, q) => { if (s.id !== src?.id) await openSource(s, 'data'); else setTab('data'); setTimeout(() => engine && change({ search: q }), 300) }} />}
+      <input ref={fileIn} type="file" multiple hidden onChange={(e) => { if (e.target.files) startUpload(Array.from(e.target.files).map((file) => ({ file, rel: '' }))); e.target.value = '' }} />
+      <input ref={dirIn} type="file" hidden {...({ webkitdirectory: '', directory: '' } as object)} onChange={(e) => { if (e.target.files) startUpload(fromPicker(e.target.files)); e.target.value = '' }} />
       {confirmDel && (
         <Modal title="Confirm delete" onClose={() => setConfirmDel(null)}>
           <h2 style={{ marginBottom: 8 }}>Delete {confirmDel.length} item{confirmDel.length === 1 ? '' : 's'}?</h2>

@@ -90,13 +90,15 @@ export function Menu({ label, icon, children, align = 'right', wide, pressed }: 
 export function Modal({ title, onClose, children, className = '', side }: { title: string; onClose: () => void; children: ReactNode; className?: string; side?: boolean }) {
   const ref = useRef<HTMLDivElement>(null)
   const prev = useRef<Element | null>(null)
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose   // always call the latest handler, but never re-run the focus logic below
   useEffect(() => {
     prev.current = document.activeElement
     const el = ref.current
     const focusables = () => Array.from(el?.querySelectorAll<HTMLElement>('button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])') ?? []).filter((x) => !x.hasAttribute('disabled'))
     ;(focusables()[0] ?? el)?.focus()
     const key = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.stopPropagation(); onClose() }
+      if (e.key === 'Escape') { e.stopPropagation(); closeRef.current() }
       if (e.key === 'Tab') {
         const f = focusables(); if (!f.length) return
         const first = f[0], last = f[f.length - 1]
@@ -106,7 +108,7 @@ export function Modal({ title, onClose, children, className = '', side }: { titl
     }
     document.addEventListener('keydown', key)
     return () => { document.removeEventListener('keydown', key); (prev.current as HTMLElement | null)?.focus?.() }
-  }, [onClose])
+  }, [])
   const dialog = <div ref={ref} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} className={side ? `drawer ${className}` : `modal ${className}`}>{children}</div>
   return side ? <><div className="scrim" style={{ background: 'rgba(5,10,25,.35)', zIndex: 85 }} onMouseDown={onClose} />{dialog}</> : <div className="scrim" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>{dialog}</div>
 }

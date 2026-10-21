@@ -51,6 +51,22 @@ A view changes what is *shown*; it is not a security boundary: SharePoint permis
 * Syntax everywhere: `word1 word2`, `"exact phrase"`, `-exclude`, `Status:open` (column-scoped, becomes a server filter).
 * Typeahead suggestions (memory or cancellable server query) and recent searches; debounced and cancellable so typing never blocks.
 
+## Document libraries (SharePoint-style)
+* **Folder browsing** with breadcrumbs, folders first, plus an **All files** flat view; table, card and **tile gallery** layouts with colour-coded file-type icons (thumbnails for images in the live app).
+* **New → Folder / Upload files / Upload folder**, drag-and-drop of files *and whole folders* (structure is recreated), progress per file, stop/retry feedback. Any file type. Uploads go through the SharePoint connector's *Create file* action, so keep files under ~100 MB (larger ones are skipped with a message).
+* Row menu (⋯ or right-click): details, edit properties, **rename, move to…, copy to…**, download, copy link, manage access, delete (recycle bin). Version history tab.
+
+## Lists: add / edit item
+* Slide-in **form generated from the columns**: choice pills, multi-select chips, Yes/No switch, date quick-picks, number steppers, **people picker** (tenant directory), URL + text, notes with counter, **attachments** (add/remove), required-field progress bar, unsaved-changes guard, `Ctrl+Enter` to save, *Save & add another*.
+* **Bulk edit** of selected rows, version history, attachments in the details panel, `N` shortcut for a new item.
+
+## Security: who can access what
+* **Manage access** on the list/library and on any **folder, file or list item**: see who has access, **stop/reset inheriting**, **add a person or group** with a permission level (Read, Contribute, Edit, Full Control, custom), remove access. Uses the real SharePoint permission APIs, so changes apply everywhere. Requires the *Manage permissions* right; others get a read-only “who has access” view.
+* Views (saved filters/columns) can be limited to groups or admins; see *Views* above. SharePoint has no per-view permissions, so list *views* restrict what is shown, items/folders carry the real permissions.
+
+## Search everywhere
+`Ctrl+Shift+F` or **Search all**: searches every connected list/library at once, and offers one-click searches of the **Power Platform Community, Power Apps community, Microsoft Learn, Microsoft Q&A and Tech Community** (opened in a new tab; the app cannot call those sites itself).
+
 ## Features
 | | |
 |---|---|

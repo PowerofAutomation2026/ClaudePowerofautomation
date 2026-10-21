@@ -20,7 +20,8 @@ export function accessFrom(low: number, groups: string[], isSiteAdmin: boolean, 
   if (canDelete && adminOk) role = 'admin'
   else if (canAdd || canEdit) role = 'writer'
   if (!reason) reason = role === 'admin' ? 'Full control of the data (add, edit, delete).' : role === 'writer' ? 'You can add and edit items (SharePoint group with Contribute/Edit).' : has(PERM.View) ? 'Read-only: you can view and export data.' : 'You have no SharePoint permission on this list.'
-  return { role, canAdd, canEdit, canDelete: role === 'admin' && canDelete, groups, isSiteAdmin, reason }
+  const canManage = has(PERM.ManagePermissions) && (!cfg.adminGroups?.length || adminOk)
+  return { role, canAdd, canEdit, canDelete: role === 'admin' && canDelete, canManage, groups, isSiteAdmin, reason }
 }
 
 export const roleLabel = (r: Role) => (r === 'admin' ? 'Data admin' : r === 'writer' ? 'Contributor' : 'Read-only')

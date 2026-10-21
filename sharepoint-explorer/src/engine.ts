@@ -8,7 +8,7 @@
  *    memory is capped, and every request is cancellable.
  */
 import type { Backend, Query, Row, SourceConfig, SpField } from './types'
-import { emptyQuery, isDefaultQuery, matchRow, resetHaystack, searchTokens, sortRows } from './query'
+import { emptyQuery, isDefaultQuery, isFolderMode, matchRow, resetHaystack, searchTokens, sortFolderRows, sortRows } from './query'
 
 export const LOCAL_MAX = 25_000
 export const BULK = 5_000
@@ -58,9 +58,9 @@ export class Engine {
     readonly select: string[],
   ) {
     this.total = src.itemCount
-    this.mode = src.itemCount <= LOCAL_MAX ? 'local' : 'server'
+    this.mode = src.itemCount <= LOCAL_MAX && !src.isLibrary ? 'local' : 'server'
     this.titleField = src.isLibrary ? 'FileLeafRef' : 'Title'
-    this.q = { ...emptyQuery(), sort: { field: 'ID', dir: 'desc' } }
+    this.q = src.isLibrary && src.url ? { ...emptyQuery(), folder: src.url, sort: { field: 'FileLeafRef', dir: 'asc' } } : { ...emptyQuery(), sort: { field: 'ID', dir: 'desc' } }
   }
 
   subscribe = (fn: () => void) => { this.subs.add(fn); return () => { this.subs.delete(fn) } }
@@ -135,6 +135,7 @@ export class Engine {
         const page = await this.backend.query(this.src, this.fields, this.select, this.q, this.pageSize, this.cursor, this.ctl!.signal)
         if (gen !== this.gen) return
         this.rows = this.rows.concat(page.rows)
+        if (isFolderMode(this.q)) this.rows = sortFolderRows(this.rows, this.q, this.fields)
         got += page.rows.length
         this.scanned += page.scanned ?? page.rows.length
         for (const r of page.rows) if (r.__id > this.maxId) this.maxId = r.__id
@@ -164,12 +165,20 @@ export class Engine {
   setQuery(patch: Partial<Query>) {
     const next = { ...this.q, ...patch }
     const foldersChanged = next.folders !== this.q.folders
+    // folder view: re-sorting needs no round trip, the whole folder is already here
+    if (this.mode === 'server' && isFolderMode(this.q) && isFolderMode(next) && next.folder === this.q.folder && !this.hasMore) { this.q = next; this.rows = sortFolderRows(this.rows, next, this.fields); this.emit(); return }
     this.q = next
     if (this.mode === 'local') {
       if (foldersChanged) { this.loadedAll = false; this.all = []; void this.reset(); return }
       this.recompute()
     } else void this.reset()
   }
+
+  /** Library: switch between SharePoint-style folder browsing and one flat list of every file. */
+  setBrowse(on: boolean) {
+    this.setQuery(on && this.src.url ? { folder: this.src.url, sort: { field: 'FileLeafRef', dir: 'asc' }, folders: false } : { folder: undefined, sort: { field: 'ID', dir: 'desc' }, folders: false })
+  }
+  openFolder(path: string) { this.setQuery({ folder: path, search: '', clauses: [], sort: { field: 'FileLeafRef', dir: 'asc' } }) }
 
   /** Server mode only: restart the view where `fraction` (0..1) of the way through the ID range (fast "seek"). */
   seek(fraction: number) {

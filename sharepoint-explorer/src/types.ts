@@ -53,6 +53,8 @@ export interface Access {
   canAdd: boolean
   canEdit: boolean
   canDelete: boolean
+  /** may manage SharePoint permissions (ManagePermissions) */
+  canManage: boolean
   groups: string[]
   isSiteAdmin: boolean
   /** why the role was chosen (shown to the user) */
@@ -65,7 +67,7 @@ export interface ViewDef {
   sourceId: string
   q: Query
   cols: string[]
-  layout: 'table' | 'cards'
+  layout: 'table' | 'cards' | 'tiles'
   owner: string
   /** me = personal; everyone; groups = members of the named SharePoint groups; admins = data admins and app owners only */
   audience: 'me' | 'everyone' | 'groups' | 'admins'
@@ -99,6 +101,8 @@ export interface Query {
   sort: { field: string; dir: 'asc' | 'desc' }
   /** library: include folders as rows */
   folders: boolean
+  /** library folder view: server-relative folder URL being browsed (undefined = flat list of all files) */
+  folder?: string
 }
 
 export interface Page {
@@ -107,6 +111,14 @@ export interface Page {
   cursor?: string
   scanned?: number
 }
+
+export interface Principal { id: number; title: string; login: string; kind: 'user' | 'group'; email?: string }
+export interface RoleAssign { principal: Principal; roles: string[]; roleIds: number[] }
+export interface PermInfo { inherited: boolean; assignments: RoleAssign[] }
+export interface RoleDef { id: number; name: string }
+export type PermTarget = { kind: 'list' } | { kind: 'item'; id: number; name: string }
+export interface VersionInfo { label: string; modified: string; by: string; size?: number; comment?: string; current: boolean }
+export interface Attachment { name: string; url: string }
 
 export interface Backend {
   mode: 'live' | 'demo'
@@ -124,7 +136,7 @@ export interface Backend {
   saveConfig(cfg: AppConfig): Promise<void>
   indexColumn(src: SourceConfig, field: string): Promise<void>
   getAccess(src: SourceConfig, cfg: AppConfig, upn: string): Promise<Access>
-  createItem(src: SourceConfig, fields: SpField[], values: Record<string, unknown>): Promise<void>
+  createItem(src: SourceConfig, fields: SpField[], values: Record<string, unknown>): Promise<number>
   updateItem(src: SourceConfig, fields: SpField[], id: number, values: Record<string, unknown>): Promise<void>
   deleteItem(src: SourceConfig, id: number): Promise<void>
   loadViews(upn: string): Promise<{ shared: ViewDef[]; mine: ViewDef[] }>
@@ -133,4 +145,25 @@ export interface Backend {
   /** fast typeahead: titles/names that start with or contain `text` */
   suggest(src: SourceConfig, fields: SpField[], text: string, signal?: AbortSignal): Promise<string[]>
   setRole?(r: Role): void
+
+  /* ---- document libraries ---- */
+  createFolder(src: SourceConfig, parentUrl: string, name: string): Promise<void>
+  uploadFile(src: SourceConfig, folderUrl: string, file: File): Promise<void>
+  renameItem(src: SourceConfig, fields: SpField[], id: number, newName: string): Promise<void>
+  moveItem(src: SourceConfig, row: Row, destFolderUrl: string): Promise<void>
+  copyItem(src: SourceConfig, row: Row, destFolderUrl: string): Promise<void>
+  listFolders(src: SourceConfig, parentUrl: string): Promise<{ name: string; url: string }[]>
+  /* ---- list items ---- */
+  listAttachments(src: SourceConfig, id: number): Promise<Attachment[]>
+  addAttachment(src: SourceConfig, id: number, file: File): Promise<void>
+  deleteAttachment(src: SourceConfig, id: number, name: string): Promise<void>
+  getVersions(src: SourceConfig, id: number): Promise<VersionInfo[]>
+  /* ---- security ---- */
+  getPermissions(src: SourceConfig, t: PermTarget): Promise<PermInfo>
+  setInheritance(src: SourceConfig, t: PermTarget, inherit: boolean): Promise<void>
+  addPermission(src: SourceConfig, t: PermTarget, principalId: number, roleId: number): Promise<void>
+  removePermission(src: SourceConfig, t: PermTarget, principal: RoleAssign): Promise<void>
+  searchPrincipals(src: SourceConfig, text: string, signal?: AbortSignal): Promise<(Principal & { login: string })[]>
+  resolvePrincipal(src: SourceConfig, p: Principal): Promise<number>
+  listRoleDefs(src: SourceConfig): Promise<RoleDef[]>
 }

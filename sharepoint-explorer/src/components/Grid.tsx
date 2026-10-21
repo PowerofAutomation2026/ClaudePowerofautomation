@@ -3,6 +3,8 @@ import type { Engine } from '../engine'
 import type { Row, SpField } from '../types'
 import { cellText, fmt } from '../util'
 import { Icon, hashColor, initials } from './ui'
+import { FileGlyph, extOf } from './FileGlyph'
+import { bytes } from '../util'
 
 export const ROW_H = 40
 const CARD_H = 168
@@ -30,18 +32,19 @@ export function CellView({ f, row, tokens }: { f: SpField; row: Row; tokens: str
     case 'url': { const u = typeof row[f.internal] === 'object' ? row[f.internal].Url : row[f.internal]; return <a href={String(u)} target="_blank" rel="noreferrer noopener" onClick={(e) => e.stopPropagation()}>{text}</a> }
     case 'date': return <time dateTime={String(row[f.internal])}>{text}</time>
     default:
-      if (f.internal === 'FileLeafRef') { const ext = text.split('.').pop() ?? ''; return <span className="who"><span className="av" style={{ '--tc': hashColor(ext), borderRadius: 6 } as CSSProperties} aria-hidden="true">{ext.slice(0, 3).toUpperCase()}</span>{hl(text, tokens)}</span> }
+      if (f.internal === 'FileLeafRef') return <span className="who"><FileGlyph name={text} folder={row.FSObjType === 1} size={22} />{hl(text, tokens)}</span>
       if (/percent/i.test(f.internal + f.title) && !isNaN(Number(row[f.internal]))) return <span className="who" style={{ width: '100%' }}><span style={{ flex: 1, height: 6, background: 'var(--bg2)', borderRadius: 9, overflow: 'hidden' }} aria-hidden="true"><i style={{ display: 'block', height: '100%', width: `${Math.min(100, Number(row[f.internal]))}%`, background: 'var(--c5)' }} /></span>{text}</span>
       return hl(text, tokens)
   }
 }
 
-interface RowProps { row: Row; idx: number; cols: SpField[]; tpl: string; width: number; selected: boolean; active: boolean; tokens: string[]; onOpen: (r: Row) => void; onToggle: (id: number) => void }
-const GridRow = memo(function GridRow({ row, idx, cols, tpl, width, selected, active, tokens, onOpen, onToggle }: RowProps) {
+interface RowProps { row: Row; idx: number; cols: SpField[]; tpl: string; width: number; selected: boolean; active: boolean; tokens: string[]; onOpen: (r: Row) => void; onToggle: (id: number) => void; onMenu?: (r: Row, at: DOMRect) => void }
+const GridRow = memo(function GridRow({ row, idx, cols, tpl, width, selected, active, tokens, onOpen, onToggle, onMenu }: RowProps) {
   return (
     <div role="row" id={`row-${idx}`} aria-rowindex={idx + 2} aria-selected={selected}
       className={`g-row${active ? ' active' : ''}${row.__new ? ' fresh' : ''}`}
-      style={{ top: idx * ROW_H, height: ROW_H, gridTemplateColumns: tpl, width }} onClick={() => onOpen(row)}>
+      style={{ top: idx * ROW_H, height: ROW_H, gridTemplateColumns: tpl, width }} onClick={() => onOpen(row)}
+      onContextMenu={(e) => { if (onMenu) { e.preventDefault(); onMenu(row, new DOMRect(e.clientX, e.clientY, 0, 0)) } }}>
       <div role="gridcell" className="g-c sel" onClick={(e) => e.stopPropagation()}>
         <input type="checkbox" checked={selected} onChange={() => onToggle(row.__id)} aria-label={`Select item ${row.__id}`} />
       </div>
@@ -50,6 +53,7 @@ const GridRow = memo(function GridRow({ row, idx, cols, tpl, width, selected, ac
           <CellView f={f} row={row} tokens={tokens} />
         </div>
       ))}
+      {onMenu && <div role="gridcell" className="g-c sel"><button className="btn icon sm ghost" aria-label={`Actions for ${cellText(cols[0], row) || 'item ' + row.__id}`} aria-haspopup="menu" onClick={(e) => { e.stopPropagation(); onMenu(row, e.currentTarget.getBoundingClientRect()) }}>⋯</button></div>}
     </div>
   )
 })
@@ -66,8 +70,11 @@ export interface GridProps {
   onOpen: (r: Row) => void
   onSort: (internal: string) => void
   tokens: string[]
-  view: 'table' | 'cards'
+  view: 'table' | 'cards' | 'tiles'
   isLibrary: boolean
+  onMenu?: (row: Row, at: DOMRect) => void
+  onNavigate?: (row: Row) => void
+  origin?: string
 }
 
 export function Grid(p: GridProps) {
@@ -85,9 +92,11 @@ export function Grid(p: GridProps) {
   useLayoutEffect(() => { measure(); const ro = new ResizeObserver(measure); if (ref.current) ro.observe(ref.current); return () => ro.disconnect() }, [measure])
   const onScroll = () => { cancelAnimationFrame(raf.current); raf.current = requestAnimationFrame(measure) }
 
-  const cards = p.view === 'cards'
-  const perRow = cards ? Math.max(1, Math.floor((vp.w - 24) / CARD_MIN_W)) : 1
-  const rh = cards ? CARD_H + 12 : ROW_H
+  const cards = p.view !== 'table'
+  const tiles = p.view === 'tiles'
+  const cardW = tiles ? 190 : CARD_MIN_W, cardH = tiles ? 150 : CARD_H
+  const perRow = cards ? Math.max(1, Math.floor((vp.w - 24) / cardW)) : 1
+  const rh = cards ? cardH + 12 : ROW_H
   const lines = Math.ceil(rows.length / perRow)
   const first = Math.max(0, Math.floor((vp.top - (cards ? 0 : 42)) / rh) - 6)
   const last = Math.min(lines, Math.ceil((vp.top + vp.h) / rh) + 6)
@@ -96,8 +105,9 @@ export function Grid(p: GridProps) {
   useEffect(() => { if (engine.mode === 'server' && last >= lines - 8) engine.loadMore() }, [version, last, lines, engine])
 
   const widths = cols.map((f) => p.widths[f.internal] ?? defaultWidth(f))
-  const tpl = `44px ${widths.map((w) => `${w}px`).join(' ')}`
-  const totalW = 44 + widths.reduce((a, b) => a + b, 0)
+  const act = p.onMenu ? 48 : 0
+  const tpl = `44px ${widths.map((w) => `${w}px`).join(' ')}${act ? ` ${act}px` : ''}`
+  const totalW = 44 + act + widths.reduce((a, b) => a + b, 0)
 
   const visibleRows = useMemo(() => {
     const out: { r: Row; i: number }[] = []
@@ -169,17 +179,25 @@ export function Grid(p: GridProps) {
                 </div>
               )
             })}
+            {act > 0 && <div role="columnheader" className="g-h"><span className="sr-only">Actions</span></div>}
           </div>
         )}
         <div className="g-body" style={{ height: lines * rh + (engine.hasMore || engine.loading ? 48 : 0), width: cards ? undefined : totalW }}>
           {!cards && visibleRows.map(({ r, i }) => (
-            <GridRow key={r.__id} row={r} idx={i} cols={cols} tpl={tpl} width={totalW} selected={p.selected.has(r.__id)} active={i === active} tokens={p.tokens} onOpen={p.onOpen} onToggle={p.onToggle} />
+            <GridRow key={r.__id} row={r} idx={i} cols={cols} tpl={tpl} width={totalW} selected={p.selected.has(r.__id)} active={i === active} tokens={p.tokens} onOpen={p.onOpen} onToggle={p.onToggle} onMenu={p.onMenu} />
           ))}
           {cards && visibleRows.map(({ r, i }) => {
             const line = Math.floor(i / perRow), col = i % perRow
-            const style: CSSProperties = { position: 'absolute', top: line * rh + 12, left: `calc(12px + ${col} * ((100% - 24px + 12px) / ${perRow}))`, width: `calc((100% - 24px - ${(perRow - 1) * 12}px) / ${perRow})`, height: CARD_H }
+            const style: CSSProperties = { position: 'absolute', top: line * rh + 12, left: `calc(12px + ${col} * ((100% - 24px + 12px) / ${perRow}))`, width: `calc((100% - 24px - ${(perRow - 1) * 12}px) / ${perRow})`, height: cardH }
             return (
-              <button key={r.__id} id={`row-${i}`} className={`pcard${i === active ? ' active' : ''}${r.__new ? ' fresh' : ''}`} style={style} onClick={() => p.onOpen(r)} aria-label={cellText(titleF, r) || `Item ${r.__id}`}>
+              tiles ? (
+              <button key={r.__id} id={`row-${i}`} className={`ptile${i === active ? ' active' : ''}${r.__new ? ' fresh' : ''}`} style={style} onClick={() => p.onOpen(r)} onContextMenu={(e) => { if (p.onMenu) { e.preventDefault(); p.onMenu(r, new DOMRect(e.clientX, e.clientY, 0, 0)) } }} aria-label={cellText(titleF, r) || `Item ${r.__id}`}>
+                <span className="tile-art"><FileGlyph name={String(r.FileLeafRef ?? '')} folder={r.FSObjType === 1} size={r.FSObjType === 1 ? 64 : 56} thumb={p.origin && r.FileRef ? `${p.origin}/_layouts/15/getpreview.ashx?path=${encodeURIComponent(p.origin + r.FileRef)}&resolution=1` : undefined} /></span>
+                <b className="tile-name">{String(r.FileLeafRef ?? cellText(titleF, r))}</b>
+                <span className="muted small">{r.FSObjType === 1 ? 'Folder' : `${extOf(String(r.FileLeafRef ?? '')).toUpperCase() || 'File'} · ${bytes(Number(r.File_x0020_Size))}`}</span>
+              </button>
+              ) :
+              <button key={r.__id} id={`row-${i}`} className={`pcard${i === active ? ' active' : ''}${r.__new ? ' fresh' : ''}`} style={style} onClick={() => p.onOpen(r)} onContextMenu={(e) => { if (p.onMenu) { e.preventDefault(); p.onMenu(r, new DOMRect(e.clientX, e.clientY, 0, 0)) } }} aria-label={cellText(titleF, r) || `Item ${r.__id}`}>
                 <h3>{titleF && <CellView f={{ ...titleF, kind: 'text' }} row={r} tokens={p.tokens} />}</h3>
                 <dl>{cardFields.map((f) => <Fragment key={f.internal}><dt>{f.title}</dt><dd><CellView f={f} row={r} tokens={p.tokens} /></dd></Fragment>)}</dl>
               </button>

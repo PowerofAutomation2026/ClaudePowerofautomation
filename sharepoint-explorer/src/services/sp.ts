@@ -6,11 +6,12 @@
 import { getClient } from '@microsoft/power-apps/data'
 import { getContext } from '@microsoft/power-apps/app'
 import baked from '../appconfig.json'
-import type { Access, AppConfig, Backend, ViewDef, FieldKind, Page, Query, Row, SourceConfig, SpField, SpList, SpSite } from '../types'
+import type { Access, AppConfig, Attachment, Backend, PermInfo, PermTarget, Principal, RoleAssign, RoleDef, VersionInfo, ViewDef, FieldKind, Page, Query, Row, SourceConfig, SpField, SpList, SpSite } from '../types'
 import { buildFilter, parseSearch } from '../query'
 import { accessFrom } from '../access'
 import { isEditable } from '../editable'
 import { lsGet, lsSet, odataQuote, sleep } from '../util'
+import { isFolderMode } from '../query'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const infoModules = import.meta.glob('../../.power/schemas/appschemas/dataSourcesInfo.ts', { eager: true }) as Record<string, any>
@@ -35,6 +36,12 @@ const HTTP_API = {
   parameters: [{ name: 'connectionId', in: 'path', required: true, type: 'string' }, { name: 'dataset', in: 'path', required: true, type: 'string' }, { name: 'parameters', in: 'body', required: true, type: 'object' }],
 }
 const DATASETS_API = { path: '/{connectionId}/datasets', method: 'GET', parameters: [{ name: 'connectionId', in: 'path', required: true, type: 'string' }] }
+const conn = { name: 'connectionId', in: 'path', required: true, type: 'string' }
+const ds = { name: 'dataset', in: 'path', required: true, type: 'string' }
+/** connector "Create file": binary upload (the SDK decodes a base64 string for `format: binary` body parameters) */
+const FILE_API = { path: '/{connectionId}/datasets/{dataset}/files', method: 'POST', parameters: [conn, ds, { name: 'folderPath', in: 'query', required: true, type: 'string' }, { name: 'name', in: 'query', required: true, type: 'string' }, { name: 'queryParametersSingleEncoded', in: 'query', required: false, type: 'boolean' }, { name: 'body', in: 'body', required: true, type: 'string', format: 'binary' }] }
+/** connector "Add attachment" */
+const ATT_API = { path: '/{connectionId}/datasets/{dataset}/tables/{tableName}/items/{itemId}/attachments', method: 'POST', parameters: [conn, ds, { name: 'tableName', in: 'path', required: true, type: 'string' }, { name: 'itemId', in: 'path', required: true, type: 'string' }, { name: 'name', in: 'query', required: true, type: 'string' }, { name: 'body', in: 'body', required: true, type: 'string', format: 'binary' }] }
 const isConnectorSource = (v: any) => v && typeof v === 'object' && !/dataverse|cds/i.test(String(v.dataSourceType ?? ''))
 for (const v of Object.values<any>(dataSourcesInfo)) {
   if (!isConnectorSource(v)) continue
@@ -42,6 +49,8 @@ for (const v of Object.values<any>(dataSourcesInfo)) {
   const keys = Object.keys(v.apis).map(norm)
   if (!keys.includes('httprequest')) v.apis.HttpRequest = HTTP_API
   if (!keys.includes('getdatasets')) v.apis.GetDataSets = DATASETS_API
+  if (!keys.includes('createfile')) v.apis.CreateFile = FILE_API
+  if (!keys.includes('addattachment')) v.apis.AddAttachment = ATT_API
 }
 const candidates = (): string[] => {
   const all = Object.entries<any>(dataSourcesInfo).filter(([, v]) => isConnectorSource(v)).map(([k]) => k)
@@ -175,7 +184,7 @@ export const sp: Backend = {
         choices: choices.get(r.InternalName),
         sortable: !!r.Sortable && !['note', 'user', 'lookup', 'multichoice', 'other', 'url'].includes(kind),
         filterable: !!r.Filterable && !['note', 'multichoice', 'other', 'url'].includes(kind),
-        system: inView.length ? !inView.includes(r.InternalName) : false,
+        system: inView.length ? !inView.includes(r.InternalName) && r.InternalName !== 'FileLeafRef' && r.InternalName !== 'Title' : false,
       })
     }
     const order = (f: SpField) => { const i = inView.indexOf(f.internal); return i < 0 ? 1000 + (f.system ? 1 : 0) : i }
@@ -189,6 +198,7 @@ export const sp: Backend = {
         if (r) return r
       } catch (e) { if ((e as Error).name === 'AbortError') throw e /* otherwise fall through to the plain filter */ }
     }
+    if (isFolderMode(q) && src.isLibrary) return folderPage(src, fields, select, q, cursor, signal)
     const byId = q.sort.field === 'ID'
     const asc = q.sort.dir === 'asc'
     const extra: string[] = []
@@ -249,10 +259,11 @@ export const sp: Backend = {
   },
 
   async createItem(src, fields, values) {
-    await http(src.siteUrl, 'POST', `_api/web/lists(${guid(src.listId)})/items`, writeBody(fields, values))
+    const d = await http(src.siteUrl, 'POST', `_api/web/lists(${guid(src.listId)})/items`, await writeBody(src, fields, values), VERBOSE)
+    return Number(d?.Id ?? d?.d?.Id ?? 0)
   },
   async updateItem(src, fields, id, values) {
-    await http(src.siteUrl, 'POST', `_api/web/lists(${guid(src.listId)})/items(${id})`, writeBody(fields, values), { 'X-HTTP-Method': 'MERGE', 'IF-MATCH': '*' })
+    await http(src.siteUrl, 'POST', `_api/web/lists(${guid(src.listId)})/items(${id})`, await writeBody(src, fields, values), { ...VERBOSE, 'X-HTTP-Method': 'MERGE', 'IF-MATCH': '*' })
   },
   async deleteItem(src, id) {
     await http(src.siteUrl, 'POST', `_api/web/lists(${guid(src.listId)})/items(${id})/recycle()`)   // to the recycle bin, never a hard delete
@@ -272,6 +283,94 @@ export const sp: Backend = {
       const d = await http(src.siteUrl, 'GET', `_api/web/lists(${guid(src.listId)})/items?$select=Id,${tf}&$filter=${enc(`startswith(${tf},${odataQuote(text)})${src.isLibrary ? ' and FSObjType eq 0' : ''}`)}&$orderby=Id desc&$top=8`, undefined, {}, signal)
       return [...new Set(rows(d).map((r) => String(r[tf])))]
     } catch { return [] }
+  },
+
+  /* ---------------------------------------------------------------- document libraries */
+  async createFolder(src, parentUrl, name) {
+    await http(src.siteUrl, 'POST', `_api/web/folders/add(${pathQ(`${parentUrl.replace(/\/$/, '')}/${name}`)})`)
+  },
+  async uploadFile(src, folderUrl, file) {
+    const b64 = await fileToBase64(file)
+    await exec('CreateFile', { dataset: src.siteUrl.replace(/\/+$/, ''), folderPath: rel(src, folderUrl), name: file.name, queryParametersSingleEncoded: true, body: b64 })
+  },
+  async renameItem(src, fields, id, newName) {
+    await http(src.siteUrl, 'POST', `_api/web/lists(${guid(src.listId)})/items(${id})`, { __metadata: { type: await entityType(src) }, FileLeafRef: newName }, { ...VERBOSE, 'X-HTTP-Method': 'MERGE', 'IF-MATCH': '*' })
+  },
+  async moveItem(src, row, dest) {
+    const from = String(row.FileRef), to = `${dest.replace(/\/$/, '')}/${row.FileLeafRef}`
+    const isFolder = row.FSObjType === 1
+    const call = isFolder ? `GetFolderByServerRelativePath(decodedurl=${pathQ(from)})/moveto(newurl=${pathQ(to)})` : `GetFileByServerRelativePath(decodedurl=${pathQ(from)})/moveto(newurl=${pathQ(to)},flags=0)`
+    await http(src.siteUrl, 'POST', `_api/web/${call}`)
+  },
+  async copyItem(src, row, dest) {
+    if (row.FSObjType === 1) throw new Error('Copying a whole folder is not supported - copy its files, or move the folder.')
+    await http(src.siteUrl, 'POST', `_api/web/GetFileByServerRelativePath(decodedurl=${pathQ(String(row.FileRef))})/copyto(strnewurl=${pathQ(`${dest.replace(/\/$/, '')}/${row.FileLeafRef}`)},boverwrite=false)`)
+  },
+  async listFolders(src, parent) {
+    const d = await http(src.siteUrl, 'GET', `_api/web/GetFolderByServerRelativePath(decodedurl=${pathQ(parent)})/Folders?$select=Name,ServerRelativeUrl&$orderby=Name&$top=500`)
+    return rows(d).filter((f) => f.Name !== 'Forms' && !String(f.Name).startsWith('_')).map((f) => ({ name: String(f.Name), url: String(f.ServerRelativeUrl) }))
+  },
+
+  /* ---------------------------------------------------------------- attachments + history */
+  async listAttachments(src, id) {
+    const d = await http(src.siteUrl, 'GET', `_api/web/lists(${guid(src.listId)})/items(${id})/AttachmentFiles?$select=FileName,ServerRelativeUrl`)
+    return rows(d).map<Attachment>((a) => ({ name: String(a.FileName), url: new URL(src.siteUrl).origin + a.ServerRelativeUrl }))
+  },
+  async addAttachment(src, id, file) {
+    await exec('AddAttachment', { dataset: src.siteUrl.replace(/\/+$/, ''), tableName: src.listId, itemId: String(id), name: file.name, body: await fileToBase64(file) })
+  },
+  async deleteAttachment(src, id, name) {
+    await http(src.siteUrl, 'POST', `_api/web/lists(${guid(src.listId)})/items(${id})/AttachmentFiles/getByFileName(${odataQuote(name)})`, undefined, { 'X-HTTP-Method': 'DELETE', 'IF-MATCH': '*' })
+  },
+  async getVersions(src, id) {
+    const d = await http(src.siteUrl, 'GET', `_api/web/lists(${guid(src.listId)})/items(${id})/versions`)
+    return rows(d).map<VersionInfo>((v) => ({ label: String(v.VersionLabel ?? ''), modified: String(v.Created ?? v.Modified ?? ''), by: String(v.Editor?.LookupValue ?? v.Editor?.Title ?? v.Author?.LookupValue ?? ''), size: v.Size != null ? Number(v.Size) : undefined, comment: v.CheckInComment || undefined, current: !!v.IsCurrentVersion }))
+  },
+
+  /* ---------------------------------------------------------------- security */
+  async getPermissions(src, t): Promise<PermInfo> {
+    const base = baseOf(src, t)
+    const [uniq, ra] = await Promise.all([
+      http(src.siteUrl, 'GET', `${base}/HasUniqueRoleAssignments`).catch(() => ({ value: true })),
+      http(src.siteUrl, 'GET', `${base}/roleassignments?$expand=Member,RoleDefinitionBindings&$select=PrincipalId,Member/Title,Member/LoginName,Member/PrincipalType,Member/Email,RoleDefinitionBindings/Id,RoleDefinitionBindings/Name`),
+    ])
+    const assignments = rows(ra).map<RoleAssign>((r) => {
+      const defs = r.RoleDefinitionBindings?.results ?? r.RoleDefinitionBindings ?? []
+      return { principal: { id: r.PrincipalId, title: r.Member?.Title ?? '', login: r.Member?.LoginName ?? '', kind: r.Member?.PrincipalType === 1 ? 'user' : 'group', email: r.Member?.Email }, roles: defs.map((x: any) => String(x.Name)), roleIds: defs.map((x: any) => Number(x.Id)) }
+    })
+    return { inherited: t.kind === 'list' ? false : uniq?.value === false || uniq === false, assignments }
+  },
+  async setInheritance(src, t, inherit) {
+    const base = baseOf(src, t)
+    await http(src.siteUrl, 'POST', inherit ? `${base}/resetroleinheritance` : `${base}/breakroleinheritance(copyRoleAssignments=true,clearSubscopes=false)`)
+  },
+  async addPermission(src, t, pid, rid) {
+    await http(src.siteUrl, 'POST', `${baseOf(src, t)}/roleassignments/addroleassignment(principalid=${pid},roledefid=${rid})`)
+  },
+  async removePermission(src, t, ra) {
+    await Promise.all(ra.roleIds.map((rid) => http(src.siteUrl, 'POST', `${baseOf(src, t)}/roleassignments/removeroleassignment(principalid=${ra.principal.id},roledefid=${rid})`)))
+  },
+  async listRoleDefs(src): Promise<RoleDef[]> {
+    const d = await http(src.siteUrl, 'GET', '_api/web/roledefinitions?$select=Id,Name,Hidden,RoleTypeKind&$orderby=BasePermissions')
+    return rows(d).filter((r) => !r.Hidden && r.RoleTypeKind !== 1 && !/limited access/i.test(r.Name)).map((r) => ({ id: r.Id, name: String(r.Name) }))
+  },
+  async searchPrincipals(src, text, signal) {
+    const out: (Principal & { login: string })[] = []
+    try {
+      const d = await http(src.siteUrl, 'POST', '_api/SP.UI.ApplicationPages.ClientPeoplePickerWebServiceInterface.clientPeoplePickerSearchUser',
+        { queryParams: { __metadata: { type: 'SP.UI.ApplicationPages.ClientPeoplePickerQueryParameters' }, AllowEmailAddresses: true, AllowMultipleEntities: false, AllUrlZones: false, MaximumEntitySuggestions: 8, PrincipalSource: 15, PrincipalType: 15, QueryString: text } }, VERBOSE, signal)
+      const raw = d?.ClientPeoplePickerSearchUser ?? d?.d?.ClientPeoplePickerSearchUser
+      for (const e of typeof raw === 'string' ? JSON.parse(raw) : raw ?? []) {
+        const isGroup = e.EntityType === 'SPGroup' || e.EntityType === 'SecGroup' || /group/i.test(e.EntityType ?? '')
+        out.push({ id: Number(e.EntityData?.SPGroupID ?? 0), title: e.DisplayText, login: e.Key, kind: isGroup ? 'group' : 'user', email: e.EntityData?.Email })
+      }
+    } catch (e) { if ((e as Error).name === 'AbortError') throw e }
+    return out
+  },
+  async resolvePrincipal(src, p) {
+    if (p.id > 0) return p.id
+    const d = await http(src.siteUrl, 'POST', '_api/web/ensureuser', { logonName: p.login })
+    return Number(d?.Id ?? d?.d?.Id)
   },
 
   async loadConfig(): Promise<AppConfig> {
@@ -301,22 +400,24 @@ export function selectExpand(fields: SpField[], select: string[], isLibrary: boo
   for (const n of select) {
     const f = fields.find((x) => x.internal === n)
     if (!f || n === 'ID') continue
-    if (f.kind === 'user' || (f.kind === 'lookup' && f.typeAsString.startsWith('Lookup'))) { sel.add(`${n}/Title`); exp.add(n) }
+    if (f.kind === 'user' || (f.kind === 'lookup' && f.typeAsString.startsWith('Lookup'))) { sel.add(`${n}/Title`); if (f.kind === 'user') sel.add(`${n}/Id`); exp.add(n) }
     else sel.add(n)
   }
-  if (isLibrary) ['FileRef', 'FileLeafRef', 'FSObjType', 'File_x0020_Type', 'File_x0020_Size'].forEach((x) => sel.add(x))
+  if (isLibrary) ['FileRef', 'FileDirRef', 'FileLeafRef', 'FSObjType', 'File_x0020_Type', 'File_x0020_Size'].forEach((x) => sel.add(x))
   const e = [...exp].slice(0, 12)
   return `$select=${[...sel].filter((s) => !s.includes('/') || e.includes(s.split('/')[0])).join(',')}${e.length ? `&$expand=${e.join(',')}` : ''}`
 }
 
 function toRow(item: any, fields: SpField[]): Row {
   const row: Row = { __id: Number(item.Id ?? item.ID), ID: Number(item.Id ?? item.ID) }
-  for (const k of ['FileRef', 'FileLeafRef', 'FSObjType', 'File_x0020_Type']) if (item[k] != null) row[k] = item[k]
+  for (const k of ['FileRef', 'FileDirRef', 'FileLeafRef', 'File_x0020_Type']) if (item[k] != null) row[k] = item[k]
+  if (item.FSObjType != null) row.FSObjType = Number(item.FSObjType)
   if (item.File_x0020_Size != null) row.File_x0020_Size = Number(item.File_x0020_Size)
   for (const f of fields) {
     if (!(f.internal in item)) continue
     let v = item[f.internal]
     if (v && typeof v === 'object' && !Array.isArray(v) && 'results' in v) v = v.results
+    if (f.kind === 'user') row[f.internal + '__ids'] = (Array.isArray(v) ? v : v ? [v] : []).map((x: any) => x?.Id).filter((n: unknown) => n != null)
     if (f.kind === 'user' || f.kind === 'lookup') v = Array.isArray(v) ? v.map((x) => x?.Title ?? x?.Label ?? x).join('; ') : v?.Title ?? v?.Label ?? ''
     else if (f.kind === 'number' || f.kind === 'currency') v = v == null ? null : Number(v)
     row[f.internal] = v
@@ -349,15 +450,40 @@ async function kvSet(key: string, value: unknown, siteArg?: string): Promise<voi
   else await http(site, 'POST', `${cfgUri()}/items`, body)
 }
 
-function writeBody(fields: SpField[], values: Record<string, unknown>) {
-  const out: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(values)) {
-    const f = fields.find((x) => x.internal === k); if (!f || !isEditable(f)) continue
-    if (v === '' || v == null) { out[k] = null; continue }
-    out[k] = f.kind === 'number' || f.kind === 'currency' ? Number(v) : f.kind === 'date' ? new Date(String(v)).toISOString() : v
-  }
-  return out
+const entityCache = new Map<string, string>()
+async function entityType(src: SourceConfig): Promise<string> {
+  let t = entityCache.get(src.listId)
+  if (!t) { const d = await http(src.siteUrl, 'GET', `_api/web/lists(${guid(src.listId)})?$select=ListItemEntityTypeFullName`); t = String(d.ListItemEntityTypeFullName); entityCache.set(src.listId, t) }
+  return t
 }
+const VERBOSE = { 'Content-Type': 'application/json;odata=verbose' }
+
+/** Write payload (odata=verbose is what SharePoint needs for multi-value, person and URL columns). */
+async function writeBody(src: SourceConfig, fields: SpField[], values: Record<string, unknown>, withType = true) {
+  const body: Record<string, unknown> = withType ? { __metadata: { type: await entityType(src) } } : {}
+  for (const [k, v] of Object.entries(values)) {
+    const f = fields.find((x) => x.internal === k)
+    if (!f || (!isEditable(f) && k !== 'FileLeafRef')) continue
+    const empty = v === '' || v == null || (Array.isArray(v) && !v.length)
+    if (f.kind === 'user') {
+      const ps = (v as Principal[] | undefined) ?? []
+      const ids = await Promise.all(ps.map((p) => sp.resolvePrincipal(src, p)))
+      body[`${k}Id`] = f.multi ? { __metadata: { type: 'Collection(Edm.Int32)' }, results: ids } : ids[0] ?? null
+    } else if (f.kind === 'multichoice') body[k] = { __metadata: { type: 'Collection(Edm.String)' }, results: (v as string[]) ?? [] }
+    else if (f.kind === 'url') { const u = v as { url?: string; desc?: string } | null; body[k] = u?.url ? { __metadata: { type: 'SP.FieldUrlValue' }, Url: u.url, Description: u.desc || u.url } : null }
+    else if (empty) body[k] = null
+    else if (f.kind === 'number' || f.kind === 'currency') body[k] = Number(v)
+    else if (f.kind === 'date') body[k] = new Date(String(v)).toISOString()
+    else body[k] = v
+  }
+  return body
+}
+
+const fileToBase64 = (file: File) => new Promise<string>((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1] ?? ''); r.onerror = () => rej(r.error); r.readAsDataURL(file) })
+const siteRel = (src: SourceConfig) => new URL(src.siteUrl).pathname.replace(/\/$/, '')
+const rel = (src: SourceConfig, serverRel: string) => serverRel.startsWith(siteRel(src)) ? serverRel.slice(siteRel(src).length) || '/' : serverRel
+const baseOf = (src: SourceConfig, t: PermTarget) => `_api/web/lists(${guid(src.listId)})${t.kind === 'item' ? `/items(${t.id})` : ''}`
+const pathQ = (p: string) => enc(odataQuote(p)).replace(/%2F/gi, '/')   // keep slashes readable: IIS rejects encoded slashes inside the URL path
 
 /* ------------------------------------------------------------------ SharePoint Search path (millions of items) */
 /** Free-text search on a big list goes through the SharePoint Search index (fast at any size, relevance ranked), not a table scan. */
@@ -390,4 +516,17 @@ async function searchPage(src: SourceConfig, fields: SpField[], select: string[]
   for (const part of parts) for (const it of rows(part)) { const r = toRow(it, fields); byId.set(r.__id, r) }
   const ordered = ids.map((id) => byId.get(id)).filter(Boolean) as Row[]
   return { rows: ordered, scanned: ids.length, cursor: ids.length >= lim ? `s:${start + lim}` : undefined }
+}
+
+/* ------------------------------------------------------------------ library folder view (CAML GetItems scoped to one folder) */
+const FOLDER_PAGE = 1000
+async function folderPage(src: SourceConfig, fields: SpField[], select: string[], q: Query, cursor: string | undefined, signal?: AbortSignal): Promise<Page> {
+  const after = cursor?.startsWith('id:') ? Number(cursor.slice(3)) : 0
+  const view = (type: 0 | 1, from: number, limit: number) => `<View><Query><Where><And><Eq><FieldRef Name='FSObjType'/><Value Type='Integer'>${type}</Value></Eq><Geq><FieldRef Name='ID'/><Value Type='Counter'>${from}</Value></Geq></And></Where><OrderBy Override='TRUE'><FieldRef Name='ID'/></OrderBy></Query><RowLimit>${limit}</RowLimit></View>`
+  const get = (type: 0 | 1, from: number, limit: number) => http(src.siteUrl, 'POST', `_api/web/lists(${guid(src.listId)})/GetItems?${selectExpand(fields, select, true)}`,
+    { query: { __metadata: { type: 'SP.CamlQuery' }, ViewXml: view(type, from, limit), FolderServerRelativeUrl: q.folder } }, VERBOSE, signal)
+  const [folders, files] = await Promise.all([after === 0 ? get(1, 0, 1000) : Promise.resolve(null), get(0, after, FOLDER_PAGE)])
+  const f = rows(files).map((i) => toRow(i, fields))
+  const all = [...(folders ? rows(folders).map((i) => toRow(i, fields)) : []), ...f]
+  return { rows: all, scanned: all.length, cursor: f.length >= FOLDER_PAGE ? `id:${f[f.length - 1].__id + 1}` : undefined }
 }
