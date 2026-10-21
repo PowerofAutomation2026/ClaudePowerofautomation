@@ -1,5 +1,6 @@
 /** Demo backend: a fake tenant with a 2,000,000-row list so the whole UI can be tried (and stress-tested) in a browser. */
-import type { AppConfig, Backend, Page, Query, Row, SourceConfig, SpField, SpList } from '../types'
+import type { Access, AppConfig, Backend, Page, Query, Role, Row, SourceConfig, SpField, SpList, ViewDef } from '../types'
+import { accessFrom, PERM } from '../access'
 import { emptyQuery, matchRow, searchTokens } from '../query'
 import { lsGet, lsSet, sleep } from '../util'
 
@@ -56,6 +57,16 @@ function makeRow(kind: string, id: number): Row {
   return { ...base, Title: `${pick(r, ['Offsite', 'Hackday', 'Demo day', 'Town hall'])} ${id}`, Location: pick(r, ['Berlin', 'Lisbon', 'Remote', 'Austin']), EventDate: iso(NOW + Math.floor(r() * 120 - 30) * 86_400_000), Attendees: Math.floor(r() * 120) }
 }
 
+/* in-memory edits layered on the generated rows so create / edit / delete can be tried in the demo */
+const edits = new Map<string, Row>(), created = new Map<string, Row>(), deleted = new Set<string>()
+const key = (kind: string, id: number) => `${kind}:${id}`
+function getRow(kind: string, id: number): Row | null {
+  const k = key(kind, id)
+  if (deleted.has(k)) return null
+  return created.get(k) ?? edits.get(k) ?? makeRow(kind, id)
+}
+let demoRole: Role = lsGet<Role>('spx.demo.role', 'admin')
+
 const listOf = (id: string) => LISTS.find((l) => l.id === id) ?? LISTS[0]
 
 export const demo: Backend = {
@@ -78,16 +89,16 @@ export const demo: Backend = {
     let scanned = 0
     const BUDGET = 400_000   // mimic SharePoint: a query can only walk so far in one request
     while (rows.length < top && id >= 1 && id <= L.n && scanned < BUDGET) {
-      const row = makeRow(L.kind, id)
+      const row = getRow(L.kind, id)
       scanned++
-      if (plain || matchRow(row, q, fields, tokens)) rows.push(row)
+      if (row && (plain || matchRow(row, q, fields, tokens))) rows.push(row)
       id += asc ? 1 : -1
     }
     const more = id >= 1 && id <= L.n
     return { rows, scanned, cursor: more ? `id:${id}` : undefined }
   },
 
-  async getItem(src, _f, id) { return makeRow(listOf(src.listId).kind, id) },
+  async getItem(src, _f, id) { return getRow(listOf(src.listId).kind, id) },
 
   async changes(src, _f, _s, afterId) {
     const L = listOf(src.listId)
@@ -109,5 +120,32 @@ export const demo: Backend = {
   },
   async saveConfig(cfg) { lsSet('spx.demo.config', cfg) },
   async indexColumn() { await sleep(400) },
+
+  setRole(r: Role) { demoRole = r; lsSet('spx.demo.role', r) },
+  async getAccess(_src, cfg, upn): Promise<Access> {
+    const low = PERM.View | (demoRole !== 'reader' ? PERM.Add | PERM.Edit : 0) | (demoRole === 'admin' ? PERM.Delete | PERM.ManageLists : 0)
+    return accessFrom(low, demoRole === 'admin' ? ['Demo Admins', 'Demo Contributors'] : demoRole === 'writer' ? ['Demo Contributors'] : [], false, { ...cfg, owners: [] }, upn)
+  },
+  async createItem(src, _f, values) {
+    const L = listOf(src.listId); await sleep(150)
+    L.n++; L.itemCount++
+    const id = L.n; const now = new Date().toISOString()
+    created.set(key(L.kind, id), { __id: id, ID: id, Created: now, Modified: now, Author: 'Demo Owner', Editor: 'Demo Owner', ...values } as Row)
+  },
+  async updateItem(src, _f, id, values) {
+    const L = listOf(src.listId); await sleep(150)
+    const cur = getRow(L.kind, id); if (!cur) throw new Error('Item not found')
+    const next = { ...cur, ...values, Modified: new Date().toISOString(), Editor: 'Demo Owner' } as Row
+    ;(created.has(key(L.kind, id)) ? created : edits).set(key(L.kind, id), next)
+  },
+  async deleteItem(src, id) { const L = listOf(src.listId); await sleep(150); deleted.add(key(L.kind, id)); L.itemCount-- },
+  async loadViews(upn) { return { shared: lsGet<ViewDef[]>('spx.demo.views.shared', []), mine: lsGet<ViewDef[]>('spx.demo.views.' + upn, []) } },
+  async saveShared(v) { lsSet('spx.demo.views.shared', v) },
+  async saveMine(upn, v) { lsSet('spx.demo.views.' + upn, v) },
+  async suggest(src, _f, text) {
+    const L = listOf(src.listId); const out: string[] = []; const t = text.toLowerCase(); const tf = L.kind === 'docs' ? 'FileLeafRef' : 'Title'
+    for (let id = L.n; id >= 1 && out.length < 8 && id > L.n - 300_000; id--) { const r = getRow(L.kind, id); const v = String(r?.[tf] ?? ''); if (v.toLowerCase().startsWith(t)) out.push(v) }
+    return [...new Set(out)]
+  },
 }
 export { emptyQuery }

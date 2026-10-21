@@ -1,4 +1,4 @@
-# SharePoint Explorer — Power Apps code app
+# PNC SharePoint Team — Explorer (Power Apps code app)
 
 Connect **any SharePoint list or document library** with one button and get a grid, an auto-built dashboard,
 instant search and PDF / CSV / JSON export. Built for lists with **millions of rows**: the browser never holds more than a
@@ -25,6 +25,31 @@ Share the app with users in make.powerapps.com (code apps need a Power Apps prem
 * **Limits of this, stated plainly:** the gate is enforced in the app UI, and owners come from the compiled bundle. A determined
   user with edit rights on the `SPX_Config` list could still change the saved choice, so give users *Read* and owners *Edit* on that list.
   Real data security is always SharePoint permissions: each user only sees what their own connection may see.
+
+## Roles: read-only / contributor / data admin
+Roles come from the **SharePoint permissions on the connected list** (read live via `EffectiveBasePermissions` + your groups), so SharePoint
+enforces them and the app only mirrors them. If SharePoint cannot answer, the app falls back to read-only.
+
+| Role | Who | Can do |
+|---|---|---|
+| **Read-only** | any Microsoft 365 user with *Read* | search, filter, dashboards, views, export |
+| **Contributor** | members of a SharePoint group with *Contribute/Edit* | + add items, edit items |
+| **Data admin** | *Full Control / Manage Lists* (or named admin groups) | + delete (to the recycle bin), bulk delete, shared views for groups |
+| **App owner** | listed at deploy time | connect/disconnect lists, name optional writer/admin groups. Owners manage the *app*; data admins manage the *data*. |
+
+Owners can additionally name **writer groups / admin groups** (Connect → Who can do what). These can only *restrict* what SharePoint allows.
+A role badge in the header shows your level (hover for the reason). Libraries: metadata edit and delete only (no file upload).
+
+## Views
+Save the current search, filters, sort, columns and layout as a view: **only me**, **everyone**, **specific SharePoint groups**, or **data admins only**.
+Personal views are stored per user; shared views in the `SPX_Config` list (data admins therefore need Edit on that list).
+A view changes what is *shown*; it is not a security boundary: SharePoint permissions are.
+
+## Search for millions of rows
+* Up to 25k items: instant in-memory search with relevance ranking (title hits first) and highlighting.
+* Larger lists: free-text uses the **SharePoint Search index** (ranked, no table scan, any size) and falls back to a filter query if nothing is indexed yet.
+* Syntax everywhere: `word1 word2`, `"exact phrase"`, `-exclude`, `Status:open` (column-scoped, becomes a server filter).
+* Typeahead suggestions (memory or cancellable server query) and recent searches; debounced and cancellable so typing never blocks.
 
 ## Features
 | | |

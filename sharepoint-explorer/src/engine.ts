@@ -121,7 +121,7 @@ export class Engine {
   private recompute(emit = true) {
     const tokens = searchTokens(this.q.search)
     const filtered = isDefaultQuery(this.q) ? this.all : this.all.filter((r) => matchRow(r, this.q, this.fields, tokens))
-    this.rows = sortRows(filtered, this.q, this.fields)
+    this.rows = sortRows(filtered, this.q, this.fields, this.src.isLibrary)
     if (emit) this.emit()
   }
 
@@ -219,6 +219,17 @@ export class Engine {
     } catch { return 0 }
   }
   private hasId(id: number) { return (this.mode === 'local' ? this.all : this.rows).some((r) => r.__id === id) }
+
+  /* ---------------------------------------------------------------- local edits (after the user saves / deletes) */
+  patchRow(r: Row) {
+    const swap = (list: Row[]) => { const i = list.findIndex((x) => x.__id === r.__id); if (i >= 0) list[i] = r }
+    swap(this.all); swap(this.rows)
+    if (this.mode === 'local') { resetHaystack([r]); this.recompute() } else this.emit()
+  }
+  removeRow(id: number) {
+    this.all = this.all.filter((x) => x.__id !== id); this.rows = this.rows.filter((x) => x.__id !== id); this.total = Math.max(0, this.total - 1)
+    if (this.mode === 'local') this.recompute(); else this.emit()
+  }
 
   /** Show newly arrived rows in the server-mode grid. */
   absorbNew() { this.pendingNew = 0; void this.reset() }

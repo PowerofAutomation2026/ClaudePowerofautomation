@@ -108,7 +108,7 @@ export function Modal({ title, onClose, children, className = '', side }: { titl
     return () => { document.removeEventListener('keydown', key); (prev.current as HTMLElement | null)?.focus?.() }
   }, [onClose])
   const dialog = <div ref={ref} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} className={side ? `drawer ${className}` : `modal ${className}`}>{children}</div>
-  return side ? <><div className="scrim" style={{ background: 'rgba(5,10,25,.35)' }} onMouseDown={onClose} />{dialog}</> : <div className="scrim" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>{dialog}</div>
+  return side ? <><div className="scrim" style={{ background: 'rgba(5,10,25,.35)', zIndex: 85 }} onMouseDown={onClose} />{dialog}</> : <div className="scrim" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>{dialog}</div>
 }
 
 export function Counter({ value }: { value: number }) {

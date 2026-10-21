@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Engine } from '../engine'
 import { describeClause, opsFor } from '../query'
 import type { Clause, Op, SpField } from '../types'
-import { debounce } from '../util'
+import { debounce, lsGet, lsSet } from '../util'
 import { Icon, Menu, Modal } from './ui'
 
 interface Props {
@@ -20,6 +20,36 @@ export function FilterBar({ engine, version, fields, onChange, searchRef }: Prop
   useEffect(() => setText(engine.q.search), [engine.q.search])
   useEffect(() => () => push.cancel(), [push])
   const clauses = engine.q.clauses
+  const [focus, setFocus] = useState(false)
+  const [sugg, setSugg] = useState<string[]>([])
+  const [act, setAct] = useState(-1)
+  const [help, setHelp] = useState(false)
+  const recentKey = `spx.recent.${engine.src.id}`
+  const [recent, setRecent] = useState<string[]>(() => lsGet(recentKey, []))
+  const titleField = engine.src.isLibrary ? 'FileLeafRef' : 'Title'
+  const remember = (t: string) => { t = t.trim(); if (!t) return; const n = [t, ...recent.filter((x) => x !== t)].slice(0, 8); setRecent(n); lsSet(recentKey, n) }
+
+  // typeahead: instant from memory on small lists, from the server (cancellable) on big ones
+  useEffect(() => {
+    const t = text.trim().toLowerCase()
+    setAct(-1)
+    if (t.length < 2 || /["]|^-|:/.test(t)) { setSugg([]); return }
+    if (engine.mode === 'local') {
+      const starts: string[] = [], has: string[] = []
+      for (const r of engine.all) {
+        const v = String(r[titleField] ?? ''); const l = v.toLowerCase()
+        if (l.startsWith(t)) starts.push(v); else if (l.includes(t)) has.push(v)
+        if (starts.length >= 8) break
+      }
+      setSugg([...new Set([...starts, ...has])].slice(0, 8)); return
+    }
+    const ctl = new AbortController()
+    const h = setTimeout(() => { engine.backend.suggest(engine.src, engine.fields, text.trim(), ctl.signal).then((r) => { if (!ctl.signal.aborted) setSugg(r) }).catch(() => {}) }, 250)
+    return () => { clearTimeout(h); ctl.abort() }
+  }, [text, engine]) // eslint-disable-line react-hooks/exhaustive-deps
+  const pickText = (v: string) => { setText(v); push.cancel(); onChange({ search: v }); remember(v); setFocus(false) }
+  const listItems = text.trim().length < 2 ? recent.map((r) => ({ v: r, recent: true })) : sugg.map((v) => ({ v, recent: false }))
+  const showList = focus && listItems.length > 0
 
   const setClause = (c: Clause | null, field: string) =>
     onChange({ clauses: [...clauses.filter((x) => !(x.field === field && x.op === 'lastdays')), ...(c ? [c] : [])] })
@@ -40,11 +70,37 @@ export function FilterBar({ engine, version, fields, onChange, searchRef }: Prop
         <div className="search">
           <span className="lead"><Icon n="search" /></span>
           <input ref={searchRef} type="search" value={text} placeholder={engine.mode === 'local' ? 'Search everything — instant, all columns   ( / )' : 'Search title / name on the server   ( / )'}
-            aria-label="Search items" onChange={(e) => { setText(e.target.value); push(e.target.value) }}
-            onKeyDown={(e) => { if (e.key === 'Escape') { setText(''); push.cancel(); onChange({ search: '' }) } if (e.key === 'Enter') { push.cancel(); onChange({ search: text }) } }} />
+            aria-label="Search items" role="combobox" aria-expanded={showList} aria-controls="sugg-list" aria-autocomplete="list" aria-activedescendant={act >= 0 ? `sugg-${act}` : undefined}
+            onFocus={() => setFocus(true)} onBlur={() => setTimeout(() => setFocus(false), 150)}
+            onChange={(e) => { setText(e.target.value); push(e.target.value) }}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowDown' && showList) { e.preventDefault(); setAct((a) => Math.min(listItems.length - 1, a + 1)) }
+              else if (e.key === 'ArrowUp' && showList) { e.preventDefault(); setAct((a) => Math.max(-1, a - 1)) }
+              else if (e.key === 'Escape') { if (showList) setFocus(false); else { setText(''); push.cancel(); onChange({ search: '' }) } }
+              else if (e.key === 'Enter') { if (act >= 0 && listItems[act]) pickText(listItems[act].v); else { push.cancel(); onChange({ search: text }); remember(text) } }
+            }} />
           <span className="trail">
+            <span className="pill" title={engine.mode === 'local' ? 'Searches every loaded column in memory' : engine.src.url && engine.src.itemCount > 5000 ? 'Uses the SharePoint Search index: ranked, fast at any size' : 'Server-side search on the title column'}>{engine.mode === 'local' ? 'instant' : 'index'}</span>
+            <button className="btn icon sm ghost" aria-label="Search tips" aria-expanded={help} onClick={() => setHelp(!help)}>?</button>
             {text && <button className="btn icon sm ghost" aria-label="Clear search" onClick={() => { setText(''); push.cancel(); onChange({ search: '' }) }}><Icon n="x" size={14} /></button>}
           </span>
+          {showList && (
+            <ul id="sugg-list" role="listbox" className="sugg" aria-label={text.trim().length < 2 ? 'Recent searches' : 'Suggestions'}>
+              {listItems.map((it, i) => <li key={it.v} id={`sugg-${i}`} role="option" aria-selected={i === act} onMouseDown={(e) => { e.preventDefault(); pickText(it.v) }}>{it.recent ? '↺ ' : ''}{it.v}</li>)}
+            </ul>
+          )}
+          {help && (
+            <div className="sugg help" role="note">
+              <b>Search tips</b>
+              <ul>
+                <li><code>word1 word2</code> — all words</li>
+                <li><code>"exact phrase"</code> — phrase</li>
+                <li><code>-word</code> — exclude</li>
+                <li><code>Status:open</code> — only that column</li>
+                <li>Big lists: ranked results from the SharePoint index; <code>Column:value</code> uses a filter.</li>
+              </ul>
+            </div>
+          )}
         </div>
 
         {quick.map((f) => {

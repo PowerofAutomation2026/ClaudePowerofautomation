@@ -39,12 +39,45 @@ export interface SourceConfig {
   label: string
   isLibrary: boolean
   itemCount: number
+  /** server-relative URL of the list (used by the SharePoint Search path) */
+  url?: string
   added: string
   addedBy: string
 }
 
+export type Role = 'reader' | 'writer' | 'admin'
+
+/** What the signed-in user may do with the connected list. Derived from SharePoint's own permissions, so it cannot be faked in the UI. */
+export interface Access {
+  role: Role
+  canAdd: boolean
+  canEdit: boolean
+  canDelete: boolean
+  groups: string[]
+  isSiteAdmin: boolean
+  /** why the role was chosen (shown to the user) */
+  reason: string
+}
+
+export interface ViewDef {
+  id: string
+  name: string
+  sourceId: string
+  q: Query
+  cols: string[]
+  layout: 'table' | 'cards'
+  owner: string
+  /** me = personal; everyone; groups = members of the named SharePoint groups; admins = data admins and app owners only */
+  audience: 'me' | 'everyone' | 'groups' | 'admins'
+  groups?: string[]
+  created: string
+}
+
 export interface AppConfig {
   v: 1
+  /** optional extra app-level limits (can only restrict SharePoint permissions, never widen them) */
+  writerGroups?: string[]
+  adminGroups?: string[]
   owners: string[]
   sources: SourceConfig[]
   activeId?: string
@@ -90,4 +123,14 @@ export interface Backend {
   loadConfig(): Promise<AppConfig>
   saveConfig(cfg: AppConfig): Promise<void>
   indexColumn(src: SourceConfig, field: string): Promise<void>
+  getAccess(src: SourceConfig, cfg: AppConfig, upn: string): Promise<Access>
+  createItem(src: SourceConfig, fields: SpField[], values: Record<string, unknown>): Promise<void>
+  updateItem(src: SourceConfig, fields: SpField[], id: number, values: Record<string, unknown>): Promise<void>
+  deleteItem(src: SourceConfig, id: number): Promise<void>
+  loadViews(upn: string): Promise<{ shared: ViewDef[]; mine: ViewDef[] }>
+  saveShared(views: ViewDef[]): Promise<void>
+  saveMine(upn: string, views: ViewDef[]): Promise<void>
+  /** fast typeahead: titles/names that start with or contain `text` */
+  suggest(src: SourceConfig, fields: SpField[], text: string, signal?: AbortSignal): Promise<string[]>
+  setRole?(r: Role): void
 }

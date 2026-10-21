@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Engine } from '../engine'
-import type { AppConfig, Backend, SourceConfig, SpList, SpSite } from '../types'
+import type { Access, AppConfig, Backend, SourceConfig, SpList, SpSite } from '../types'
 import { fmt, lsGet, lsSet, relTime, uid } from '../util'
 import { Icon, useToast } from './ui'
 
@@ -10,10 +10,11 @@ interface Props {
   isOwner: boolean
   who: { upn: string; name: string }
   engine: Engine | null
+  access: Access
   onSaved: (cfg: AppConfig, open?: SourceConfig) => void
 }
 
-export function Connect({ backend, config, isOwner, who, engine, onSaved }: Props) {
+export function Connect({ backend, config, isOwner, who, engine, access, onSaved }: Props) {
   const toast = useToast()
   const [site, setSite] = useState(lsGet<string>('spx.lastSite', backend.mode === 'demo' ? 'https://contoso.sharepoint.com/sites/demo' : ''))
   const [sites, setSites] = useState<SpSite[]>([])
@@ -45,7 +46,7 @@ export function Connect({ backend, config, isOwner, who, engine, onSaved }: Prop
     try {
       const src: SourceConfig = {
         id: `${sel.id}`.slice(0, 40), siteUrl: site, listId: sel.id, title: sel.title, label: label.trim() || sel.title, isLibrary: sel.isLibrary,
-        itemCount: sel.itemCount, added: new Date().toISOString(), addedBy: who.upn,
+        itemCount: sel.itemCount, url: sel.url, added: new Date().toISOString(), addedBy: who.upn,
       }
       const next: AppConfig = { ...config, sources: [...config.sources.filter((s) => !(s.listId === src.listId && s.siteUrl === src.siteUrl)), src], activeId: src.id, updated: new Date().toISOString(), updatedBy: who.upn }
       await backend.saveConfig(next)
@@ -139,6 +140,7 @@ export function Connect({ backend, config, isOwner, who, engine, onSaved }: Prop
           <p className="small muted">Saved in {backend.mode === 'demo' ? 'this browser (demo)' : 'a small SharePoint list on the config site'} so every user opens the same data. Owners are fixed at deploy time: {config.owners.join(', ') || '(none)'}.</p>
         </div>
 
+        <AccessPanel config={config} access={access} onSave={(w, a) => void update(stamp({ ...config, writerGroups: w, adminGroups: a }))} />
         {engine && engine.mode === 'server' && <Performance engine={engine} />}
       </>}
     </div>
@@ -162,6 +164,27 @@ function Published({ config, owner, onOpen, onRemove, onRename, onDefault }: { c
         </li>
       ))}
     </ul>
+  )
+}
+
+function AccessPanel({ config, access, onSave }: { config: AppConfig; access: Access; onSave: (w: string[], a: string[]) => void }) {
+  const [w, setW] = useState((config.writerGroups ?? []).join(', '))
+  const [a, setA] = useState((config.adminGroups ?? []).join(', '))
+  const list = (x: string) => x.split(',').map((y) => y.trim()).filter(Boolean)
+  return (
+    <div className="card" style={{ marginBottom: 14 }}>
+      <h2><Icon n="lock" /> Who can do what (data access)</h2>
+      <p className="muted small" style={{ marginTop: 0 }}>Roles follow the <b>SharePoint permissions on the connected list</b>, so SharePoint enforces them: everyone with <b>Read</b> (all Microsoft 365 users you share the list with) sees and exports data only;
+        members of a group with <b>Contribute/Edit</b> can also add and edit items; people with <b>Full Control / Manage Lists</b> are data admins who can also delete (to the recycle bin). Admins manage the <i>data</i>; only app owners manage the <i>app</i> (this screen).</p>
+      <div className="row" style={{ alignItems: 'end' }}>
+        <label className="field" style={{ flex: '1 1 260px' }}>Optional: only these SharePoint groups may write
+          <input className="input" value={w} onChange={(e) => setW(e.target.value)} placeholder="e.g. PNC Data Editors" /></label>
+        <label className="field" style={{ flex: '1 1 260px' }}>Optional: only these groups are data admins
+          <input className="input" value={a} onChange={(e) => setA(e.target.value)} placeholder="e.g. PNC Data Admins" /></label>
+        <button className="btn primary" onClick={() => onSave(list(w), list(a))}>Save</button>
+      </div>
+      <p className="muted small" style={{ marginBottom: 0 }}>These can only <b>restrict</b> what SharePoint already allows, never widen it. Your own access: <b>{access.role}</b> — {access.reason}{access.groups.length ? ` Groups: ${access.groups.join(', ')}.` : ''}</p>
+    </div>
   )
 }
 

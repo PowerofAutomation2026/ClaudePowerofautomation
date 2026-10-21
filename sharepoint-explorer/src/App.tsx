@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Engine, LOCAL_MAX } from './engine'
 import { chooseBackend } from './services'
-import type { AppConfig, Backend, Clause, Query, Row, SourceConfig, SpField } from './types'
+import type { Access, AppConfig, Backend, Clause, Query, Role, Row, SourceConfig, SpField, ViewDef } from './types'
+import { roleLabel } from './access'
+import { ItemForm } from './components/ItemForm'
+import { ViewsMenu } from './components/ViewsMenu'
 import { searchTokens } from './query'
-import { fmt, lsGet, lsSet, relTime, sameUser } from './util'
+import { fmt, lsGet, lsSet, relTime, sameUser, uid } from './util'
 import { Connect } from './components/Connect'
 import { Dashboard } from './components/Dashboard'
 import { Drawer } from './components/Drawer'
@@ -11,7 +14,7 @@ import { ExportDialog } from './components/ExportDialog'
 import { FilterBar, useShortcuts } from './components/Filters'
 import { Grid } from './components/Grid'
 import { Palette, type Cmd } from './components/Palette'
-import { Icon, Menu, Toaster, useToast } from './components/ui'
+import { Icon, Menu, Modal, Toaster, useToast } from './components/ui'
 import type { ExportFormat } from './export'
 
 type Tab = 'dashboard' | 'data' | 'connect'
@@ -62,6 +65,11 @@ function Shell() {
   const [exp, setExp] = useState<ExportFormat | null>(null)
   const [live, setLive] = useState<boolean>(lsGet('spx.live', false))
   const searchRef = useRef<HTMLInputElement>(null)
+  const [access, setAccess] = useState<Access>({ role: 'reader', canAdd: false, canEdit: false, canDelete: false, groups: [], isSiteAdmin: false, reason: 'Checking your permissions…' })
+  const [viewsAll, setViewsAll] = useState<{ shared: ViewDef[]; mine: ViewDef[] }>({ shared: [], mine: [] })
+  const [newItem, setNewItem] = useState(false)
+  const [confirmDel, setConfirmDel] = useState<Row[] | null>(null)
+  const [busy, setBusy] = useState(false)
 
   /* ------------------------------------------------ boot */
   useEffect(() => {
@@ -70,6 +78,7 @@ function Shell() {
         const backend = await chooseBackend()
         const [who, config] = await Promise.all([backend.whoAmI(), backend.loadConfig()])
         setBoot({ backend, who, config }); setConfig(config)
+        backend.loadViews(who.upn).then(setViewsAll).catch(() => {})
       } catch (e) { setBootErr((e as Error).message) }
     })()
   }, [])
@@ -93,17 +102,18 @@ function Shell() {
     engine?.dispose()
     try {
       const [fields, list] = await Promise.all([boot.backend.getFields(s.siteUrl, s.listId), boot.backend.getList(s.siteUrl, s.listId).catch(() => null)])
-      const cur: SourceConfig = { ...s, itemCount: list?.itemCount ?? s.itemCount }
+      const cur: SourceConfig = { ...s, itemCount: list?.itemCount ?? s.itemCount, url: s.url ?? list?.url }
       const select = pickColumns(fields, cur.isLibrary)
       const eng = new Engine(boot.backend, cur, fields, select)
       const vis = lsGet<string[]>(`spx.cols.${s.id}`, []).filter((n) => select.includes(n))
       setVisible(vis.length ? vis : defaultVisible(fields, select, cur.isLibrary))
       setWidths(lsGet(`spx.w.${s.id}`, {}))
       setSrc(cur); setEngine(eng); lsSet('spx.active', s.id)
+      boot.backend.getAccess(cur, config!, boot.who.upn).then(setAccess).catch(() => setAccess((a) => ({ ...a, role: 'reader', canAdd: false, canEdit: false, canDelete: false, reason: 'Could not read your permissions: read-only.' })))
       if (goTab) setTab(goTab)
       void eng.start()
     } catch (e) { setSrcErr((e as Error).message); setEngine(null) } finally { setLoadingSrc(false) }
-  }, [boot, engine])
+  }, [boot, engine, config])
 
   useEffect(() => {
     if (!boot || !config || src || loadingSrc) return
@@ -139,17 +149,47 @@ function Shell() {
   const toggleCol = (n: string) => { const v = visible.includes(n) ? visible.filter((x) => x !== n) : engine!.select.filter((x) => visible.includes(x) || x === n); if (!v.length) return; setVisible(v); lsSet(`spx.cols.${src!.id}`, v) }
   const setWidth = useCallback((n: string, w: number) => setWidths((cur) => { const next = { ...cur, [n]: w }; if (src) lsSet(`spx.w.${src.id}`, next); return next }), [src])
 
-  /* ------------------------------------------------ saved views */
-  const [views, setViews] = useState<{ name: string; q: Query; cols: string[] }[]>([])
-  useEffect(() => { setViews(src ? lsGet(`spx.views.${src.id}`, []) : []) }, [src])
-  const saveView = () => {
-    if (!engine || !src) return
-    const name = prompt('Name this view (search, filters, sort and columns are saved):', engine.q.search || 'My view')
-    if (!name) return
-    const next = [...views.filter((v) => v.name !== name), { name, q: engine.q, cols: visible }]
-    setViews(next); lsSet(`spx.views.${src.id}`, next); toast('good', `View “${name}” saved`)
+  /* ------------------------------------------------ views (personal + shared with audience) */
+  const srcViews = useMemo(() => [...viewsAll.shared, ...viewsAll.mine].filter((v) => v.sourceId === src?.id), [viewsAll, src])
+  const saveView = async (name: string, audience: ViewDef['audience'], groups: string[]) => {
+    if (!engine || !src || !boot) return
+    const v: ViewDef = { id: uid(), name, sourceId: src.id, q: engine.q, cols: visible, layout: view, owner: boot.who.upn, audience, groups, created: new Date().toISOString() }
+    try {
+      if (audience === 'me') { const mine = [...viewsAll.mine, v]; await boot.backend.saveMine(boot.who.upn, mine); setViewsAll((c) => ({ ...c, mine })) }
+      else { const shared = [...viewsAll.shared, v]; await boot.backend.saveShared(shared); setViewsAll((c) => ({ ...c, shared })) }
+      toast('good', `View “${name}” saved`)
+    } catch (e) { toast('bad', `Could not save the view: ${(e as Error).message}`) }
   }
-  const applyView = (v: { q: Query; cols: string[] }) => { setVisible(v.cols.filter((c) => engine?.select.includes(c))); change(v.q) }
+  const deleteView = async (v: ViewDef) => {
+    if (!boot) return
+    try {
+      if (v.audience === 'me') { const mine = viewsAll.mine.filter((x) => x.id !== v.id); await boot.backend.saveMine(boot.who.upn, mine); setViewsAll((c) => ({ ...c, mine })) }
+      else { const shared = viewsAll.shared.filter((x) => x.id !== v.id); await boot.backend.saveShared(shared); setViewsAll((c) => ({ ...c, shared })) }
+    } catch (e) { toast('bad', (e as Error).message) }
+  }
+  const applyView = (v: ViewDef) => { setVisible(v.cols.filter((c) => engine?.select.includes(c))); setView(v.layout); change(v.q) }
+
+  /* ------------------------------------------------ writing data (permission-gated; SharePoint enforces it again) */
+  const saveItem = async (id: number, values: Record<string, unknown>) => {
+    if (!engine || !boot) return
+    await boot.backend.updateItem(engine.src, engine.fields, id, values)
+    const fresh = await boot.backend.getItem(engine.src, engine.fields, id)
+    if (fresh) engine.patchRow(fresh)
+    toast('good', 'Saved')
+  }
+  const createItem = async (values: Record<string, unknown>) => {
+    if (!engine || !boot) return
+    setBusy(true)
+    try { await boot.backend.createItem(engine.src, engine.fields, values); setNewItem(false); toast('good', 'Item created'); void engine.refresh() }
+    catch (e) { toast('bad', (e as Error).message) } finally { setBusy(false) }
+  }
+  const deleteRows = async () => {
+    if (!engine || !boot || !confirmDel) return
+    setBusy(true); let ok = 0
+    try { for (const r of confirmDel) { await boot.backend.deleteItem(engine.src, r.__id); engine.removeRow(r.__id); ok++ } toast('good', `${ok} item${ok === 1 ? '' : 's'} moved to the recycle bin`) }
+    catch (e) { toast('bad', `Stopped after ${ok}: ${(e as Error).message}`) }
+    finally { setBusy(false); setConfirmDel(null); setOpen(null); setSelected(new Set()) }
+  }
 
   /* ------------------------------------------------ shortcuts + palette */
   useShortcuts({
@@ -190,7 +230,10 @@ function Shell() {
     <div className="app">
       <a className="skip" href="#main">Skip to content</a>
       <header className="top">
-        <div className="brand"><span className="logo"><Icon n="grid" size={20} /></span><span>SharePoint Explorer</span></div>
+        <div className="brand" aria-label="PNC SharePoint Team — Explorer">
+          <PncMark />
+          <span className="brand-t"><b>PNC SharePoint Team</b><small>Explorer</small></span>
+        </div>
 
         {config.sources.length > 0 && (
           <Menu align="left" icon={src?.isLibrary ? 'lib' : 'list'} label={<span style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>{src?.label ?? 'Choose data'}</span>}>
@@ -207,6 +250,12 @@ function Shell() {
         </nav>
         <span className="grow" />
         {boot.backend.mode === 'demo' && <span className="pill warn" title="Not running inside Power Apps: using generated sample data">Demo data</span>}
+        {engine && <span className={`pill ${access.role === 'admin' ? 'accent' : access.role === 'writer' ? 'good' : ''}`} title={access.reason} role="status"><Icon n={access.role === 'reader' ? 'lock' : 'check'} size={13} />{roleLabel(access.role)}</span>}
+        {boot.backend.mode === 'demo' && (
+          <Menu label={<span className="lbl-t">Try role</span>} icon="star">
+            {(close) => <div role="group" aria-label="Demo role">{(['reader', 'writer', 'admin'] as Role[]).map((r) => <button key={r} role="menuitemradio" aria-checked={access.role === r} onClick={() => { close(); boot.backend.setRole?.(r); if (engine && src) boot.backend.getAccess(src, config, boot.who.upn).then(setAccess) }}>{roleLabel(r)}</button>)}</div>}
+          </Menu>
+        )}
 
         <button className="btn" aria-pressed={live} onClick={() => setLive(!live)} title="Live pulse: check for new and changed items every 20 seconds" disabled={!engine}>
           <span className={`live-dot${live ? '' : ' off'}`} aria-hidden="true" /><span className="lbl-t">Live</span>{live && engine && engine.pendingNew > 0 && <span className="pill accent">{engine.pendingNew}</span>}
@@ -231,7 +280,7 @@ function Shell() {
         {srcErr && <div className="banner bad" role="alert"><Icon n="info" /><div><b>Could not open the data source.</b> {srcErr}</div></div>}
         {loadingSrc && <div className="card skel" style={{ height: 160 }} aria-busy="true" />}
 
-        {!loadingSrc && tab === 'connect' && <Connect backend={boot.backend} config={config} isOwner={isOwner} who={boot.who} engine={engine} onSaved={onSaved} />}
+        {!loadingSrc && tab === 'connect' && <Connect backend={boot.backend} config={config} isOwner={isOwner} who={boot.who} engine={engine} access={access} onSaved={onSaved} />}
 
         {!loadingSrc && tab !== 'connect' && !engine && (
           <div className="card empty"><Icon n="plug" size={44} /><h2>No list or library connected yet</h2>
@@ -256,15 +305,10 @@ function Shell() {
               </span>
               {engine.pendingNew > 0 && <button className="btn sm primary" onClick={() => engine.absorbNew()}><Icon n="refresh" size={14} />{engine.pendingNew} new — show</button>}
               <span className="grow" />
+              {access.canAdd && !src.isLibrary && <button className="btn sm primary" onClick={() => setNewItem(true)}><Icon n="plus" size={14} />New item</button>}
+              {access.canDelete && selected.size > 0 && <button className="btn sm danger" onClick={() => setConfirmDel(engine.rows.filter((r) => selected.has(r.__id)))}><Icon n="trash" size={14} />Delete {selected.size}</button>}
               {src.isLibrary && <button className="btn sm" aria-pressed={engine.q.folders} onClick={() => change({ folders: !engine.q.folders })}><Icon n="lib" size={14} />Folders</button>}
-              <Menu icon="star" label={<span className="lbl-t">Views</span>}>
-                {(close) => <div>
-                  <button onClick={() => { close(); saveView() }}><Icon n="plus" />Save current view…</button>
-                  {views.length > 0 && <hr />}
-                  {views.map((v) => <div key={v.name} className="row" style={{ flexWrap: 'nowrap' }}><button onClick={() => { close(); applyView(v) }}>{v.name}</button>
-                    <button className="btn icon sm ghost" aria-label={`Delete view ${v.name}`} style={{ width: 'auto' }} onClick={() => { const n = views.filter((x) => x.name !== v.name); setViews(n); lsSet(`spx.views.${src.id}`, n) }}><Icon n="trash" size={14} /></button></div>)}
-                </div>}
-              </Menu>
+              <ViewsMenu views={srcViews} access={access} cfg={config} upn={boot.who.upn} onApply={applyView} onSave={saveView} onDelete={(v) => void deleteView(v)} />
               <Menu icon="cols" label={<span className="lbl-t">Columns</span>}>
                 {() => <div role="group" aria-label="Visible columns">{engine.select.map((n) => { const f = engine.fields.find((x) => x.internal === n)!; return <label key={n} className="item"><input type="checkbox" checked={visible.includes(n)} onChange={() => toggleCol(n)} />{f.title}</label> })}</div>}
               </Menu>
@@ -294,13 +338,35 @@ function Shell() {
 
       {open && engine && (() => {
         const i = engine.rows.findIndex((r) => r.__id === open.__id)
-        return <Drawer engine={engine} row={open} index={Math.max(0, i)} onClose={() => setOpen(null)} onNav={(d) => { const n = engine.rows[i + d]; if (n) setOpen(n) }} />
+        return <Drawer engine={engine} row={open} index={Math.max(0, i)} access={access} onSave={saveItem} onDelete={(r) => setConfirmDel([r])} onClose={() => setOpen(null)} onNav={(d) => { const n = engine.rows[i + d]; if (n) setOpen(n) }} />
       })()}
       {exp && engine && src && <ExportDialog engine={engine} cols={cols} selected={selected} title={src.label} initial={exp} onClose={() => setExp(null)} />}
+      {newItem && engine && (
+        <Modal title="New item" onClose={() => setNewItem(false)}>
+          <h2 style={{ marginBottom: 12 }}>New item in “{src?.label}”</h2>
+          <ItemForm fields={engine.fields.filter((f) => engine.select.includes(f.internal))} row={null} busy={busy} onCancel={() => setNewItem(false)} onSubmit={(v) => void createItem(v)} />
+        </Modal>
+      )}
+      {confirmDel && (
+        <Modal title="Confirm delete" onClose={() => setConfirmDel(null)}>
+          <h2 style={{ marginBottom: 8 }}>Delete {confirmDel.length} item{confirmDel.length === 1 ? '' : 's'}?</h2>
+          <p className="muted">They move to the SharePoint recycle bin, where they can be restored.</p>
+          <div className="row" style={{ justifyContent: 'flex-end' }}><button className="btn" onClick={() => setConfirmDel(null)}>Cancel</button><button className="btn primary" style={{ background: 'var(--bad)' }} disabled={busy} onClick={() => void deleteRows()}>{busy ? 'Deleting…' : 'Delete'}</button></div>
+        </Modal>
+      )}
       {palette && <Palette cmds={cmds} onClose={() => setPalette(false)} />}
     </div>
   )
 }
 
+function PncMark() {
+  return (
+    <svg className="pnc-mark" width="38" height="38" viewBox="0 0 38 38" role="img" aria-label="PNC">
+      <rect width="38" height="38" rx="9" fill="#0B3F78" />
+      <path d="M0 26h38v3a9 9 0 0 1-9 9H9a9 9 0 0 1-9-9v-3Z" fill="#F58025" />
+      <text x="19" y="21" textAnchor="middle" fontFamily="Segoe UI, Arial, sans-serif" fontWeight="800" fontSize="13" fill="#fff">PNC</text>
+    </svg>
+  )
+}
 const noopSub = () => () => {}
 const zero = () => 0

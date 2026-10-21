@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Engine } from '../engine'
-import type { Row, SpField } from '../types'
+import type { Access, Row, SpField } from '../types'
+import { ItemForm } from './ItemForm'
 import { cellText, fmtDate } from '../util'
 import { CellView } from './Grid'
 import { Icon, Modal, useToast } from './ui'
@@ -11,11 +12,13 @@ export function itemUrl(engine: Engine, row: Row): string {
   return `${engine.src.siteUrl.replace(/\/$/, '')}/_layouts/15/listform.aspx?PageType=4&ListId=${encodeURIComponent('{' + engine.src.listId + '}')}&ID=${row.__id}`
 }
 
-export function Drawer({ engine, row, index, onClose, onNav }: { engine: Engine; row: Row; index: number; onClose: () => void; onNav: (d: number) => void }) {
+export function Drawer({ engine, row, index, access, onClose, onNav, onSave, onDelete }: { engine: Engine; row: Row; index: number; access: Access; onClose: () => void; onNav: (d: number) => void; onSave: (id: number, values: Record<string, unknown>) => Promise<void>; onDelete: (row: Row) => void }) {
   const toast = useToast()
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [full, setFull] = useState<Row>(row)
   useEffect(() => {
-    setFull(row)
+    setFull(row); setEditing(false)
     let live = true
     engine.backend.getItem(engine.src, engine.fields, row.__id).then((r) => { if (live && r) setFull({ ...row, ...r }) }).catch(() => {})
     return () => { live = false }
@@ -41,9 +44,20 @@ export function Drawer({ engine, row, index, onClose, onNav }: { engine: Engine;
           <button className="btn" onClick={() => navigator.clipboard?.writeText(url).then(() => toast('good', 'Link copied'))}><Icon n="copy" size={16} />Copy link</button>
           <button className="btn" onClick={() => navigator.clipboard?.writeText(JSON.stringify(full, null, 2)).then(() => toast('good', 'JSON copied'))}>JSON</button>
         </div>
+        {(access.canEdit || access.canDelete) && !editing && (
+          <div className="row" style={{ marginBottom: 8 }}>
+            {access.canEdit && <button className="btn" onClick={() => setEditing(true)}>✎ Edit</button>}
+            {access.canDelete && <button className="btn danger" onClick={() => onDelete(full)}><Icon n="trash" size={16} />Delete</button>}
+          </div>
+        )}
+        {editing ? (
+          <ItemForm fields={engine.fields.filter((f) => engine.select.includes(f.internal))} row={full} busy={saving} onCancel={() => setEditing(false)}
+            onSubmit={async (v) => { setSaving(true); try { await onSave(row.__id, v); setEditing(false) } catch (e) { toast('bad', (e as Error).message) } finally { setSaving(false) } }} />
+        ) : (
         <dl style={{ margin: 0 }}>
           {shown.map((f) => <div className="kv" key={f.internal}><dt>{f.title}</dt><dd><CellView f={f.kind === 'note' ? { ...f, kind: 'text' } : f} row={full} tokens={[]} /></dd></div>)}
         </dl>
+        )}
       </div>
     </Modal>
   )

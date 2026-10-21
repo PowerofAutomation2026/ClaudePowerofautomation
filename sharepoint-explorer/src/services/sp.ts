@@ -6,8 +6,10 @@
 import { getClient } from '@microsoft/power-apps/data'
 import { getContext } from '@microsoft/power-apps/app'
 import baked from '../appconfig.json'
-import type { AppConfig, Backend, FieldKind, Page, Query, Row, SourceConfig, SpField, SpList, SpSite } from '../types'
-import { buildFilter } from '../query'
+import type { Access, AppConfig, Backend, ViewDef, FieldKind, Page, Query, Row, SourceConfig, SpField, SpList, SpSite } from '../types'
+import { buildFilter, parseSearch } from '../query'
+import { accessFrom } from '../access'
+import { isEditable } from '../editable'
 import { lsGet, lsSet, odataQuote, sleep } from '../util'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -181,6 +183,12 @@ export const sp: Backend = {
   },
 
   async query(src, fields, select, q, top, cursor, signal): Promise<Page> {
+    if (useSearchApi(src, q, cursor)) {
+      try {
+        const r = await searchPage(src, fields, select, q, top, cursor, signal)
+        if (r) return r
+      } catch (e) { if ((e as Error).name === 'AbortError') throw e /* otherwise fall through to the plain filter */ }
+    }
     const byId = q.sort.field === 'ID'
     const asc = q.sort.dir === 'asc'
     const extra: string[] = []
@@ -228,36 +236,56 @@ export const sp: Backend = {
     return { added, changed: rows(changedRes).map((i) => toRow(i, fields)), itemCount: listRes?.ItemCount ?? 0, maxId: Math.max(afterId, ...added.map((r) => r.__id)) }
   },
 
+  async getAccess(src, cfg, upn): Promise<Access> {
+    const base = `_api/web/lists(${guid(src.listId)})`
+    const [perm, groups, me] = await Promise.all([
+      http(src.siteUrl, 'GET', `${base}/EffectiveBasePermissions`).catch(() => null),
+      http(src.siteUrl, 'GET', '_api/web/currentuser/groups?$select=Title').then((d) => rows(d).map((g) => String(g.Title))).catch(() => [] as string[]),
+      http(src.siteUrl, 'GET', '_api/web/currentuser?$select=IsSiteAdmin').catch(() => null),
+    ])
+    // if SharePoint cannot tell us, fail CLOSED: read-only
+    const low = perm ? Number(perm.Low ?? perm.d?.EffectiveBasePermissions?.Low ?? 1) : 1
+    return accessFrom(low, groups, !!me?.IsSiteAdmin, cfg, upn)
+  },
+
+  async createItem(src, fields, values) {
+    await http(src.siteUrl, 'POST', `_api/web/lists(${guid(src.listId)})/items`, writeBody(fields, values))
+  },
+  async updateItem(src, fields, id, values) {
+    await http(src.siteUrl, 'POST', `_api/web/lists(${guid(src.listId)})/items(${id})`, writeBody(fields, values), { 'X-HTTP-Method': 'MERGE', 'IF-MATCH': '*' })
+  },
+  async deleteItem(src, id) {
+    await http(src.siteUrl, 'POST', `_api/web/lists(${guid(src.listId)})/items(${id})/recycle()`)   // to the recycle bin, never a hard delete
+  },
+
+  async loadViews(upn) {
+    const [shared, mine] = await Promise.all([kvGet<ViewDef[]>('views:shared'), kvGet<ViewDef[]>(`views:${upn.toLowerCase()}`)])
+    return { shared: shared ?? lsGet<ViewDef[]>('spx.views.shared', []), mine: mine ?? lsGet<ViewDef[]>(`spx.views.mine.${upn}`, []) }
+  },
+  async saveShared(views) { lsSet('spx.views.shared', views); await kvSet('views:shared', views) },
+  async saveMine(upn, views) { lsSet(`spx.views.mine.${upn}`, views); await kvSet(`views:${upn.toLowerCase()}`, views) },
+
+  async suggest(src, fields, text, signal) {
+    const tf = src.isLibrary ? 'FileLeafRef' : 'Title'
+    if (!fields.some((f) => f.internal === tf) || text.length < 2) return []
+    try {
+      const d = await http(src.siteUrl, 'GET', `_api/web/lists(${guid(src.listId)})/items?$select=Id,${tf}&$filter=${enc(`startswith(${tf},${odataQuote(text)})${src.isLibrary ? ' and FSObjType eq 0' : ''}`)}&$orderby=Id desc&$top=8`, undefined, {}, signal)
+      return [...new Set(rows(d).map((r) => String(r[tf])))]
+    } catch { return [] }
+  },
+
   async loadConfig(): Promise<AppConfig> {
-    const site = baked.configSiteUrl || lsGet<string>('spx.configSite', '')
     const fallback = (): AppConfig => lsGet<AppConfig>('spx.config', { v: 1, owners: [], sources: [], updated: '', updatedBy: '' })
-    let cfg = fallback()
-    if (site) {
-      try {
-        const d = await http(site, 'GET', `_api/web/lists/getbytitle(${odataQuote(baked.configList)})/items?$select=Id,ConfigJson&$top=1`)
-        const item = rows(d)[0]
-        if (item?.ConfigJson) cfg = JSON.parse(item.ConfigJson) as AppConfig
-      } catch { /* list not created yet / no access: use local copy */ }
-    }
+    const cfg = (await kvGet<AppConfig>('config')) ?? fallback()
     // Owners come ONLY from the deployed bundle (written by the deploy script), never from the editable list.
     return { ...cfg, v: 1, owners: baked.owners as string[], sources: cfg.sources ?? [] }
   },
 
   async saveConfig(cfg) {
     lsSet('spx.config', cfg)
-    const site = baked.configSiteUrl || lsGet<string>('spx.configSite', '') || cfg.sources[0]?.siteUrl
-    if (!site) return
-    if (!baked.configSiteUrl) lsSet('spx.configSite', site)
-    const title = baked.configList
-    const listUri = `_api/web/lists/getbytitle(${odataQuote(title)})`
-    try { await http(site, 'GET', `${listUri}?$select=Id`) } catch {
-      await http(site, 'POST', '_api/web/lists', { Title: title, BaseTemplate: 100, Description: 'App configuration for the SharePoint Explorer code app. Keep editable by app owners only.' })
-      await http(site, 'POST', `${listUri}/fields`, { Title: 'ConfigJson', FieldTypeKind: 3 })
-    }
-    const body = { Title: 'config', ConfigJson: JSON.stringify({ ...cfg, owners: [] }) }
-    const existing = rows(await http(site, 'GET', `${listUri}/items?$select=Id&$top=1`))[0]
-    if (existing) await http(site, 'POST', `${listUri}/items(${existing.Id})`, body, { 'X-HTTP-Method': 'MERGE', 'IF-MATCH': '*' })
-    else await http(site, 'POST', `${listUri}/items`, body)
+    const site = cfgSite() || cfg.sources[0]?.siteUrl
+    if (site && !baked.configSiteUrl) lsSet('spx.configSite', site)
+    await kvSet('config', { ...cfg, owners: [] }, site)
   },
 
   async indexColumn(src, field) {
@@ -294,4 +322,72 @@ function toRow(item: any, fields: SpField[]): Row {
     row[f.internal] = v
   }
   return row
+}
+
+/* ------------------------------------------------------------------ small key/value store in the SPX_Config list */
+const cfgSite = () => baked.configSiteUrl || lsGet<string>('spx.configSite', '')
+const cfgUri = () => `_api/web/lists/getbytitle(${odataQuote(baked.configList)})`
+
+async function kvGet<T>(key: string): Promise<T | null> {
+  const site = cfgSite(); if (!site) return null
+  try {
+    const d = await http(site, 'GET', `${cfgUri()}/items?$select=Id,ConfigJson&$filter=${enc(`Title eq ${odataQuote(key)}`)}&$top=1`)
+    const it = rows(d)[0]
+    return it?.ConfigJson ? (JSON.parse(it.ConfigJson) as T) : null
+  } catch { return null }   // list not created yet / no access: caller falls back to the browser copy
+}
+
+async function kvSet(key: string, value: unknown, siteArg?: string): Promise<void> {
+  const site = siteArg || cfgSite(); if (!site) return
+  try { await http(site, 'GET', `${cfgUri()}?$select=Id`) } catch {
+    await http(site, 'POST', '_api/web/lists', { Title: baked.configList, BaseTemplate: 100, Description: 'App configuration for the SharePoint Explorer code app. Keep editable by app owners / data admins only.' })
+    await http(site, 'POST', `${cfgUri()}/fields`, { Title: 'ConfigJson', FieldTypeKind: 3 })
+  }
+  const body = { Title: key, ConfigJson: JSON.stringify(value) }
+  const existing = rows(await http(site, 'GET', `${cfgUri()}/items?$select=Id&$filter=${enc(`Title eq ${odataQuote(key)}`)}&$top=1`))[0]
+  if (existing) await http(site, 'POST', `${cfgUri()}/items(${existing.Id})`, body, { 'X-HTTP-Method': 'MERGE', 'IF-MATCH': '*' })
+  else await http(site, 'POST', `${cfgUri()}/items`, body)
+}
+
+function writeBody(fields: SpField[], values: Record<string, unknown>) {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(values)) {
+    const f = fields.find((x) => x.internal === k); if (!f || !isEditable(f)) continue
+    if (v === '' || v == null) { out[k] = null; continue }
+    out[k] = f.kind === 'number' || f.kind === 'currency' ? Number(v) : f.kind === 'date' ? new Date(String(v)).toISOString() : v
+  }
+  return out
+}
+
+/* ------------------------------------------------------------------ SharePoint Search path (millions of items) */
+/** Free-text search on a big list goes through the SharePoint Search index (fast at any size, relevance ranked), not a table scan. */
+function useSearchApi(src: SourceConfig, q: Query, cursor?: string) {
+  if (cursor && !cursor.startsWith('s:')) return false
+  const ps = parseSearch(q.search)
+  return !!src.url && src.itemCount > 5000 && ps.terms.length > 0 && ps.fielded.length === 0 && q.sort.field === 'ID' && q.sort.dir === 'desc'
+}
+
+async function searchPage(src: SourceConfig, fields: SpField[], select: string[], q: Query, top: number, cursor: string | undefined, signal?: AbortSignal): Promise<Page | null> {
+  const ps = parseSearch(q.search)
+  const start = cursor?.startsWith('s:') ? Number(cursor.slice(2)) : 0
+  const origin = new URL(src.siteUrl).origin
+  const kql = [...ps.terms.map((t) => (/\s/.test(t) ? `"${t}"` : t)), ...ps.excludes.map((t) => `-${/\s/.test(t) ? `"${t}"` : t}`), `path:"${origin}${src.url}"`, src.isLibrary && !q.folders ? 'IsDocument:true' : ''].filter(Boolean).join(' ')
+  const lim = Math.min(top, 250)
+  const d = await http(src.siteUrl, 'GET', `_api/search/query?querytext=${enc(odataQuote(kql))}&selectproperties='ListItemID'&rowlimit=${lim}&startrow=${start}&trimduplicates=false`, undefined, {}, signal)
+  const rel = d?.PrimaryQueryResult?.RelevantResults ?? d?.d?.query?.PrimaryQueryResult?.RelevantResults
+  const rws: any[] = rel?.Table?.Rows?.results ?? rel?.Table?.Rows ?? []
+  const ids = rws.map((r) => { const cells = r.Cells?.results ?? r.Cells ?? []; return Number(cells.find((c: any) => c.Key === 'ListItemID')?.Value) }).filter((n) => n > 0)
+  if (!ids.length) return start === 0 ? null : { rows: [], scanned: 0 }   // nothing indexed (yet): let the caller fall back to a filter query
+  const sel = selectExpand(fields, select, src.isLibrary)
+  const extra = buildFilter({ ...q, search: '' }, fields, src.isLibrary)
+  const chunks: number[][] = []
+  for (let i = 0; i < ids.length; i += 30) chunks.push(ids.slice(i, i + 30))
+  const parts = await Promise.all(chunks.map((c) => {
+    const f = `(${c.map((id) => `Id eq ${id}`).join(' or ')})${extra ? ` and ${extra}` : ''}`
+    return http(src.siteUrl, 'GET', `_api/web/lists(${guid(src.listId)})/items?${sel}&$filter=${enc(f)}&$top=30`, undefined, {}, signal)
+  }))
+  const byId = new Map<number, Row>()
+  for (const part of parts) for (const it of rows(part)) { const r = toRow(it, fields); byId.set(r.__id, r) }
+  const ordered = ids.map((id) => byId.get(id)).filter(Boolean) as Row[]
+  return { rows: ordered, scanned: ids.length, cursor: ids.length >= lim ? `s:${start + lim}` : undefined }
 }

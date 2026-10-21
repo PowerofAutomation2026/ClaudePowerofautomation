@@ -38,9 +38,27 @@ export function haystack(row: Row, fields: SpField[]): string {
 }
 export const resetHaystack = (rows: Row[]) => rows.forEach((r) => hay.delete(r))
 
-export function searchTokens(s: string): string[] {
-  return s.toLowerCase().split(/\s+/).filter(Boolean)
+/**
+ * Search syntax (same everywhere: in-memory, server filter, demo):
+ *   word word        all words must appear
+ *   "exact phrase"   phrase
+ *   -word            must NOT appear
+ *   Column:value     only that column (internal or display name, no spaces: Status:open  Assigned:ann)
+ */
+export interface ParsedSearch { terms: string[]; excludes: string[]; fielded: { field: string; value: string }[] }
+export function parseSearch(s: string): ParsedSearch {
+  const out: ParsedSearch = { terms: [], excludes: [], fielded: [] }
+  const re = /(-?)(?:([\w]+):)?(?:"([^"]+)"|(\S+))/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(s.toLowerCase()))) {
+    const val = (m[3] ?? m[4] ?? '').trim(); if (!val) continue
+    if (m[1]) out.excludes.push(val)
+    else if (m[2]) out.fielded.push({ field: m[2], value: val })
+    else out.terms.push(val)
+  }
+  return out
 }
+export function searchTokens(s: string): string[] { const p = parseSearch(s); return [...p.terms, ...p.fielded.map((f) => f.value)] }
 
 function clauseMatches(c: Clause, row: Row, f: SpField): boolean {
   const raw = row[f.internal]
@@ -71,8 +89,16 @@ function clauseMatches(c: Clause, row: Row, f: SpField): boolean {
   return true
 }
 
-export function matchRow(row: Row, q: Query, fields: SpField[], tokens: string[]): boolean {
-  if (tokens.length) { const h = haystack(row, fields); for (const t of tokens) if (!h.includes(t)) return false }
+const resolveField = (fields: SpField[], name: string) => fields.find((f) => f.internal.toLowerCase() === name || f.title.toLowerCase().replace(/\s+/g, '') === name || f.title.toLowerCase().startsWith(name))
+
+export function matchRow(row: Row, q: Query, fields: SpField[], _tokens?: string[]): boolean {
+  if (q.search) {
+    const ps = parseSearch(q.search)
+    const h = haystack(row, fields)
+    for (const t of ps.terms) if (!h.includes(t)) return false
+    for (const t of ps.excludes) if (h.includes(t)) return false
+    for (const f of ps.fielded) { const fd = resolveField(fields, f.field); if (!fd || !cellText(fd, row).toLowerCase().includes(f.value)) return false }
+  }
   for (const c of q.clauses) {
     const f = fields.find((x) => x.internal === c.field)
     if (f && !clauseMatches(c, row, f)) return false
@@ -80,7 +106,19 @@ export function matchRow(row: Row, q: Query, fields: SpField[], tokens: string[]
   return true
 }
 
-export function sortRows(rows: Row[], q: Query, fields: SpField[]): Row[] {
+/** Relevance: title hits count most, then exact-start, then anywhere. Used when a search is active and no explicit sort was chosen. */
+export function relevance(row: Row, terms: string[], titleField: string): number {
+  const t = String(row[titleField] ?? '').toLowerCase()
+  let sc = 0
+  for (const w of terms) { if (t === w) sc += 6; else if (t.startsWith(w)) sc += 4; else if (t.includes(w)) sc += 3; else sc += 1 }
+  return sc
+}
+
+export function sortRows(rows: Row[], q: Query, fields: SpField[], isLibrary = false): Row[] {
+  if (q.search && q.sort.field === 'ID' && q.sort.dir === 'desc') {
+    const terms = parseSearch(q.search).terms
+    if (terms.length) { const tf = isLibrary ? 'FileLeafRef' : 'Title'; return rows.map((r) => [r, relevance(r, terms, tf)] as const).sort((a, b) => b[1] - a[1] || b[0].__id - a[0].__id).map((x) => x[0]) }
+  }
   const f = fields.find((x) => x.internal === q.sort.field)
   const dir = q.sort.dir === 'asc' ? 1 : -1
   const key = (r: Row): number | string => {
@@ -139,10 +177,15 @@ export function serverSearchFields(fields: SpField[], isLibrary: boolean): SpFie
 export function buildFilter(q: Query, fields: SpField[], isLibrary: boolean, extra: string[] = []): string {
   const parts = [...extra]
   if (isLibrary && !q.folders) parts.push('FSObjType eq 0')
-  const tokens = searchTokens(q.search)
+  const ps = parseSearch(q.search)
   const sf = serverSearchFields(fields, isLibrary)
-  for (const t of tokens.slice(0, 4)) {
+  for (const t of ps.terms.slice(0, 4)) {
     if (sf.length) parts.push('(' + sf.map((f) => `substringof(${odataQuote(t)},${f.internal})`).join(' or ') + ')')
+  }
+  for (const t of ps.excludes.slice(0, 3)) { if (sf.length) parts.push('not (' + sf.map((f) => `substringof(${odataQuote(t)},${f.internal})`).join(' or ') + ')') }
+  for (const fv of ps.fielded.slice(0, 3)) {
+    const fd = resolveField(fields, fv.field)
+    if (fd && fd.filterable) { const c = clauseToOData({ field: fd.internal, op: fd.kind === 'choice' ? 'eq' : 'contains', value: fv.value }, fd); if (c) parts.push(c) }
   }
   for (const c of q.clauses) {
     const f = fields.find((x) => x.internal === c.field)
