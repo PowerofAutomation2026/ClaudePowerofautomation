@@ -7,7 +7,7 @@ import { getClient } from '@microsoft/power-apps/data'
 import { getContext } from '@microsoft/power-apps/app'
 import baked from '../appconfig.json'
 import type { Access, AppConfig, Attachment, DashConfig, FormatRule, Backend, PermInfo, PermTarget, Principal, RoleAssign, RoleDef, VersionInfo, ViewDef, FieldKind, Page, Query, Row, SourceConfig, SpField, SpList, SpSite } from '../types'
-import { buildFilter, parseSearch, propOf, restName, titleField } from '../query'
+import { buildFilter, parseSearch, propOf, restName, titleField, noExpand } from '../query'
 import { accessFrom } from '../access'
 import { isEditable } from '../editable'
 import { lsGet, lsSet, odataQuote, sleep } from '../util'
@@ -258,16 +258,17 @@ export const sp: Backend = {
     const want = fields.filter((f) => f.kind !== 'other' && f.internal !== 'ID' && !(f.readOnly && !/^(Author|Editor|Created|Modified|FileLeafRef)$/.test(f.internal)) || /^(Author|Editor|Created|Modified|FileLeafRef)$/.test(f.internal))
     const sel = [...want.filter((f) => !people(f)).map((f) => f.internal), ...want.filter(people).slice(0, 10).map((f) => f.internal)]
     try { return toRow(await http(src.siteUrl, 'GET', `_api/web/lists(${guid(src.listId)})/items(${id})?${selectExpand(fields, sel, src.isLibrary)}`), fields) }
-    catch (e) { if (/field or property|query to field/i.test((e as Error).message)) throw e; return null }
+    catch (e) { if (/field or property|query to field|\$expand query is not valid/i.test((e as Error).message)) throw e; return null }
   },
 
   async changes(src, fields, select, afterId, since) {
+    const learnable = (e: Error) => { if (/\$expand query is not valid|query to field|field or property/i.test(e.message)) throw e; return null }
     const base = `_api/web/lists(${guid(src.listId)})/items?${selectExpand(fields, select, src.isLibrary)}`
     const libF = src.isLibrary ? ' and FSObjType eq 0' : ''
     const sinceIso = new Date(Date.parse(since) - 60_000).toISOString()
     const [addedRes, changedRes, listRes] = await Promise.all([
-      http(src.siteUrl, 'GET', `${base}&$filter=${enc(`Id gt ${afterId}${libF}`)}&$orderby=Id asc&$top=100`).catch(() => null),
-      http(src.siteUrl, 'GET', `${base}&$filter=${enc(`Modified gt datetime'${sinceIso}'${libF}`)}&$orderby=Modified desc&$top=50`).catch(() => null),
+      http(src.siteUrl, 'GET', `${base}&$filter=${enc(`Id gt ${afterId}${libF}`)}&$orderby=Id asc&$top=100`).catch(learnable),
+      http(src.siteUrl, 'GET', `${base}&$filter=${enc(`Modified gt datetime'${sinceIso}'${libF}`)}&$orderby=Modified desc&$top=50`).catch(learnable),
       http(src.siteUrl, 'GET', `_api/web/lists(${guid(src.listId)})?$select=ItemCount`).catch(() => null),
     ])
     const added = rows(addedRes).map((i) => toRow(i, fields))
@@ -377,6 +378,11 @@ export const sp: Backend = {
     return String(url)
   },
 
+  async sendMail(src, to, subject, html) {
+    await http(src.siteUrl, 'POST', '_api/SP.Utilities.Utility.SendEmail',
+      { properties: { __metadata: { type: 'SP.Utilities.EmailProperties' }, To: { results: to }, Subject: subject, Body: html, AdditionalHeaders: { __metadata: { type: 'Collection(SP.KeyValue)' }, results: [{ __metadata: { type: 'SP.KeyValue' }, Key: 'content-type', Value: 'text/html', ValueType: 'Edm.String' }] } } }, VERBOSE)
+  },
+
   /* ---------------------------------------------------------------- security */
   async getPermissions(src, t): Promise<PermInfo> {
     const base = baseOf(src, t)
@@ -452,8 +458,6 @@ const enc = (s: string) => encodeURIComponent(s).replace(/%24/g, '$').replace(/%
 
 /** columns SharePoint told us do not exist as item properties for this list (learned at run time, see recover()) */
 const unusable = new Set<string>()
-/** people/lookup columns whose $expand SharePoint rejects (seen on some libraries): read their text via FieldValuesAsText instead */
-const noExpand = new Set<string>()
 
 export function selectExpand(fields: SpField[], select: string[], isLibrary: boolean): string {
   const sel = new Set<string>(['Id'])
@@ -463,12 +467,12 @@ export function selectExpand(fields: SpField[], select: string[], isLibrary: boo
     const f = fields.find((x) => x.internal === n)
     if (!f || n === 'ID' || unusable.has(n) || unusable.has(propOf(f))) continue
     const rn = propOf(f)
-    if ((f.kind === 'user' || f.kind === 'lookup') && noExpand.has(rn)) { sel.add(`FieldValuesAsText/${f.internal}`); viaText = true }
+    if ((f.kind === 'user' || f.kind === 'lookup') && noExpand.has(rn)) { sel.add(`FieldValuesAsText/${f.internal}`); if (f.kind === 'user') sel.add(`${rn}Id`); viaText = true }
     else if (f.kind === 'user' || (f.kind === 'lookup' && f.typeAsString.startsWith('Lookup'))) { sel.add(`${rn}/${f.kind === 'lookup' ? f.lookupField || 'Title' : 'Title'}`); if (f.kind === 'user') sel.add(`${rn}/Id`); exp.add(rn) }
     else sel.add(rn)
   }
   if (isLibrary) ['FileRef', 'FileDirRef', 'FileLeafRef', 'FSObjType', 'File_x0020_Type', 'File_x0020_Size'].forEach((x) => sel.add(x))
-  const e = [...exp].slice(0, 12)
+  const e = [...exp].slice(0, viaText ? 11 : 12)
   if (viaText) e.push('FieldValuesAsText')
   return `$select=${[...sel].filter((s) => !s.includes('/') || e.includes(s.split('/')[0])).join(',')}${e.length ? `&$expand=${e.join(',')}` : ''}`
 }
@@ -477,7 +481,7 @@ export function selectExpand(fields: SpField[], select: string[], isLibrary: boo
 async function recover<T>(fn: () => Promise<T>): Promise<T> {
   for (let i = 0; ; i++) {
     try { return await fn() } catch (e) {
-      const ex = /\$expand query is not valid for field '([^']+)'/i.exec((e as Error).message)
+      const ex = /(?:\$expand query is not valid for field|query to field) '([^']+)'/i.exec((e as Error).message)
       if (ex && i < 8 && !noExpand.has(ex[1])) { noExpand.add(ex[1]); continue }
       const m = /field or property '([^']+)' does not exist/i.exec((e as Error).message)
       if (!m || i >= 8 || unusable.has(m[1])) throw e
@@ -493,7 +497,13 @@ function toRow(item: any, fields: SpField[]): Row {
   if (item.File_x0020_Size != null) row.File_x0020_Size = Number(item.File_x0020_Size)
   for (const f of fields) {
     const key = propOf(f) in item ? propOf(f) : f.internal
-    if (!(key in item) && item.FieldValuesAsText && f.internal in item.FieldValuesAsText) { row[f.internal] = item.FieldValuesAsText[f.internal]; continue }
+    const fv = item.FieldValuesAsText
+    const tk = fv && (f.internal in fv ? f.internal : propOf(f) in fv ? propOf(f) : null)
+    if (!(key in item) && tk) {
+      row[f.internal] = fv[tk]
+      if (f.kind === 'user') { let ids = item[`${propOf(f)}Id`]; if (ids && typeof ids === 'object' && 'results' in ids) ids = ids.results; row[f.internal + '__ids'] = Array.isArray(ids) ? ids : ids != null ? [ids] : [] }
+      continue
+    }
     if (!(key in item)) continue
     let v = item[key]
     if (v && typeof v === 'object' && !Array.isArray(v) && 'results' in v) v = v.results

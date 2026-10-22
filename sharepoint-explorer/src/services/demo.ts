@@ -261,6 +261,7 @@ export const demo: Backend = {
   },
   async removePermission(src, t, ra) { await sleep(100); const k = pkey(src, t); perms.set(k, (perms.get(k) ?? []).filter((a) => a.principal.id !== ra.principal.id)) },
   async listRoleDefs(): Promise<RoleDef[]> { return ROLE_DEFS },
+  async sendMail() { await sleep(400) },
   async createShareLink(src, id, edit) { await sleep(200); return `https://contoso.sharepoint.com/:${edit ? 'w' : 'b'}:/s/demo/${src.listId}-${id}` },
   async searchPrincipals(_s, text) { await sleep(120); const t = text.toLowerCase(); return DIRECTORY.filter((p) => p.title.toLowerCase().includes(t) || p.email?.includes(t)).slice(0, 8).map((p) => ({ ...p })) },
   async resolvePrincipal(_s, p) { return p.id > 0 ? p.id : DIRECTORY.find((d) => d.login === p.login)?.id ?? 9999 },

@@ -4,6 +4,13 @@ Connect **any SharePoint list or document library** with one button and get a gr
 instant search and PDF / CSV / JSON export. Built for lists with **millions of rows**: the browser never holds more than a
 capped window of rows; everything else is paged, streamed or aggregated.
 
+## Email files and folders (libraries)
+
+Select one or more files/folders (or use a row's menu → **Email…**) and press **Email**. Folders and files go in as links; optionally create "people in my organization can view" sharing links. Then choose:
+- **Open as draft** – downloads a ready-to-send message (.eml) that opens in Outlook/Mail with the links, your message and any **files you attach from your computer** (up to 20 MB).
+- **Send from SharePoint** – SharePoint's own mail service sends the links (no attachments; your tenant must allow it).
+- **Links in my mail app** – plain `mailto:`.
+
 ## Customizable live dashboard (admins)
 
 Until an admin designs one, everyone sees the auto-built dashboard. Data admins and app owners get a **Customize dashboard** button:

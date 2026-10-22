@@ -7,6 +7,7 @@ import { ItemPanel } from './components/ItemPanel'
 import { ActionMenu, Breadcrumb, FolderPicker, NameDialog, UploadDialog, collectDropped, fromPicker, type MenuItem, type UploadItem } from './components/Library'
 import { PermissionsDialog } from './components/Permissions'
 import { BulkDialog, SearchEverywhere } from './components/Tools'
+import { EmailDialog } from './components/EmailDialog'
 import { downloadUrl, itemUrl, openShareDialog } from './components/Drawer'
 import { FolderIcon } from './components/FileGlyph'
 import { Board } from './components/Board'
@@ -98,6 +99,7 @@ function Shell() {
   const [picker, setPicker] = useState<{ mode: 'Move' | 'Copy'; row: Row } | null>(null)
   const [perm, setPerm] = useState<{ target: PermTarget; title: string } | null>(null)
   const [bulk, setBulk] = useState<Row[] | null>(null)
+  const [mailRows, setMailRows] = useState<Row[] | null>(null)
   const [everywhere, setEverywhere] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const fileIn = useRef<HTMLInputElement>(null)
@@ -290,6 +292,7 @@ function Shell() {
       { label: 'Copy link (organization can view)', icon: 'share', run: () => boot?.backend.createShareLink(engine.src, r.__id, false).then((u) => navigator.clipboard?.writeText(u)).then(() => toast('good', 'Sharing link copied')).catch((e) => toast('bad', (e as Error).message)) },
       { label: favs.has(r.__id) ? 'Remove favorite' : 'Add to favorites', icon: 'star', run: () => toggleFav(r.__id) },
       { label: 'Share…', icon: 'share', run: () => { if (!openShareDialog(engine, r)) toast('warn', 'Pop-up blocked: allow pop-ups for this site to open SharePoint’s Share dialog.') } },
+      { label: 'Email…', icon: 'share', hidden: !lib, run: () => setMailRows([r]) },
       { label: 'Copy link', icon: 'copy', run: () => navigator.clipboard?.writeText(itemUrl(engine, r)).then(() => toast('good', 'Link copied')) },
       { label: access.canManage ? 'Manage access' : 'Who has access', icon: 'lock', sep: true, run: () => setPerm({ target: { kind: 'item', id: r.__id, name: rowName(r) }, title: rowName(r) }) },
       { label: 'Delete', icon: 'trash', danger: true, sep: true, hidden: !access.canDelete, run: () => setConfirmDel([r]) },
@@ -467,6 +470,7 @@ function Shell() {
                 </Menu>
               )}
               {favs.size > 0 && <button className="btn sm" aria-pressed={favActive} onClick={toggleFavFilter}><Icon n="star" size={14} />Favorites <span className="pill">{favs.size}</span></button>}
+              {src.isLibrary && selected.size > 0 && <button className="btn sm" onClick={() => setMailRows(engine.rows.filter((r) => selected.has(r.__id)))}><Icon n="share" size={14} />Email {selected.size}</button>}
               {access.canEdit && selected.size > 1 && <button className="btn sm" onClick={() => setBulk(engine.rows.filter((r) => selected.has(r.__id)))}>✎ Edit {selected.size}</button>}
               {(access.canManage || access.role === 'admin') && <button className="btn sm" onClick={() => setPerm({ target: { kind: 'list' }, title: src.label })}><Icon n="lock" size={14} />Access</button>}
               {access.canDelete && selected.size > 0 && <button className="btn sm danger" onClick={() => setConfirmDel(engine.rows.filter((r) => selected.has(r.__id)))}><Icon n="trash" size={14} />Delete {selected.size}</button>}
@@ -519,6 +523,7 @@ function Shell() {
             </div>
           </section>
         )}
+      {mailRows && engine && <EmailDialog engine={engine} rows={mailRows} mine={boot.who.upn} onClose={() => setMailRows(null)} />}
       {menu && engine && <ActionMenu at={menu.at} title={rowName(menu.row)} items={actionsFor(menu.row)} onClose={() => setMenu(null)} />}
       </main>
 

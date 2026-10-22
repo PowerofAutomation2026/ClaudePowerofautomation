@@ -154,9 +154,12 @@ export function sortRows(rows: Row[], q: Query, fields: SpField[], isLibrary = f
 
 const dt = (d: Date) => `datetime'${d.toISOString()}'`
 
+/** people/lookup columns SharePoint refused to $expand (learned at run time); they are filtered locally instead */
+export const noExpand = new Set<string>()
+
 export function clauseToOData(c: Clause, f: SpField): string | null {
   const n = propOf(f)
-  if ((f.kind === 'user' || f.kind === 'lookup') && f.multi) return null   // multi-value people/lookups cannot be filtered through REST: evaluated locally only
+  if ((f.kind === 'user' || f.kind === 'lookup') && (f.multi || noExpand.has(n))) return null   // multi-value people/lookups cannot be filtered through REST: evaluated locally only
   const fieldRef = f.kind === 'user' ? `${n}/Title` : f.kind === 'lookup' ? `${n}/${f.lookupField || 'Title'}` : n
   switch (c.op) {
     case 'empty': return `${f.kind === 'user' || f.kind === 'lookup' ? n + 'Id' : n} eq null`

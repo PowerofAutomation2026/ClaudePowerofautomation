@@ -186,6 +186,8 @@ export interface Backend {
   listRoleDefs(src: SourceConfig): Promise<RoleDef[]>
   /** organisation-wide sharing link (view or edit) created through SharePoint's own sharing service */
   createShareLink(src: SourceConfig, id: number, edit: boolean): Promise<string>
+  /** SharePoint's own mail service (links only, no attachments) */
+  sendMail(src: SourceConfig, to: string[], subject: string, html: string): Promise<void>
 }
 
 /* ---- conditional formatting (colour rules) ---- */
