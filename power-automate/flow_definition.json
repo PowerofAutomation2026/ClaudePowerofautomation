@@ -1,0 +1,469 @@
+{
+  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "$connections": {
+      "defaultValue": {},
+      "type": "Object"
+    },
+    "$authentication": {
+      "defaultValue": {},
+      "type": "SecureObject"
+    }
+  },
+  "triggers": {
+    "manual": {
+      "type": "Request",
+      "kind": "Button",
+      "inputs": {
+        "schema": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "title": "Source site URL",
+              "type": "string",
+              "x-ms-dynamically-added": true,
+              "description": "e.g. https://contoso.sharepoint.com/sites/Source",
+              "x-ms-content-hint": "TEXT"
+            },
+            "text_1": {
+              "title": "Source library",
+              "type": "string",
+              "x-ms-dynamically-added": true,
+              "description": "Library display title, e.g. Documents",
+              "x-ms-content-hint": "TEXT"
+            },
+            "text_2": {
+              "title": "Destination site URL",
+              "type": "string",
+              "x-ms-dynamically-added": true,
+              "description": "e.g. https://contoso.sharepoint.com/sites/Target",
+              "x-ms-content-hint": "TEXT"
+            },
+            "text_3": {
+              "title": "Destination library",
+              "type": "string",
+              "x-ms-dynamically-added": true,
+              "description": "Library display title, e.g. Documents",
+              "x-ms-content-hint": "TEXT"
+            },
+            "boolean": {
+              "title": "Skip already flagged folders",
+              "type": "boolean",
+              "x-ms-dynamically-added": true,
+              "description": "Yes = only copy folders not yet flagged",
+              "x-ms-content-hint": "BOOLEAN"
+            }
+          },
+          "required": [
+            "text",
+            "text_1",
+            "text_2",
+            "text_3"
+          ]
+        }
+      }
+    }
+  },
+  "actions": {
+    "Init_SrcSite": {
+      "type": "InitializeVariable",
+      "inputs": {
+        "variables": [
+          {
+            "name": "SrcSite",
+            "type": "string",
+            "value": "@triggerBody()?['text']"
+          }
+        ]
+      },
+      "runAfter": {}
+    },
+    "Init_SrcLib": {
+      "type": "InitializeVariable",
+      "inputs": {
+        "variables": [
+          {
+            "name": "SrcLib",
+            "type": "string",
+            "value": "@triggerBody()?['text_1']"
+          }
+        ]
+      },
+      "runAfter": {
+        "Init_SrcSite": [
+          "Succeeded"
+        ]
+      }
+    },
+    "Init_DestSite": {
+      "type": "InitializeVariable",
+      "inputs": {
+        "variables": [
+          {
+            "name": "DestSite",
+            "type": "string",
+            "value": "@triggerBody()?['text_2']"
+          }
+        ]
+      },
+      "runAfter": {
+        "Init_SrcLib": [
+          "Succeeded"
+        ]
+      }
+    },
+    "Init_DestLib": {
+      "type": "InitializeVariable",
+      "inputs": {
+        "variables": [
+          {
+            "name": "DestLib",
+            "type": "string",
+            "value": "@triggerBody()?['text_3']"
+          }
+        ]
+      },
+      "runAfter": {
+        "Init_DestSite": [
+          "Succeeded"
+        ]
+      }
+    },
+    "Init_SkipFlagged": {
+      "type": "InitializeVariable",
+      "inputs": {
+        "variables": [
+          {
+            "name": "SkipFlagged",
+            "type": "boolean",
+            "value": "@coalesce(triggerBody()?['boolean'], true)"
+          }
+        ]
+      },
+      "runAfter": {
+        "Init_DestLib": [
+          "Succeeded"
+        ]
+      }
+    },
+    "Init_FlagColumn": {
+      "type": "InitializeVariable",
+      "inputs": {
+        "variables": [
+          {
+            "name": "FlagColumn",
+            "type": "string",
+            "value": "Copied"
+          }
+        ]
+      },
+      "runAfter": {
+        "Init_SkipFlagged": [
+          "Succeeded"
+        ]
+      }
+    },
+    "Init_CopiedCount": {
+      "type": "InitializeVariable",
+      "inputs": {
+        "variables": [
+          {
+            "name": "CopiedCount",
+            "type": "integer",
+            "value": 0
+          }
+        ]
+      },
+      "runAfter": {
+        "Init_FlagColumn": [
+          "Succeeded"
+        ]
+      }
+    },
+    "Get_Source_Root": {
+      "type": "OpenApiConnection",
+      "inputs": {
+        "host": {
+          "connectionName": "shared_sharepointonline",
+          "operationId": "HttpRequest",
+          "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline"
+        },
+        "parameters": {
+          "dataset": "@variables('SrcSite')",
+          "parameters/method": "GET",
+          "parameters/uri": "/_api/web/lists/getbytitle('@{encodeUriComponent(variables('SrcLib'))}')/RootFolder?$select=ServerRelativeUrl",
+          "parameters/headers": {
+            "Accept": "application/json;odata=nometadata"
+          }
+        },
+        "authentication": "@parameters('$authentication')"
+      },
+      "runAfter": {
+        "Init_CopiedCount": [
+          "Succeeded"
+        ]
+      }
+    },
+    "Get_Dest_Root": {
+      "type": "OpenApiConnection",
+      "inputs": {
+        "host": {
+          "connectionName": "shared_sharepointonline",
+          "operationId": "HttpRequest",
+          "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline"
+        },
+        "parameters": {
+          "dataset": "@variables('DestSite')",
+          "parameters/method": "GET",
+          "parameters/uri": "/_api/web/lists/getbytitle('@{encodeUriComponent(variables('DestLib'))}')/RootFolder?$select=ServerRelativeUrl",
+          "parameters/headers": {
+            "Accept": "application/json;odata=nometadata"
+          }
+        },
+        "authentication": "@parameters('$authentication')"
+      },
+      "runAfter": {
+        "Get_Source_Root": [
+          "Succeeded"
+        ]
+      }
+    },
+    "Get_Flag_Field": {
+      "type": "OpenApiConnection",
+      "inputs": {
+        "host": {
+          "connectionName": "shared_sharepointonline",
+          "operationId": "HttpRequest",
+          "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline"
+        },
+        "parameters": {
+          "dataset": "@variables('SrcSite')",
+          "parameters/method": "GET",
+          "parameters/uri": "/_api/web/lists/getbytitle('@{encodeUriComponent(variables('SrcLib'))}')/fields?$filter=InternalName%20eq%20'@{variables('FlagColumn')}'&$select=InternalName",
+          "parameters/headers": {
+            "Accept": "application/json;odata=nometadata"
+          }
+        },
+        "authentication": "@parameters('$authentication')"
+      },
+      "runAfter": {
+        "Get_Dest_Root": [
+          "Succeeded"
+        ]
+      }
+    },
+    "Create_Flag_Column_If_Missing": {
+      "type": "If",
+      "expression": {
+        "equals": [
+          "@length(body('Get_Flag_Field')?['value'])",
+          0
+        ]
+      },
+      "actions": {
+        "Create_Flag_Column": {
+          "type": "OpenApiConnection",
+          "inputs": {
+            "host": {
+              "connectionName": "shared_sharepointonline",
+              "operationId": "HttpRequest",
+              "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline"
+            },
+            "parameters": {
+              "dataset": "@variables('SrcSite')",
+              "parameters/method": "POST",
+              "parameters/uri": "/_api/web/lists/getbytitle('@{encodeUriComponent(variables('SrcLib'))}')/fields",
+              "parameters/headers": {
+                "Accept": "application/json;odata=nometadata",
+                "Content-Type": "application/json;odata=nometadata"
+              },
+              "parameters/body": "{\"FieldTypeKind\":8,\"Title\":\"@{variables('FlagColumn')}\",\"DefaultValue\":\"0\"}"
+            },
+            "authentication": "@parameters('$authentication')"
+          },
+          "runAfter": {}
+        }
+      },
+      "else": {
+        "actions": {}
+      },
+      "runAfter": {
+        "Get_Flag_Field": [
+          "Succeeded"
+        ]
+      }
+    },
+    "Get_Source_Folders": {
+      "type": "OpenApiConnection",
+      "inputs": {
+        "host": {
+          "connectionName": "shared_sharepointonline",
+          "operationId": "HttpRequest",
+          "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline"
+        },
+        "parameters": {
+          "dataset": "@variables('SrcSite')",
+          "parameters/method": "GET",
+          "parameters/uri": "/_api/web/lists/getbytitle('@{encodeUriComponent(variables('SrcLib'))}')/items?$select=Id,FileRef,@{variables('FlagColumn')}&$filter=FSObjType%20eq%201&$top=5000",
+          "parameters/headers": {
+            "Accept": "application/json;odata=nometadata"
+          }
+        },
+        "authentication": "@parameters('$authentication')"
+      },
+      "runAfter": {
+        "Create_Flag_Column_If_Missing": [
+          "Succeeded"
+        ]
+      }
+    },
+    "Filter_Folders": {
+      "type": "Query",
+      "inputs": {
+        "from": "@body('Get_Source_Folders')?['value']",
+        "where": "@or(not(equals(variables('SkipFlagged'), true)), not(equals(item()?[variables('FlagColumn')], true)))"
+      },
+      "runAfter": {
+        "Get_Source_Folders": [
+          "Succeeded"
+        ]
+      }
+    },
+    "Select_Keys": {
+      "type": "Select",
+      "inputs": {
+        "from": "@body('Filter_Folders')",
+        "select": "@concat(formatNumber(length(split(item()?['FileRef'],'/')),'000'),'|',item()?['FileRef'],'|',string(item()?['Id']))"
+      },
+      "runAfter": {
+        "Filter_Folders": [
+          "Succeeded"
+        ]
+      }
+    },
+    "Sort_Keys": {
+      "type": "Compose",
+      "inputs": "@sort(body('Select_Keys'))",
+      "runAfter": {
+        "Select_Keys": [
+          "Succeeded"
+        ]
+      }
+    },
+    "Apply_to_each_folder": {
+      "type": "Foreach",
+      "foreach": "@outputs('Sort_Keys')",
+      "runtimeConfiguration": {
+        "concurrency": {
+          "repetitions": 1
+        }
+      },
+      "actions": {
+        "Parts": {
+          "type": "Compose",
+          "inputs": "@split(items('Apply_to_each_folder'),'|')",
+          "runAfter": {}
+        },
+        "Relative_Path": {
+          "type": "Compose",
+          "inputs": "@substring(outputs('Parts')[1], length(body('Get_Source_Root')?['ServerRelativeUrl']))",
+          "runAfter": {
+            "Parts": [
+              "Succeeded"
+            ]
+          }
+        },
+        "Dest_Path": {
+          "type": "Compose",
+          "inputs": "@concat(body('Get_Dest_Root')?['ServerRelativeUrl'], outputs('Relative_Path'))",
+          "runAfter": {
+            "Relative_Path": [
+              "Succeeded"
+            ]
+          }
+        },
+        "Create_Folder_In_Destination": {
+          "type": "OpenApiConnection",
+          "inputs": {
+            "host": {
+              "connectionName": "shared_sharepointonline",
+              "operationId": "HttpRequest",
+              "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline"
+            },
+            "parameters": {
+              "dataset": "@variables('DestSite')",
+              "parameters/method": "POST",
+              "parameters/uri": "/_api/web/folders",
+              "parameters/headers": {
+                "Accept": "application/json;odata=nometadata",
+                "Content-Type": "application/json;odata=nometadata"
+              },
+              "parameters/body": "{\"ServerRelativeUrl\":\"@{outputs('Dest_Path')}\"}"
+            },
+            "authentication": "@parameters('$authentication')"
+          },
+          "runAfter": {
+            "Dest_Path": [
+              "Succeeded"
+            ]
+          }
+        },
+        "Flag_Source_Folder": {
+          "type": "OpenApiConnection",
+          "inputs": {
+            "host": {
+              "connectionName": "shared_sharepointonline",
+              "operationId": "HttpRequest",
+              "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline"
+            },
+            "parameters": {
+              "dataset": "@variables('SrcSite')",
+              "parameters/method": "POST",
+              "parameters/uri": "/_api/web/lists/getbytitle('@{encodeUriComponent(variables('SrcLib'))}')/items(@{outputs('Parts')[2]})",
+              "parameters/headers": {
+                "Accept": "application/json;odata=nometadata",
+                "Content-Type": "application/json;odata=nometadata",
+                "X-HTTP-Method": "MERGE",
+                "IF-MATCH": "*"
+              },
+              "parameters/body": "{\"@{variables('FlagColumn')}\":true}"
+            },
+            "authentication": "@parameters('$authentication')"
+          },
+          "runAfter": {
+            "Create_Folder_In_Destination": [
+              "Succeeded"
+            ]
+          }
+        },
+        "Increment_CopiedCount": {
+          "type": "IncrementVariable",
+          "inputs": {
+            "name": "CopiedCount",
+            "value": 1
+          },
+          "runAfter": {
+            "Flag_Source_Folder": [
+              "Succeeded"
+            ]
+          }
+        }
+      },
+      "runAfter": {
+        "Sort_Keys": [
+          "Succeeded"
+        ]
+      }
+    },
+    "Summary": {
+      "type": "Compose",
+      "inputs": "@concat('Copied and flagged ', variables('CopiedCount'), ' folder(s) from ', variables('SrcSite'), ' to ', variables('DestSite'))",
+      "runAfter": {
+        "Apply_to_each_folder": [
+          "Succeeded"
+        ]
+      }
+    }
+  }
+}
