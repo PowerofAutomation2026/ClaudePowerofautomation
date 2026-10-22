@@ -47,7 +47,7 @@ export function FolderPicker({ backend, src, root, start, title, onPick, onClose
   const [path, setPath] = useState(start)
   const [list, setList] = useState<{ name: string; url: string }[] | null>(null)
   const [err, setErr] = useState('')
-  useEffect(() => { setList(null); setErr(''); backend.listFolders(src, path).then(setList).catch((e) => { setErr((e as Error).message); setList([]) }) }, [path]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { let live = true; setList(null); setErr(''); backend.listFolders(src, path).then((l) => live && setList(l)).catch((e) => { if (live) { setErr((e as Error).message); setList([]) } }); return () => { live = false } }, [path]) // eslint-disable-line react-hooks/exhaustive-deps
   const up = path !== root ? path.slice(0, path.lastIndexOf('/')) : null
   return (
     <Modal title={title} onClose={onClose}>
@@ -162,6 +162,7 @@ export function ActionMenu({ at, items, onClose, title }: { at: DOMRect; items: 
   const [pos, setPos] = useState({ left: at.left, top: at.bottom })
   useEffect(() => {
     const el = ref.current; if (!el) return
+    const opener = document.activeElement as HTMLElement | null
     const r = el.getBoundingClientRect()
     setPos({ left: Math.max(8, Math.min(at.left - (at.width ? r.width - at.width : 0), window.innerWidth - r.width - 8)), top: Math.max(8, Math.min(at.bottom + 4, window.innerHeight - r.height - 8)) })
     ;(el.querySelector('button') as HTMLElement)?.focus()
@@ -173,7 +174,7 @@ export function ActionMenu({ at, items, onClose, title }: { at: DOMRect; items: 
       if (e.key === 'ArrowUp') { e.preventDefault(); b[(i - 1 + b.length) % b.length]?.focus() }
     }
     document.addEventListener('mousedown', down); document.addEventListener('keydown', key)
-    return () => { document.removeEventListener('mousedown', down); document.removeEventListener('keydown', key) }
+    return () => { document.removeEventListener('mousedown', down); document.removeEventListener('keydown', key); opener?.isConnected && opener.focus?.() }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div ref={ref} className="menu actionmenu" role="menu" aria-label={`Actions for ${title}`} style={{ position: 'fixed', left: pos.left, top: pos.top, right: 'auto' }}>

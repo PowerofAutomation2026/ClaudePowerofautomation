@@ -13,7 +13,7 @@ export function PrincipalPicker({ backend, src, onPick }: { backend: Backend; sr
   useEffect(() => {
     if (q.trim().length < 2) { setRes([]); return }
     const ctl = new AbortController(); setBusy(true)
-    const h = setTimeout(() => backend.searchPrincipals(src, q.trim(), ctl.signal).then((r) => { if (!ctl.signal.aborted) { setRes(r); setAct(0) } }).catch(() => {}).finally(() => setBusy(false)), 280)
+    const h = setTimeout(() => backend.searchPrincipals(src, q.trim(), ctl.signal).then((r) => { if (!ctl.signal.aborted) { setRes(r); setAct(0) } }).catch(() => {}).finally(() => { if (!ctl.signal.aborted) setBusy(false) }), 280)
     return () => { clearTimeout(h); ctl.abort() }
   }, [q]) // eslint-disable-line react-hooks/exhaustive-deps
   return (
@@ -65,12 +65,12 @@ export function PermissionsDialog({ backend, src, target, title, canManage, onCl
       {err && <div className="banner bad" role="alert"><Icon n="info" /><div>{err}</div></div>}
       {!info && !err && <div className="skel" style={{ height: 120 }} aria-busy="true" />}
       {info && <>
-        {target.kind === 'item' && (
+        {(
           <div className={`banner ${info.inherited ? 'info' : ''}`}>
             <Icon n="info" />
             <div style={{ flex: 1 }}>{info.inherited
-              ? <><b>Inheriting</b> permissions from the {src.isLibrary ? 'library or parent folder' : 'list'}. Stop inheriting to give this {what} its own access list.</>
-              : <><b>Unique permissions</b> — this {what} has its own access list. Reset to follow the {src.isLibrary ? 'parent folder' : 'list'} again.</>}</div>
+              ? <><b>Inheriting</b> permissions from the {target.kind === 'list' ? 'site' : src.isLibrary ? 'library or parent folder' : 'list'}. Stop inheriting to give this {what} its own access list.</>
+              : <><b>Unique permissions</b> — this {what} has its own access list. Reset to follow the {target.kind === 'list' ? 'site' : src.isLibrary ? 'parent folder' : 'list'} again.</>}</div>
             {canManage && (info.inherited
               ? <button className="btn sm" disabled={busy} onClick={() => setConfirm(true)}>Stop inheriting</button>
               : <button className="btn sm" disabled={busy} onClick={() => void act(() => backend.setInheritance(src, target, true), 'Now inheriting permissions again')}>Reset to inherit</button>)}
@@ -99,7 +99,7 @@ export function PermissionsDialog({ backend, src, target, title, canManage, onCl
             <button className="btn primary" disabled={!editable || !who || busy}>Grant access</button>
           </form>
         ) : <p className="muted small">Only people with the <b>Manage permissions</b> right (site owners / full control) can change access. You can see who has access.</p>}
-        {!editable && canManage && target.kind === 'item' && <p className="muted small">Stop inheriting first to add or remove people on this {what}.</p>}
+        {!editable && canManage && <p className="muted small">Stop inheriting first to add or remove people on this {what}.</p>}
         <p className="muted small" style={{ marginBottom: 0 }}>These are the real SharePoint permissions: changes apply everywhere the {what} is used, not only in this app.</p>
       </>}
 

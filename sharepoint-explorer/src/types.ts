@@ -167,4 +167,6 @@ export interface Backend {
   searchPrincipals(src: SourceConfig, text: string, signal?: AbortSignal): Promise<(Principal & { login: string })[]>
   resolvePrincipal(src: SourceConfig, p: Principal): Promise<number>
   listRoleDefs(src: SourceConfig): Promise<RoleDef[]>
+  /** organisation-wide sharing link (view or edit) created through SharePoint's own sharing service */
+  createShareLink(src: SourceConfig, id: number, edit: boolean): Promise<string>
 }

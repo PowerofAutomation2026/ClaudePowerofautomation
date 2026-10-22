@@ -41,7 +41,7 @@ const ds = { name: 'dataset', in: 'path', required: true, type: 'string' }
 /** connector "Create file": binary upload (the SDK decodes a base64 string for `format: binary` body parameters) */
 const FILE_API = { path: '/{connectionId}/datasets/{dataset}/files', method: 'POST', parameters: [conn, ds, { name: 'folderPath', in: 'query', required: true, type: 'string' }, { name: 'name', in: 'query', required: true, type: 'string' }, { name: 'queryParametersSingleEncoded', in: 'query', required: false, type: 'boolean' }, { name: 'body', in: 'body', required: true, type: 'string', format: 'binary' }] }
 /** connector "Add attachment" */
-const ATT_API = { path: '/{connectionId}/datasets/{dataset}/tables/{tableName}/items/{itemId}/attachments', method: 'POST', parameters: [conn, ds, { name: 'tableName', in: 'path', required: true, type: 'string' }, { name: 'itemId', in: 'path', required: true, type: 'string' }, { name: 'name', in: 'query', required: true, type: 'string' }, { name: 'body', in: 'body', required: true, type: 'string', format: 'binary' }] }
+const ATT_API = { path: '/{connectionId}/datasets/{dataset}/tables/{tableName}/items/{itemId}/attachments', method: 'POST', parameters: [conn, ds, { name: 'tableName', in: 'path', required: true, type: 'string' }, { name: 'itemId', in: 'path', required: true, type: 'string' }, { name: 'displayName', in: 'query', required: true, type: 'string' }, { name: 'body', in: 'body', required: true, type: 'string', format: 'binary' }] }
 const isConnectorSource = (v: any) => v && typeof v === 'object' && !/dataverse|cds/i.test(String(v.dataSourceType ?? ''))
 for (const v of Object.values<any>(dataSourcesInfo)) {
   if (!isConnectorSource(v)) continue
@@ -320,7 +320,7 @@ export const sp: Backend = {
     return rows(d).map<Attachment>((a) => ({ name: String(a.FileName), url: new URL(src.siteUrl).origin + a.ServerRelativeUrl }))
   },
   async addAttachment(src, id, file) {
-    await exec('AddAttachment', { dataset: src.siteUrl.replace(/\/+$/, ''), tableName: src.listId, itemId: String(id), name: file.name, body: await fileToBase64(file) })
+    await exec('AddAttachment', { dataset: src.siteUrl.replace(/\/+$/, ''), tableName: src.listId, itemId: String(id), displayName: file.name, body: await fileToBase64(file) })
   },
   async deleteAttachment(src, id, name) {
     await http(src.siteUrl, 'POST', `_api/web/lists(${guid(src.listId)})/items(${id})/AttachmentFiles/getByFileName(${odataQuote(name)})`, undefined, { 'X-HTTP-Method': 'DELETE', 'IF-MATCH': '*' })
@@ -328,6 +328,14 @@ export const sp: Backend = {
   async getVersions(src, id) {
     const d = await http(src.siteUrl, 'GET', `_api/web/lists(${guid(src.listId)})/items(${id})/versions`)
     return rows(d).map<VersionInfo>((v) => ({ label: String(v.VersionLabel ?? ''), modified: String(v.Created ?? v.Modified ?? ''), by: String(v.Editor?.LookupValue ?? v.Editor?.Title ?? v.Author?.LookupValue ?? ''), size: v.Size != null ? Number(v.Size) : undefined, comment: v.CheckInComment || undefined, current: !!v.IsCurrentVersion }))
+  },
+
+  async createShareLink(src, id, edit) {
+    const d = await http(src.siteUrl, 'POST', `_api/web/lists(${guid(src.listId)})/items(${id})/ShareLink`,
+      { request: { createLink: true, settings: { linkKind: edit ? 3 : 2, role: edit ? 2 : 1, expiration: null, restrictShareMembership: false, updatePassword: false, password: '' } } }, VERBOSE)
+    const url = d?.sharingLinkInfo?.Url ?? d?.d?.ShareLink?.sharingLinkInfo?.Url ?? d?.ShareLink?.sharingLinkInfo?.Url
+    if (!url) throw new Error('SharePoint did not return a sharing link. Sharing may be turned off for this site.')
+    return String(url)
   },
 
   /* ---------------------------------------------------------------- security */
@@ -341,7 +349,7 @@ export const sp: Backend = {
       const defs = r.RoleDefinitionBindings?.results ?? r.RoleDefinitionBindings ?? []
       return { principal: { id: r.PrincipalId, title: r.Member?.Title ?? '', login: r.Member?.LoginName ?? '', kind: r.Member?.PrincipalType === 1 ? 'user' : 'group', email: r.Member?.Email }, roles: defs.map((x: any) => String(x.Name)), roleIds: defs.map((x: any) => Number(x.Id)) }
     })
-    return { inherited: t.kind === 'list' ? false : uniq?.value === false || uniq === false, assignments }
+    return { inherited: uniq?.value === false || uniq === false, assignments }   // lists inherit from the site until broken, too
   },
   async setInheritance(src, t, inherit) {
     const base = baseOf(src, t)
@@ -354,15 +362,15 @@ export const sp: Backend = {
     await Promise.all(ra.roleIds.map((rid) => http(src.siteUrl, 'POST', `${baseOf(src, t)}/roleassignments/removeroleassignment(principalid=${ra.principal.id},roledefid=${rid})`)))
   },
   async listRoleDefs(src): Promise<RoleDef[]> {
-    const d = await http(src.siteUrl, 'GET', '_api/web/roledefinitions?$select=Id,Name,Hidden,RoleTypeKind&$orderby=BasePermissions')
-    return rows(d).filter((r) => !r.Hidden && r.RoleTypeKind !== 1 && !/limited access/i.test(r.Name)).map((r) => ({ id: r.Id, name: String(r.Name) }))
+    const d = await http(src.siteUrl, 'GET', '_api/web/roledefinitions?$select=Id,Name,Hidden,RoleTypeKind,Order')
+    return rows(d).filter((r) => !r.Hidden && r.RoleTypeKind !== 1 && !/limited access/i.test(r.Name)).sort((a, b) => Number(a.Order ?? 0) - Number(b.Order ?? 0)).map((r) => ({ id: r.Id, name: String(r.Name) }))
   },
   async searchPrincipals(src, text, signal) {
     const out: (Principal & { login: string })[] = []
     try {
       const d = await http(src.siteUrl, 'POST', '_api/SP.UI.ApplicationPages.ClientPeoplePickerWebServiceInterface.clientPeoplePickerSearchUser',
         { queryParams: { __metadata: { type: 'SP.UI.ApplicationPages.ClientPeoplePickerQueryParameters' }, AllowEmailAddresses: true, AllowMultipleEntities: false, AllUrlZones: false, MaximumEntitySuggestions: 8, PrincipalSource: 15, PrincipalType: 15, QueryString: text } }, VERBOSE, signal)
-      const raw = d?.ClientPeoplePickerSearchUser ?? d?.d?.ClientPeoplePickerSearchUser
+      const raw = d?.value ?? d?.ClientPeoplePickerSearchUser ?? d?.d?.ClientPeoplePickerSearchUser   // nometadata wraps a scalar result as { value }
       for (const e of typeof raw === 'string' ? JSON.parse(raw) : raw ?? []) {
         const isGroup = e.EntityType === 'SPGroup' || e.EntityType === 'SecGroup' || /group/i.test(e.EntityType ?? '')
         out.push({ id: Number(e.EntityData?.SPGroupID ?? 0), title: e.DisplayText, login: e.Key, kind: isGroup ? 'group' : 'user', email: e.EntityData?.Email })
@@ -469,14 +477,14 @@ async function writeBody(src: SourceConfig, fields: SpField[], values: Record<st
     if (!f || (!isEditable(f) && k !== 'FileLeafRef')) continue
     const empty = v === '' || v == null || (Array.isArray(v) && !v.length)
     if (f.kind === 'user') {
-      const ps = (v as Principal[] | undefined) ?? []
+      const ps = ((v as Principal[] | undefined) ?? []).filter((p) => p.id > 0 || p.login)
       const ids = await Promise.all(ps.map((p) => sp.resolvePrincipal(src, p)))
       body[`${k}Id`] = f.multi ? { __metadata: { type: 'Collection(Edm.Int32)' }, results: ids } : ids[0] ?? null
     } else if (f.kind === 'multichoice') body[k] = { __metadata: { type: 'Collection(Edm.String)' }, results: (v as string[]) ?? [] }
     else if (f.kind === 'url') { const u = v as { url?: string; desc?: string } | null; body[k] = u?.url ? { __metadata: { type: 'SP.FieldUrlValue' }, Url: u.url, Description: u.desc || u.url } : null }
     else if (empty) body[k] = null
     else if (f.kind === 'number' || f.kind === 'currency') body[k] = Number(v)
-    else if (f.kind === 'date') body[k] = new Date(String(v)).toISOString()
+    else if (f.kind === 'date') body[k] = /^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? `${v}T12:00:00Z` : new Date(String(v)).toISOString()   // noon UTC: a date-only value never slips to the previous day in any time zone
     else body[k] = v
   }
   return body

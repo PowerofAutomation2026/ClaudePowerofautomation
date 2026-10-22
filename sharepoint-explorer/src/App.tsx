@@ -180,7 +180,7 @@ function Shell() {
     if (!engine || !src || !boot) return
     const v: ViewDef = { id: uid(), name, sourceId: src.id, q: engine.q, cols: visible, layout: view, owner: boot.who.upn, audience, groups, created: new Date().toISOString() }
     try {
-      if (audience === 'me') { const mine = [...viewsAll.mine, v]; setViewsAll((c) => ({ ...c, mine })); const where = await boot.backend.saveMine(boot.who.upn, mine); toast('good', `View “${name}” saved${where === 'device' ? ' on this device' : ''}`) }
+      if (audience === 'me') { const mine = [...viewsAll.mine, v]; setViewsAll((c) => ({ ...c, mine })); const where = await boot.backend.saveMine(boot.who.upn, mine); toast('good', `View “${name}” saved${where === 'device' ? ' in this browser only' : ''}`) }
       else { const shared = [...viewsAll.shared, v]; await boot.backend.saveShared(shared); setViewsAll((c) => ({ ...c, shared })); toast('good', `View “${name}” shared`) }
     } catch (e) { toast('bad', `Could not save the view: ${(e as Error).message}`) }
   }
@@ -201,9 +201,9 @@ function Shell() {
     else if (Object.keys(values).length) await boot.backend.updateItem(engine.src, engine.fields, id, values)
     let failed = 0
     for (const f of files) { try { await boot.backend.addAttachment(engine.src, rid!, f) } catch { failed++ } }
-    if (id != null) { const fresh = await boot.backend.getItem(engine.src, engine.fields, id); if (fresh) engine.patchRow(fresh) } else void engine.refresh()
+    if (id != null) { const fresh = await boot.backend.getItem(engine.src, engine.fields, id); if (fresh) { engine.patchRow(fresh); setOpen((o) => (o && o.__id === fresh.__id ? { ...o, ...fresh } : o)) } } else void engine.refresh()
     toast(failed ? 'warn' : 'good', id == null ? 'Item created' : 'Saved' + (failed ? ` — ${failed} attachment(s) failed` : ''))
-    if (!again) { setPanel(null); if (id != null) setOpen((o) => o) }
+    if (!again) setPanel(null)
   }
   const toggleFav = (id: number) => setFavs((cur) => { const n = new Set(cur); n.has(id) ? n.delete(id) : n.add(id); if (src) lsSet(`spx.fav.${src.id}`, [...n]); return n })
   const favActive = !!engine?.q.clauses.some((c) => c.field === 'ID' && c.op === 'in')
@@ -236,6 +236,7 @@ function Shell() {
       { label: 'Move to…', icon: '↦', hidden: !(lib && access.canEdit), run: () => setPicker({ mode: 'Move', row: r }) },
       { label: 'Copy to…', icon: 'copy', hidden: !(lib && access.canEdit && !isFolder), run: () => setPicker({ mode: 'Copy', row: r }) },
       { label: 'Download', icon: 'download', hidden: !(lib && !isFolder), run: () => window.open(downloadUrl(engine, r), '_blank', 'noopener') },
+      { label: 'Copy link (organization can view)', icon: 'share', run: () => boot?.backend.createShareLink(engine.src, r.__id, false).then((u) => navigator.clipboard?.writeText(u)).then(() => toast('good', 'Sharing link copied')).catch((e) => toast('bad', (e as Error).message)) },
       { label: favs.has(r.__id) ? 'Remove favorite' : 'Add to favorites', icon: 'star', run: () => toggleFav(r.__id) },
       { label: 'Share…', icon: 'share', run: () => { if (!openShareDialog(engine, r)) toast('warn', 'Pop-up blocked: allow pop-ups for this site to open SharePoint’s Share dialog.') } },
       { label: 'Copy link', icon: 'copy', run: () => navigator.clipboard?.writeText(itemUrl(engine, r)).then(() => toast('good', 'Link copied')) },
@@ -452,7 +453,7 @@ function Shell() {
         return <Drawer engine={engine} row={open} index={Math.max(0, i)} access={access} fav={favs.has(open.__id)} onFav={() => toggleFav(open.__id)} onInline={inlineSave} actions={actionsFor(open).filter((a) => a.label !== 'Details' && a.label !== 'Copy link' && a.label !== 'Download')} onClose={() => setOpen(null)} onNav={(d) => { const n = engine.rows[i + d]; if (n) setOpen(n) }} />
       })()}
       {exp && engine && src && <ExportDialog engine={engine} cols={cols} selected={selected} title={src.label} initial={exp} onClose={() => setExp(null)} />}
-      {panel && engine && <ItemPanel engine={engine} row={panel.row} onClose={() => setPanel(null)} onSave={(v, f, again) => saveItem(panel.row ? panel.row.__id : null, v, f, again)} />}
+      {panel && engine && <ItemPanel key={panel.row?.__id ?? 'new'} engine={engine} row={panel.row} onClose={() => setPanel(null)} onSave={(v, f, again) => saveItem(panel.row ? panel.row.__id : null, v, f, again)} />}
       {uploads && engine && src && <UploadDialog backend={boot.backend} src={src} dest={curFolder} items={uploads} onClose={() => setUploads(null)} onDone={() => void engine.refresh()} />}
       {nameDlg && engine && src && (nameDlg.mode === 'folder'
         ? <NameDialog title="New folder" label="Folder name" cta="Create" onClose={() => setNameDlg(null)} onSubmit={async (n) => { await boot.backend.createFolder(src, curFolder, n); toast('good', `Folder “${n}” created`); void engine.refresh() }} />

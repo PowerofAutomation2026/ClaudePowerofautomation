@@ -6,7 +6,7 @@ import { bytes, cellText, fmtDate, relTime } from '../util'
 import { CellView } from './Grid'
 import { FileGlyph, extOf, isImage } from './FileGlyph'
 import type { MenuItem } from './Library'
-import { Icon, Modal, hashColor, initials, useToast } from './ui'
+import { Icon, Menu, Modal, hashColor, initials, useToast } from './ui'
 
 const encPath = (p: string) => p.split('/').map(encodeURIComponent).join('/')   // encode each segment: spaces, # and % in names broke the old links (404)
 const OFFICE = /^(docx?|xlsx?|pptx?|vsdx?|one)$/i
@@ -17,7 +17,8 @@ export function itemUrl(engine: Engine, row: Row): string {
   const web = engine.src.siteUrl.replace(/\/$/, '')
   if (engine.src.isLibrary && row.FileRef) {
     const ref = String(row.FileRef)
-    if (row.FSObjType === 1) return `${origin}${encPath(engine.src.url ?? ref.slice(0, ref.lastIndexOf('/')))}/Forms/AllItems.aspx?id=${encodeURIComponent(ref)}`
+    if (row.FSObjType === 1 && engine.src.url) return `${origin}${encPath(engine.src.url)}/Forms/AllItems.aspx?id=${encodeURIComponent(ref)}`
+    if (row.FSObjType === 1) return `${web}/_layouts/15/listform.aspx?PageType=4&ListId=${encodeURIComponent('{' + engine.src.listId + '}')}&ID=${row.__id}`
     return `${origin}${encPath(ref)}${OFFICE.test(ref.split('.').pop() ?? '') ? '?web=1' : ''}`   // ?web=1 = open Office files in the browser
   }
   if (engine.src.url) return `${origin}${encPath(engine.src.url)}/DispForm.aspx?ID=${row.__id}`
@@ -38,13 +39,14 @@ export function Drawer({ engine, row, index, actions, access, fav, onFav, onInli
   const [versions, setVersions] = useState<VersionInfo[] | null>(null)
   const [atts, setAtts] = useState<Attachment[]>([])
   const lib = engine.src.isLibrary
+  useEffect(() => { setTab('details'); setVersions(null); setAtts([]) }, [row.__id])
   useEffect(() => {
-    setFull(row); setTab('details'); setVersions(null); setAtts([])
+    setFull(row)
     let live = true
     engine.backend.getItem(engine.src, engine.fields, row.__id).then((r) => { if (live && r) setFull({ ...row, ...r }) }).catch(() => {})
     if (!lib) engine.backend.listAttachments(engine.src, row.__id).then((a) => live && setAtts(a)).catch(() => {})
     return () => { live = false }
-  }, [row.__id]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [row]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (tab === 'history' && !versions) engine.backend.getVersions(engine.src, row.__id).then(setVersions).catch(() => setVersions([])) }, [tab]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const title = cellText(engine.fields.find((f) => f.internal === (lib ? 'FileLeafRef' : 'Title')) ?? ({ kind: 'text', internal: 'Title' } as SpField), full) || `Item ${row.__id}`
@@ -54,6 +56,10 @@ export function Drawer({ engine, row, index, actions, access, fav, onFav, onInli
   const ext = extOf(String(full.FileLeafRef ?? ''))
   const origin = new URL(engine.src.siteUrl).origin
   const primary = actions.filter((a) => !a.hidden)
+  const copyLink = async (edit: boolean) => {
+    try { const u = await engine.backend.createShareLink(engine.src, full.__id, edit); await navigator.clipboard?.writeText(u); toast('good', `${edit ? 'Edit' : 'View'} link copied — anyone in your organization with the link can ${edit ? 'edit' : 'view'}`) }
+    catch (e) { toast('bad', (e as Error).message) }
+  }
 
   return (
     <Modal title={`Details: ${title}`} onClose={onClose} side>
@@ -72,7 +78,14 @@ export function Drawer({ engine, row, index, actions, access, fav, onFav, onInli
         {lib && !isFolder && isImage(ext) && engine.backend.mode === 'live' && <div className="dprev"><img src={`${origin}/_layouts/15/getpreview.ashx?path=${encodeURIComponent(origin + full.FileRef)}&resolution=3`} alt={`Preview of ${title}`} onError={(e) => ((e.currentTarget.parentElement as HTMLElement).style.display = 'none')} /></div>}
         <div className="row" style={{ marginBottom: 8, gap: 6 }}>
           <a className="btn primary" href={url} target="_blank" rel="noreferrer noopener"><Icon n="ext" size={16} />Open in SharePoint</a>
-          <button className="btn" onClick={() => { if (!openShareDialog(engine, full)) toast('warn', 'Your browser blocked the pop-up. Allow pop-ups for this site, or use “Open in SharePoint” and press Share there.') }}><Icon n="share" size={16} />Share</button>
+          <Menu label="Share" icon="share" align="left">
+            {(close) => <div>
+              <button onClick={() => { close(); copyLink(false) }}><Icon n="copy" size={16} />Copy link — people in my organization can view</button>
+              <button onClick={() => { close(); copyLink(true) }}><Icon n="copy" size={16} />Copy link — people in my organization can edit</button>
+              <hr />
+              <button onClick={() => { close(); if (!openShareDialog(engine, full)) toast('warn', 'Pop-up blocked. Allow pop-ups for this site, or use “Open in SharePoint” and press Share there.') }}><Icon n="ext" size={16} />Open SharePoint’s Share dialog…</button>
+            </div>}
+          </Menu>
           {lib && !isFolder && <a className="btn" href={downloadUrl(engine, full)} target="_blank" rel="noreferrer noopener"><Icon n="download" size={16} />Download</a>}
           <button className="btn" aria-pressed={fav} onClick={onFav}><Icon n="star" size={16} />{fav ? 'Favorited' : 'Favorite'}</button>
           <button className="btn" onClick={() => navigator.clipboard?.writeText(url).then(() => toast('good', 'Link copied'))}><Icon n="copy" size={16} />Copy link</button>

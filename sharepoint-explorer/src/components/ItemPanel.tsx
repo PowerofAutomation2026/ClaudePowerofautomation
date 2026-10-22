@@ -9,7 +9,7 @@ import { Icon, Modal, hashColor, initials, useToast } from './ui'
 
 type Val = string | boolean | string[] | Principal[] | { url: string; desc: string }
 
-const iso = (d: Date) => d.toISOString().slice(0, 10)
+const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`   // local calendar day, not UTC
 function initial(f: SpField, row: Row | null): Val {
   const v = row?.[f.internal]
   switch (f.kind) {
@@ -59,7 +59,7 @@ export function ItemPanel({ engine, row, onSave, onClose }: { engine: Engine; ro
       if (f.kind === 'url' && !empty && !/^https?:\/\//i.test((v as { url: string }).url)) e[f.internal] = 'Enter a full web address starting with https://'
     }
     setErr(e)
-    if (Object.keys(e).length) { setTimeout(() => body.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus(), 30); return false }
+    if (Object.keys(e).length) { setTimeout(() => { const el = body.current?.querySelector<HTMLElement>('[aria-invalid="true"]') ?? body.current?.querySelector<HTMLElement>('.ip-err')?.closest('.ip-field')?.querySelector<HTMLElement>('button,input,select,textarea'); el?.focus(); el?.scrollIntoView({ block: 'center' }) }, 30); return false }
     return true
   }
   const submit = async (again = false) => {

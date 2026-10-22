@@ -163,7 +163,8 @@ try {
       if ($urls.Count) { $ConfigSiteUrl = ($urls | Where-Object { $_ -match '/(sites|teams)/' } | Select-Object -First 1); if (-not $ConfigSiteUrl) { $ConfigSiteUrl = $urls[0] }; Ok "Using SharePoint site $ConfigSiteUrl for shared settings"; break }
     }
   }
-  if (-not $ConfigSiteUrl -and -not $NonInteractive) { $ConfigSiteUrl = (Read-Host 'Could not detect a SharePoint site. Config site URL (e.g. https://contoso.sharepoint.com/sites/Apps)').Trim() }
+  if (-not $ConfigSiteUrl -and -not $NonInteractive) { do { $ConfigSiteUrl = (Read-Host 'Could not detect a SharePoint site. Config site URL (required, e.g. https://contoso.sharepoint.com/sites/Apps)').Trim() } while (-not $ConfigSiteUrl) }
+  if (-not $ConfigSiteUrl) { throw 'A config site is required: without it other users cannot see which list the owner connected. Re-run with -ConfigSiteUrl https://<tenant>.sharepoint.com/sites/<site>.' }
   if ($ConfigSiteUrl) { $ConfigSiteUrl = $ConfigSiteUrl.TrimEnd('/') }
   $appConfig = [ordered]@{ owners = $OwnerUpn; configSiteUrl = "$ConfigSiteUrl"; configList = 'SPX_Config' }
   [System.IO.File]::WriteAllText((Join-Path $root 'src\appconfig.json'), (($appConfig | ConvertTo-Json -Depth 4) + "`n"), $utf8NoBom)
