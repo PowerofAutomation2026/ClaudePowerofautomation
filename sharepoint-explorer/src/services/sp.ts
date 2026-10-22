@@ -7,7 +7,7 @@ import { getClient } from '@microsoft/power-apps/data'
 import { getContext } from '@microsoft/power-apps/app'
 import baked from '../appconfig.json'
 import type { Access, AppConfig, Attachment, Backend, PermInfo, PermTarget, Principal, RoleAssign, RoleDef, VersionInfo, ViewDef, FieldKind, Page, Query, Row, SourceConfig, SpField, SpList, SpSite } from '../types'
-import { buildFilter, parseSearch } from '../query'
+import { buildFilter, parseSearch, restName } from '../query'
 import { accessFrom } from '../access'
 import { isEditable } from '../editable'
 import { lsGet, lsSet, odataQuote, sleep } from '../util'
@@ -189,7 +189,7 @@ export const sp: Backend = {
     const out: SpField[] = []
     for (const r of rows(fieldsRes)) {
       const type = String(r.TypeAsString)
-      if (SKIP_TYPES.has(type) || SKIP_NAMES.has(r.InternalName)) continue
+      if (SKIP_TYPES.has(type) || SKIP_NAMES.has(r.InternalName) || (String(r.InternalName).startsWith('_') && r.InternalName !== '_Comments')) continue   // _ColorTag, _ComplianceFlags… are not selectable item properties
       const kind: FieldKind = r.InternalName === 'ID' ? 'counter' : KIND[type] ?? 'other'
       const multi = /Multi$/.test(type)
       out.push({
@@ -221,7 +221,7 @@ export const sp: Backend = {
     } else {
       if (byId && cursor?.startsWith('id:')) extra.push(`Id ${asc ? 'ge' : 'le'} ${Number(cursor.slice(3))}`)
       const filter = buildFilter(q, fields, src.isLibrary, extra)
-      const order = byId ? `Id ${asc ? 'asc' : 'desc'}` : `${q.sort.field} ${asc ? 'asc' : 'desc'}`
+      const order = byId ? `Id ${asc ? 'asc' : 'desc'}` : `${restName(q.sort.field)} ${asc ? 'asc' : 'desc'}`
       uri = `_api/web/lists(${guid(src.listId)})/items?${selectExpand(fields, select, src.isLibrary)}&$orderby=${enc(order)}&$top=${Math.min(top, 5000)}${filter ? `&$filter=${enc(filter)}` : ''}`
     }
     const d = await http(src.siteUrl, 'GET', uri, undefined, {}, signal)
@@ -418,20 +418,39 @@ export const sp: Backend = {
   },
 }
 
+{
+  const wrap = <K extends 'query' | 'getItem' | 'changes'>(k: K) => { const orig = (sp[k] as (...a: any[]) => Promise<any>).bind(sp); (sp as any)[k] = (...a: any[]) => recover(() => orig(...a)) }
+  wrap('query'); wrap('getItem'); wrap('changes')
+}
 const enc = (s: string) => encodeURIComponent(s).replace(/%24/g, '$')
+
+/** columns SharePoint told us do not exist as item properties for this list (learned at run time, see recover()) */
+const unusable = new Set<string>()
 
 export function selectExpand(fields: SpField[], select: string[], isLibrary: boolean): string {
   const sel = new Set<string>(['Id'])
   const exp = new Set<string>()
   for (const n of select) {
     const f = fields.find((x) => x.internal === n)
-    if (!f || n === 'ID') continue
-    if (f.kind === 'user' || (f.kind === 'lookup' && f.typeAsString.startsWith('Lookup'))) { sel.add(`${n}/${f.kind === 'lookup' ? f.lookupField || 'Title' : 'Title'}`); if (f.kind === 'user') sel.add(`${n}/Id`); exp.add(n) }
-    else sel.add(n)
+    if (!f || n === 'ID' || unusable.has(n) || unusable.has(restName(n))) continue
+    const rn = restName(n)
+    if (f.kind === 'user' || (f.kind === 'lookup' && f.typeAsString.startsWith('Lookup'))) { sel.add(`${rn}/${f.kind === 'lookup' ? f.lookupField || 'Title' : 'Title'}`); if (f.kind === 'user') sel.add(`${rn}/Id`); exp.add(rn) }
+    else sel.add(rn)
   }
   if (isLibrary) ['FileRef', 'FileDirRef', 'FileLeafRef', 'FSObjType', 'File_x0020_Type', 'File_x0020_Size'].forEach((x) => sel.add(x))
   const e = [...exp].slice(0, 12)
   return `$select=${[...sel].filter((s) => !s.includes('/') || e.includes(s.split('/')[0])).join(',')}${e.length ? `&$expand=${e.join(',')}` : ''}`
+}
+
+/** If SharePoint says "The field or property 'X' does not exist", drop X from future queries and retry (a real list always has a few surprises). */
+async function recover<T>(fn: () => Promise<T>): Promise<T> {
+  for (let i = 0; ; i++) {
+    try { return await fn() } catch (e) {
+      const m = /field or property '([^']+)' does not exist/i.exec((e as Error).message)
+      if (!m || i >= 8 || unusable.has(m[1])) throw e
+      unusable.add(m[1]); if (m[1].startsWith('OData_')) unusable.add(m[1].slice(6))
+    }
+  }
 }
 
 function toRow(item: any, fields: SpField[]): Row {
@@ -440,8 +459,9 @@ function toRow(item: any, fields: SpField[]): Row {
   if (item.FSObjType != null) row.FSObjType = Number(item.FSObjType)
   if (item.File_x0020_Size != null) row.File_x0020_Size = Number(item.File_x0020_Size)
   for (const f of fields) {
-    if (!(f.internal in item)) continue
-    let v = item[f.internal]
+    const key = restName(f.internal) in item ? restName(f.internal) : f.internal
+    if (!(key in item)) continue
+    let v = item[key]
     if (v && typeof v === 'object' && !Array.isArray(v) && 'results' in v) v = v.results
     if (f.kind === 'user') row[f.internal + '__ids'] = (Array.isArray(v) ? v : v ? [v] : []).map((x: any) => x?.Id).filter((n: unknown) => n != null)
     if (f.kind === 'user' || f.kind === 'lookup') v = Array.isArray(v) ? v.map((x) => x?.[f.lookupField || 'Title'] ?? x?.Title ?? x?.Label ?? '').join('; ') : v?.[f.lookupField || 'Title'] ?? v?.Title ?? v?.Label ?? ''
@@ -494,17 +514,18 @@ async function writeBody(src: SourceConfig, fields: SpField[], values: Record<st
   for (const [k, v] of Object.entries(values)) {
     const f = fields.find((x) => x.internal === k)
     if (!f || (!isEditable(f) && k !== 'FileLeafRef')) continue
+    const rk = restName(k)
     const empty = v === '' || v == null || (Array.isArray(v) && !v.length)
     if (f.kind === 'user') {
       const ps = ((v as Principal[] | undefined) ?? []).filter((p) => p.id > 0 || p.login)
       const ids = await Promise.all(ps.map((p) => sp.resolvePrincipal(src, p)))
-      body[`${k}Id`] = f.multi ? { __metadata: { type: 'Collection(Edm.Int32)' }, results: ids } : ids[0] ?? null
-    } else if (f.kind === 'multichoice') body[k] = { __metadata: { type: 'Collection(Edm.String)' }, results: (v as string[]) ?? [] }
-    else if (f.kind === 'url') { const u = v as { url?: string; desc?: string } | null; body[k] = u?.url ? { __metadata: { type: 'SP.FieldUrlValue' }, Url: u.url, Description: u.desc || u.url } : null }
-    else if (empty) body[k] = null
-    else if (f.kind === 'number' || f.kind === 'currency') body[k] = Number(v)
-    else if (f.kind === 'date') body[k] = /^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? `${v}T12:00:00Z` : new Date(String(v)).toISOString()   // noon UTC: a date-only value never slips to the previous day in any time zone
-    else body[k] = v
+      body[`${rk}Id`] = f.multi ? { __metadata: { type: 'Collection(Edm.Int32)' }, results: ids } : ids[0] ?? null
+    } else if (f.kind === 'multichoice') body[rk] = { __metadata: { type: 'Collection(Edm.String)' }, results: (v as string[]) ?? [] }
+    else if (f.kind === 'url') { const u = v as { url?: string; desc?: string } | null; body[rk] = u?.url ? { __metadata: { type: 'SP.FieldUrlValue' }, Url: u.url, Description: u.desc || u.url } : null }
+    else if (empty) body[rk] = null
+    else if (f.kind === 'number' || f.kind === 'currency') body[rk] = Number(v)
+    else if (f.kind === 'date') body[rk] = /^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? `${v}T12:00:00Z` : new Date(String(v)).toISOString()   // noon UTC: a date-only value never slips to the previous day in any time zone
+    else body[rk] = v
   }
   return body
 }

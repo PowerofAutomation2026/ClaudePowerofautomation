@@ -1,6 +1,8 @@
 import type { Clause, Query, Row, SpField } from './types'
 import { cellText, odataQuote } from './util'
 
+/** REST exposes columns whose internal name starts with '_' as 'OData_' + name (e.g. _ColorTag -> OData__ColorTag). */
+export const restName = (internal: string) => (internal.startsWith('_') ? `OData_${internal}` : internal)
 export const emptyQuery = (): Query => ({ search: '', clauses: [], sort: { field: 'ID', dir: 'desc' }, folders: false })
 
 /** Library folder browsing applies only when no search/filter is active (search always covers the whole library). */
@@ -146,7 +148,7 @@ export function sortRows(rows: Row[], q: Query, fields: SpField[], isLibrary = f
 const dt = (d: Date) => `datetime'${d.toISOString()}'`
 
 export function clauseToOData(c: Clause, f: SpField): string | null {
-  const n = f.internal
+  const n = restName(f.internal)
   const fieldRef = f.kind === 'user' ? `${n}/Title` : f.kind === 'lookup' ? `${n}/${f.lookupField || 'Title'}` : n
   switch (c.op) {
     case 'empty': return `${n} eq null`
@@ -183,9 +185,9 @@ export function buildFilter(q: Query, fields: SpField[], isLibrary: boolean, ext
   const ps = parseSearch(q.search)
   const sf = serverSearchFields(fields, isLibrary)
   for (const t of ps.terms.slice(0, 4)) {
-    if (sf.length) parts.push('(' + sf.map((f) => `substringof(${odataQuote(t)},${f.internal})`).join(' or ') + ')')
+    if (sf.length) parts.push('(' + sf.map((f) => `substringof(${odataQuote(t)},${restName(f.internal)})`).join(' or ') + ')')
   }
-  for (const t of ps.excludes.slice(0, 3)) { if (sf.length) parts.push('not (' + sf.map((f) => `substringof(${odataQuote(t)},${f.internal})`).join(' or ') + ')') }
+  for (const t of ps.excludes.slice(0, 3)) { if (sf.length) parts.push('not (' + sf.map((f) => `substringof(${odataQuote(t)},${restName(f.internal)})`).join(' or ') + ')') }
   for (const fv of ps.fielded.slice(0, 3)) {
     const fd = resolveField(fields, fv.field)
     if (fd && fd.filterable) { const c = clauseToOData({ field: fd.internal, op: fd.kind === 'choice' ? 'eq' : 'contains', value: fv.value }, fd); if (c) parts.push(c) }
