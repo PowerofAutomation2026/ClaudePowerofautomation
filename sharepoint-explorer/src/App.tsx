@@ -10,6 +10,8 @@ import { BulkDialog, SearchEverywhere } from './components/Tools'
 import { downloadUrl, itemUrl, openShareDialog } from './components/Drawer'
 import { FolderIcon } from './components/FileGlyph'
 import { Board } from './components/Board'
+import { Calendar } from './components/Calendar'
+import { ImportDialog } from './components/ImportDialog'
 import type { PermTarget } from './types'
 import { ViewsMenu } from './components/ViewsMenu'
 import { searchTokens } from './query'
@@ -64,7 +66,7 @@ function Shell() {
   const [srcErr, setSrcErr] = useState('')
   const [theme, setTheme] = useState<ThemePref>(lsGet('spx.theme', 'system'))
   const [fs, setFs] = useState<number>(lsGet('spx.fs', 16))
-  const [view, setView] = useState<'table' | 'cards' | 'tiles' | 'board'>(lsGet('spx.view', 'table'))
+  const [view, setView] = useState<'table' | 'cards' | 'tiles' | 'board' | 'calendar'>(lsGet('spx.view', 'table'))
   const [accent, setAccent] = useState<string>(lsGet('spx.accent', 'pnc'))
   const [favs, setFavs] = useState<Set<number>>(new Set())
   const [boardField, setBoardField] = useState<SpField | null>(null)
@@ -78,7 +80,8 @@ function Shell() {
   const searchRef = useRef<HTMLInputElement>(null)
   const [access, setAccess] = useState<Access>({ role: 'reader', canAdd: false, canEdit: false, canDelete: false, canManage: false, groups: [], isSiteAdmin: false, reason: 'Checking your permissions…' })
   const [viewsAll, setViewsAll] = useState<{ shared: ViewDef[]; mine: ViewDef[] }>({ shared: [], mine: [] })
-  const [panel, setPanel] = useState<{ row: Row | null } | null>(null)
+  const [panel, setPanel] = useState<{ row: Row | null; prefill?: Row | null; preset?: Record<string, string> } | null>(null)
+  const [importing, setImporting] = useState(false)
   const [menu, setMenu] = useState<{ row: Row; at: DOMRect } | null>(null)
   const [uploads, setUploads] = useState<UploadItem[] | null>(null)
   const [nameDlg, setNameDlg] = useState<{ mode: 'folder' | 'rename'; row?: Row } | null>(null)
@@ -221,6 +224,14 @@ function Shell() {
     engine.patchRow({ ...row, [f.internal]: value })
     toast('good', `${f.title} updated`)
   }
+  const dateFields = useMemo(() => (engine ? engine.fields.filter((f) => f.kind === 'date' && engine.select.includes(f.internal)) : []), [engine])
+  const moveDate = async (row: Row, f: SpField, iso: string) => {
+    if (!engine || !boot) return
+    const prev = row[f.internal]
+    engine.patchRow({ ...row, [f.internal]: `${iso}T12:00:00.000Z` })
+    try { await boot.backend.updateItem(engine.src, engine.fields, row.__id, { [f.internal]: iso }); toast('good', `Rescheduled to ${new Date(iso + 'T12:00:00').toLocaleDateString()}`) }
+    catch (e) { engine.patchRow({ ...row, [f.internal]: prev }); toast('bad', `Could not reschedule: ${(e as Error).message}`) }
+  }
   const libRoot = src?.url ?? ''
   const curFolder = engine?.q.folder ?? libRoot
   const origin = src ? new URL(src.siteUrl).origin : ''
@@ -232,6 +243,7 @@ function Shell() {
     return [
       { label: isFolder ? 'Open folder' : 'Details', icon: isFolder ? <FolderIcon size={16} /> : 'info', run: () => openRow(r) },
       { label: lib ? 'Edit properties' : 'Edit item', icon: '✎', hidden: !access.canEdit, run: () => setPanel({ row: r }) },
+      { label: 'Duplicate', icon: 'copy', hidden: !(access.canAdd && !lib), run: () => setPanel({ row: null, prefill: r }) },
       { label: 'Rename', icon: 'A', hidden: !(lib && access.canEdit), run: () => setNameDlg({ mode: 'rename', row: r }) },
       { label: 'Move to…', icon: '↦', hidden: !(lib && access.canEdit), run: () => setPicker({ mode: 'Move', row: r }) },
       { label: 'Copy to…', icon: 'copy', hidden: !(lib && access.canEdit && !isFolder), run: () => setPicker({ mode: 'Copy', row: r }) },
@@ -270,6 +282,7 @@ function Shell() {
       { id: 'dash', label: 'Go to Dashboard', icon: 'chart', run: () => setTab('dashboard') },
       { id: 'data', label: 'Go to Data', icon: 'table', run: () => setTab('data') },
       { id: 'conn', label: isOwner ? 'Connect a list or library' : 'Data source info', icon: 'plug', run: () => setTab('connect') },
+      ...(access.canAdd && src && !src.isLibrary ? [{ id: 'imp', label: 'Import items from CSV', icon: 'download' as const, run: () => setImporting(true) }] : []),
       { id: 'every', label: 'Search everywhere (all lists + Power Platform community)', icon: 'search', run: () => setEverywhere('') },
       ...(access.canAdd && src && !src.isLibrary ? [{ id: 'new', label: 'New item', hint: 'N', icon: 'plus' as const, run: () => setPanel({ row: null }) }] : []),
       ...(access.canAdd && src?.isLibrary ? [{ id: 'nf', label: 'New folder', icon: 'lib' as const, run: () => setNameDlg({ mode: 'folder' }) }, { id: 'up', label: 'Upload files', icon: 'download' as const, run: () => fileIn.current?.click() }] : []),
@@ -393,6 +406,7 @@ function Shell() {
               {engine.pendingNew > 0 && <button className="btn sm primary" onClick={() => engine.absorbNew()}><Icon n="refresh" size={14} />{engine.pendingNew} new — show</button>}
               <span className="grow" />
               {access.canAdd && !src.isLibrary && <button className="btn sm primary" onClick={() => setPanel({ row: null })}><Icon n="plus" size={14} />New item</button>}
+              {access.canAdd && !src.isLibrary && <button className="btn sm" onClick={() => setImporting(true)}><Icon n="download" size={14} />Import CSV</button>}
               {access.canAdd && src.isLibrary && (
                 <Menu icon="plus" label={<span><b>New</b></span>}>
                   {(close) => <div>
@@ -419,6 +433,7 @@ function Shell() {
               <div role="group" aria-label="Layout" className="row" style={{ gap: 2 }}>
                 <button className="btn icon" aria-pressed={view === 'table'} aria-label="Table view" onClick={() => { setView('table'); lsSet('spx.view', 'table') }}><Icon n="table" /></button>
                 <button className="btn icon" aria-pressed={view === 'cards'} aria-label="Card view" onClick={() => { setView('cards'); lsSet('spx.view', 'cards') }}><Icon n="cards" /></button>
+                {!src.isLibrary && dateFields.length > 0 && <button className="btn icon" aria-pressed={view === 'calendar'} aria-label="Calendar view" title="Calendar" onClick={() => { setView('calendar'); lsSet('spx.view', 'calendar') }}><Icon n="chart" /></button>}
                 {!src.isLibrary && boardField && <button className="btn icon" aria-pressed={view === 'board'} aria-label="Board view" title="Board (Kanban)" onClick={() => { setView('board'); lsSet('spx.view', 'board') }}><Icon n="board" /></button>}
                 {src.isLibrary && <button className="btn icon" aria-pressed={view === 'tiles'} aria-label="Tile view" onClick={() => { setView('tiles'); lsSet('spx.view', 'tiles') }}><Icon n="grid" /></button>}
               </div>
@@ -429,9 +444,11 @@ function Shell() {
 
             <div className="dropzone" onDragOver={(e) => { if (src.isLibrary && e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true) } }} onDragLeave={(e) => { if (e.currentTarget === e.target) setDragging(false) }} onDrop={(e) => void onDrop(e)}>
               {dragging && <div className="dropveil" role="status"><div><FolderIcon size={44} /><div>Drop to upload to <b>{decodeURIComponent(curFolder.split('/').pop() ?? '')}</b></div></div></div>}
-              {view === 'board' && !src.isLibrary && boardField
+              {view === 'calendar' && !src.isLibrary && dateFields.length
+                ? <Calendar engine={engine} version={ver} dateFields={dateFields} canAdd={access.canAdd} canEdit={access.canEdit} onNew={(f, iso) => setPanel({ row: null, preset: { [f.internal]: iso } })} onOpen={openRow} onMove={moveDate} />
+                : view === 'board' && !src.isLibrary && boardField
                 ? <Board engine={engine} version={ver} field={boardField} setField={setBoardField} canEdit={access.canEdit} favs={favs} onToggleFav={toggleFav} onMove={moveCard} onOpen={openRow} tokens={tokens} />
-                : <Grid engine={engine} version={ver} cols={cols} selected={selected} widths={widths} setWidth={setWidth} tokens={tokens} view={view === 'board' ? 'table' : src.isLibrary || view !== 'tiles' ? view : 'table'} isLibrary={src.isLibrary} origin={boot.backend.mode === 'live' ? origin : undefined}
+                : <Grid engine={engine} version={ver} cols={cols} selected={selected} widths={widths} setWidth={setWidth} tokens={tokens} view={view === 'board' || view === 'calendar' ? 'table' : src.isLibrary || view !== 'tiles' ? view : 'table'} isLibrary={src.isLibrary} origin={boot.backend.mode === 'live' ? origin : undefined}
                 onToggle={(id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })}
                 onToggleAll={() => setSelected((s) => (engine.rows.every((r) => s.has(r.__id)) ? new Set() : new Set(engine.rows.map((r) => r.__id))))}
                 onOpen={openRow} onSort={sortBy} onMenu={(row, at) => setMenu({ row, at })} />}
@@ -453,7 +470,7 @@ function Shell() {
         return <Drawer engine={engine} row={open} index={Math.max(0, i)} access={access} fav={favs.has(open.__id)} onFav={() => toggleFav(open.__id)} onInline={inlineSave} actions={actionsFor(open).filter((a) => a.label !== 'Details' && a.label !== 'Copy link' && a.label !== 'Download')} onClose={() => setOpen(null)} onNav={(d) => { const n = engine.rows[i + d]; if (n) setOpen(n) }} />
       })()}
       {exp && engine && src && <ExportDialog engine={engine} cols={cols} selected={selected} title={src.label} initial={exp} onClose={() => setExp(null)} />}
-      {panel && engine && <ItemPanel key={panel.row?.__id ?? 'new'} engine={engine} row={panel.row} onClose={() => setPanel(null)} onSave={(v, f, again) => saveItem(panel.row ? panel.row.__id : null, v, f, again)} />}
+      {panel && engine && <ItemPanel key={panel.row?.__id ?? `new-${panel.prefill?.__id ?? ''}-${JSON.stringify(panel.preset ?? {})}`} engine={engine} row={panel.row} prefill={panel.prefill} preset={panel.preset} onClose={() => setPanel(null)} onSave={(v, f, again) => saveItem(panel.row ? panel.row.__id : null, v, f, again)} />}
       {uploads && engine && src && <UploadDialog backend={boot.backend} src={src} dest={curFolder} items={uploads} onClose={() => setUploads(null)} onDone={() => void engine.refresh()} />}
       {nameDlg && engine && src && (nameDlg.mode === 'folder'
         ? <NameDialog title="New folder" label="Folder name" cta="Create" onClose={() => setNameDlg(null)} onSubmit={async (n) => { await boot.backend.createFolder(src, curFolder, n); toast('good', `Folder “${n}” created`); void engine.refresh() }} />
@@ -461,6 +478,7 @@ function Shell() {
       {picker && engine && src && <FolderPicker backend={boot.backend} src={src} root={libRoot} start={curFolder} title={`${picker.mode} “${rowName(picker.row)}” to…`} onClose={() => setPicker(null)}
         onPick={async (dest) => { const m = picker; setPicker(null); try { await (m.mode === 'Move' ? boot.backend.moveItem(src, m.row, dest) : boot.backend.copyItem(src, m.row, dest)); toast('good', `${m.mode === 'Move' ? 'Moved' : 'Copied'} to ${decodeURIComponent(dest.split('/').pop() ?? '')}`); void engine.refresh() } catch (e) { toast('bad', (e as Error).message) } }} />}
       {perm && engine && src && <PermissionsDialog backend={boot.backend} src={src} target={perm.target} title={perm.title} canManage={access.canManage} onClose={() => setPerm(null)} />}
+      {importing && engine && <ImportDialog engine={engine} onClose={() => setImporting(false)} onDone={() => void engine.refresh()} />}
       {bulk && engine && <BulkDialog engine={engine} rows={bulk} onClose={() => setBulk(null)} onDone={() => { setBulk(null); setSelected(new Set()) }} />}
       {everywhere !== null && config && <SearchEverywhere backend={boot.backend} sources={config.sources} initial={everywhere} onClose={() => setEverywhere(null)} onOpen={async (s, q) => { if (s.id !== src?.id) await openSource(s, 'data'); else setTab('data'); setTimeout(() => engine && change({ search: q }), 300) }} />}
       <input ref={fileIn} type="file" multiple hidden onChange={(e) => { if (e.target.files) startUpload(Array.from(e.target.files).map((file) => ({ file, rel: '' }))); e.target.value = '' }} />

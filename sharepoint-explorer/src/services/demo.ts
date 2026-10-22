@@ -14,10 +14,11 @@ const PEOPLE = ['Ava Thompson', 'Liam Chen', 'Noor Hassan', 'Mateo García', 'So
 const EXT = ['pdf', 'docx', 'xlsx', 'pptx', 'png', 'mp4', 'txt', 'zip']
 const NOUN = ['Migration', 'Audit', 'Rollout', 'Review', 'Upgrade', 'Onboarding', 'Renewal', 'Forecast', 'Integration', 'Launch']
 
-const LISTS: (SpList & { n: number; kind: 'tasks' | 'customers' | 'docs' | 'small' })[] = [
+const LISTS: (SpList & { n: number; kind: 'tasks' | 'customers' | 'docs' | 'small' | 'wide' })[] = [
   { id: 'demo-tasks', title: 'Project Tasks', isLibrary: false, itemCount: 2_000_000, baseTemplate: 100, url: '/sites/demo/Lists/Tasks', description: 'Two million tasks across regions', n: 2_000_000, kind: 'tasks' },
   { id: 'demo-docs', title: 'Policy Documents', isLibrary: true, itemCount: 180_000, baseTemplate: 101, url: '/sites/demo/Policies', description: 'Document library', n: 180_000, kind: 'docs' },
   { id: 'demo-cust', title: 'Customers', isLibrary: false, itemCount: 18_000, baseTemplate: 100, url: '/sites/demo/Lists/Customers', description: 'Small enough to run fully in memory', n: 18_000, kind: 'customers' },
+  { id: 'demo-wide', title: 'Employee Onboarding', isLibrary: false, itemCount: 640, baseTemplate: 100, url: '/sites/demo/Lists/Onboarding', description: 'A wide list with 22 columns: try New item for the tabbed form', n: 640, kind: 'wide' },
   { id: 'demo-small', title: 'Team Events', isLibrary: false, itemCount: 240, baseTemplate: 100, url: '/sites/demo/Lists/Events', description: 'Tiny list', n: 240, kind: 'small' },
 ]
 
@@ -33,6 +34,11 @@ const FIELDS: Record<string, SpField[]> = {
   customers: [f('Title', 'Company', 'text'), f('Region', 'Region', 'choice', { choices: REGION }), f('Tier', 'Tier', 'choice', { choices: ['Bronze', 'Silver', 'Gold', 'Platinum'] }), f('AccountManager', 'Account Manager', 'user', { sortable: false }),
     f('Revenue', 'Annual Revenue', 'currency'), f('Employees', 'Employees', 'number'), f('Active', 'Active', 'boolean'), f('Website', 'Website', 'url', { filterable: false }), ...COMMON()],
   docs: [f('FileLeafRef', 'Name', 'text', { required: true, indexed: true }), f('FileDirRef', 'Folder', 'text', { system: true, filterable: false }), f('Department', 'Department', 'choice', { choices: DEPT }), f('File_x0020_Type', 'Type', 'text'), f('File_x0020_Size', 'Size', 'number'), f('Version', 'Version', 'number'), ...COMMON()],
+  wide: [f('Title', 'Employee name', 'text', { required: true }), f('Department', 'Department', 'choice', { choices: DEPT }), f('JobTitle', 'Job title', 'text', { required: true }), f('Manager', 'Manager', 'user', { sortable: false }),
+    f('StartDate', 'Start date', 'date', { required: true, indexed: true }), f('Location', 'Location', 'choice', { choices: ['Pittsburgh', 'Cleveland', 'Remote', 'Philadelphia'] }), f('Employment', 'Employment type', 'choice', { choices: ['Full-time', 'Part-time', 'Contractor'] }),
+    f('Salary', 'Salary', 'currency'), f('Email', 'Work e-mail', 'text'), f('Phone', 'Phone', 'text'), f('Laptop', 'Laptop ordered', 'boolean'), f('Badge', 'Badge issued', 'boolean'), f('Desk', 'Desk number', 'number'),
+    f('Buddy', 'Onboarding buddy', 'user', { sortable: false }), f('Training', 'Training status', 'choice', { choices: ['Not started', 'In progress', 'Complete'] }), f('Equipment', 'Equipment', 'multichoice', { choices: ['Monitor', 'Keyboard', 'Headset', 'Dock', 'Phone'] }),
+    f('Intranet', 'Profile page', 'url', { filterable: false }), f('Notes', 'Notes', 'note', { filterable: false }), f('Checklist', 'Checklist notes', 'note', { filterable: false }), f('Risk', 'Risk level', 'choice', { choices: ['Low', 'Medium', 'High'] }), f('Probation', 'Probation end', 'date'), f('PercentComplete', '% onboarded', 'number'), ...COMMON()],
   small: [f('Title', 'Event', 'text'), f('Location', 'Location', 'choice', { choices: ['Berlin', 'Lisbon', 'Remote', 'Austin'] }), f('EventDate', 'Date', 'date'), f('Attendees', 'Attendees', 'number'), ...COMMON()],
 }
 
@@ -59,6 +65,7 @@ function makeRow(kind: string, id: number): Row {
     const dir = id % 40 === 0 ? DOCS_ROOT : `${DOCS_ROOT}/${dept}`
     return { ...base, FileLeafRef: name, FileDirRef: dir, FileRef: `${dir}/${name}`, FSObjType: 0, Department: dept, File_x0020_Type: ext, File_x0020_Size: Math.floor(Math.pow(r(), 3) * 40_000_000) + 2000, Version: Math.ceil(r() * 9) }
   }
+  if (kind === 'wide') return { ...base, Title: `${pick(r, ['Alex', 'Jordan', 'Sam', 'Casey', 'Riley', 'Morgan'])} ${pick(r, ['Nguyen', 'Brooks', 'Patel', 'Kowalski', 'Rivera', 'Okafor'])} ${id}`, Department: pick(r, DEPT), JobTitle: pick(r, ['Analyst', 'Engineer', 'Manager', 'Specialist', 'Associate']), Manager: pick(r, PEOPLE), StartDate: iso(NOW + Math.floor(r() * 120 - 60) * 86_400_000), Location: pick(r, ['Pittsburgh', 'Cleveland', 'Remote', 'Philadelphia']), Employment: pick(r, ['Full-time', 'Part-time', 'Contractor']), Salary: 50000 + Math.floor(r() * 90000), Email: `user${id}@contoso.com`, Phone: `412-555-${1000 + (id % 9000)}`, Laptop: r() > .3, Badge: r() > .5, Desk: Math.floor(r() * 400), Buddy: pick(r, PEOPLE), Training: pick(r, ['Not started', 'In progress', 'Complete']), Equipment: [pick(r, ['Monitor', 'Keyboard', 'Headset'])], Risk: pick(r, ['Low', 'Medium', 'High']), PercentComplete: Math.floor(r() * 101), Probation: iso(NOW + Math.floor(r() * 90) * 86_400_000) }
   return { ...base, Title: `${pick(r, ['Offsite', 'Hackday', 'Demo day', 'Town hall'])} ${id}`, Location: pick(r, ['Berlin', 'Lisbon', 'Remote', 'Austin']), EventDate: iso(NOW + Math.floor(r() * 120 - 30) * 86_400_000), Attendees: Math.floor(r() * 120) }
 }
 

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { Engine } from '../engine'
 import { isEditable } from '../editable'
 import type { Attachment, Principal, Row, SpField } from '../types'
-import { bytes } from '../util'
+import { bytes, lsGet, lsSet, relTime } from '../util'
 import { FileGlyph } from './FileGlyph'
 import { PrincipalPicker } from './Permissions'
 import { Icon, Modal, hashColor, initials, useToast } from './ui'
@@ -27,11 +27,21 @@ function Section({ title, icon, children }: { title: string; icon: string; child
   return <section className="ip-sec"><h3><span aria-hidden="true">{icon}</span>{title}</h3><div className="ip-grid">{children}</div></section>
 }
 
-export function ItemPanel({ engine, row, onSave, onClose }: { engine: Engine; row: Row | null; onSave: (values: Record<string, unknown>, files: File[], again: boolean) => Promise<void>; onClose: () => void }) {
+export function ItemPanel({ engine, row, prefill, preset, onSave, onClose }: { engine: Engine; row: Row | null; /** new item copied from this one */ prefill?: Row | null; /** values to start a new item with (e.g. a calendar date) */ preset?: Record<string, string>; onSave: (values: Record<string, unknown>, files: File[], again: boolean) => Promise<void>; onClose: () => void }) {
   const toast = useToast()
   const fields = useMemo(() => engine.fields.filter((f) => engine.select.includes(f.internal) && isEditable(f)), [engine])
-  const [vals, setVals] = useState<Record<string, Val>>(() => Object.fromEntries(fields.map((f) => [f.internal, initial(f, row)])))
-  const [base, setBase] = useState(vals)
+  const draftKey = `spx.draft.${engine.src.id}`
+  const seed = (r: Row | null): Record<string, Val> => {
+    const v = Object.fromEntries(fields.map((f) => [f.internal, initial(f, r)])) as Record<string, Val>
+    if (!row && prefill && v[engine.src.isLibrary ? 'FileLeafRef' : 'Title'] !== undefined) { const k = engine.src.isLibrary ? 'FileLeafRef' : 'Title'; v[k] = `${v[k]} (copy)` }
+    for (const [k, x] of Object.entries(preset ?? {})) if (k in v) v[k] = x
+    return v
+  }
+  const [vals, setVals] = useState<Record<string, Val>>(() => seed(row ?? prefill ?? null))
+  const [base, setBase] = useState<Record<string, Val>>(() => (row ? seed(row) : Object.fromEntries(fields.map((f) => [f.internal, initial(f, null)])) as Record<string, Val>))
+  const [draft, setDraft] = useState<{ vals: Record<string, Val>; at: number } | null>(() => (row || prefill || preset ? null : lsGet(draftKey, null)))
+  const [tab, setTab] = useState(0)
+  const [onePage, setOnePage] = useState<boolean>(lsGet('spx.onepage', false))
   const [err, setErr] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
   const [files, setFiles] = useState<File[]>([])
@@ -43,6 +53,12 @@ export function ItemPanel({ engine, row, onSave, onClose }: { engine: Engine; ro
   const dirty = fields.some((f) => !same(vals[f.internal], base[f.internal])) || files.length > 0
   const req = fields.filter((f) => f.required)
   const filled = req.filter((f) => { const v = vals[f.internal]; return Array.isArray(v) ? v.length : typeof v === 'object' ? (v as { url: string }).url : v !== '' }).length
+
+  useEffect(() => { // autosave a draft of a NEW item so a closed tab or a crash never loses typing
+    if (row || !dirty) return
+    const h = setTimeout(() => lsSet(draftKey, { vals, at: Date.now() }), 600)
+    return () => clearTimeout(h)
+  }, [vals, dirty]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { // existing attachments
     if (!row || engine.src.isLibrary) return
@@ -59,6 +75,8 @@ export function ItemPanel({ engine, row, onSave, onClose }: { engine: Engine; ro
       if (f.kind === 'url' && !empty && !/^https?:\/\//i.test((v as { url: string }).url)) e[f.internal] = 'Enter a full web address starting with https://'
     }
     setErr(e)
+    const firstBad = Object.keys(e)[0]
+    if (firstBad) { const t = tabs.findIndex((x) => x.fields.some((f) => f.internal === firstBad)); if (t >= 0) setTab(t) }
     if (Object.keys(e).length) { setTimeout(() => { const el = body.current?.querySelector<HTMLElement>('[aria-invalid="true"]') ?? body.current?.querySelector<HTMLElement>('.ip-err')?.closest('.ip-field')?.querySelector<HTMLElement>('button,input,select,textarea'); el?.focus(); el?.scrollIntoView({ block: 'center' }) }, 30); return false }
     return true
   }
@@ -74,11 +92,13 @@ export function ItemPanel({ engine, row, onSave, onClose }: { engine: Engine; ro
     setBusy(true)
     try {
       await onSave(out, files, again)
+      if (!row) { try { localStorage.removeItem(draftKey) } catch { /* ignore */ } }
       if (again) { const fresh = Object.fromEntries(fields.map((f) => [f.internal, initial(f, null)])); setVals(fresh); setBase(fresh); setFiles([]); toast('good', 'Created — add another') }
     } catch (e) { toast('bad', (e as Error).message); setBusy(false); return }
     setBusy(false)
   }
   const tryClose = () => (dirty ? setLeave(true) : onClose())
+  const discard = () => { if (!row) { try { localStorage.removeItem(draftKey) } catch { /* ignore */ } } onClose() }
   const title = row ? String(row[engine.src.isLibrary ? 'FileLeafRef' : 'Title'] ?? `Item ${row.__id}`) : 'New item'
 
   const addFiles = (fl: FileList | File[] | null) => { if (!fl) return; const arr = Array.from(fl); setFiles((c) => [...c, ...arr]) }   // copy NOW: an <input>'s FileList empties when its value is reset
@@ -90,27 +110,54 @@ export function ItemPanel({ engine, row, onSave, onClose }: { engine: Engine; ro
   ]
   const seen = new Set<string>()
   const shown = groups.map(([t, i, fs]) => [t, i, fs.filter((f) => !seen.has(f.internal) && (seen.add(f.internal), true))] as [string, string, SpField[]]).filter(([, , fs]) => fs.length)
+  // many columns -> tabs on one screen; a big group is split so no tab needs scrolling forever
+  const CHUNK = 8
+  const tabs: { id: string; title: string; icon: string; fields: SpField[] }[] = []
+  for (const [t, ic, fs] of shown) {
+    if (fs.length <= CHUNK + 2) tabs.push({ id: t, title: t, icon: ic, fields: fs })
+    else for (let i = 0; i < fs.length; i += CHUNK) tabs.push({ id: `${t}${i}`, title: `${t} ${i / CHUNK + 1}`, icon: ic, fields: fs.slice(i, i + CHUNK) })
+  }
+  const attTab = attOk && !engine.src.isLibrary
+  const tabbed = !onePage && fields.length > 8
+  const total = tabs.length + (attTab ? 1 : 0)
+  const miss = (fs: SpField[]) => fs.filter((f) => { const v = vals[f.internal]; return f.required && (Array.isArray(v) ? !v.length : typeof v === 'object' ? !(v as { url: string }).url : v === '') }).length
+  const tabKey = (e: React.KeyboardEvent) => { if (e.key === 'ArrowRight') { e.preventDefault(); setTab((t) => (t + 1) % total) } if (e.key === 'ArrowLeft') { e.preventDefault(); setTab((t) => (t - 1 + total) % total) } if (e.key === 'Home') setTab(0); if (e.key === 'End') setTab(total - 1) }
+  const activeTab = Math.min(tab, Math.max(0, total - 1))
 
   return (
-    <Modal title={row ? `Edit ${title}` : 'New item'} onClose={tryClose} side className="ipanel">
+    <Modal title={row ? `Edit ${title}` : 'New item'} onClose={tryClose} side className={`ipanel${tabbed ? ' wide' : ''}`}>
       <div className="ip-head">
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="ip-kicker">{row ? 'Edit' : 'Create'} · {engine.src.label}</div>
+          <div className="ip-kicker">{row ? 'Edit' : prefill ? 'Duplicate' : 'Create'} · {engine.src.label}</div>
           <h2 style={{ display: 'flex', gap: 10, alignItems: 'center' }}>{engine.src.isLibrary && row && <FileGlyph name={title} folder={row.FSObjType === 1} size={28} />}<span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</span></h2>
           {req.length > 0 && <div className="ip-prog" aria-label={`${filled} of ${req.length} required fields complete`}><i style={{ width: `${(filled / req.length) * 100}%` }} /></div>}
         </div>
+        {fields.length > 8 && <button className="btn sm" aria-pressed={onePage} onClick={() => { setOnePage(!onePage); lsSet('spx.onepage', !onePage) }} title="Switch between tabs and one long page">{onePage ? 'Use tabs' : 'One page'}</button>}
         <button className="btn icon" onClick={tryClose} aria-label="Close"><Icon n="x" /></button>
       </div>
+      {draft && <div className="banner info" role="status" style={{ margin: '10px 20px 0' }}><Icon n="info" /><div style={{ flex: 1 }}>You have an unsaved draft from {relTime(new Date(draft.at).toISOString())}.</div><button className="btn sm" onClick={() => { setVals(draft.vals); setDraft(null) }}>Resume</button><button className="btn sm ghost" onClick={() => { try { localStorage.removeItem(draftKey) } catch { /* ignore */ } setDraft(null) }}>Discard</button></div>}
+      {tabbed && (
+        <div role="tablist" aria-label="Form sections" className="ip-tabs" onKeyDown={tabKey}>
+          {[...tabs.map((t) => ({ title: t.title, icon: t.icon, n: t.fields.length, m: miss(t.fields), bad: t.fields.some((f) => err[f.internal]) })), ...(attTab ? [{ title: 'Attachments', icon: '📎', n: files.length + (atts?.length ?? 0), m: 0, bad: false }] : [])].map((t, i) => (
+            <button key={t.title} role="tab" id={`iptab-${i}`} aria-selected={activeTab === i} aria-controls={`ippanel-${i}`} tabIndex={activeTab === i ? 0 : -1} className={`ip-tab${t.bad ? ' bad' : ''}`} onClick={() => setTab(i)}>
+              <span aria-hidden="true">{t.icon}</span>{t.title}{t.m > 0 ? <span className="pill bad" title={`${t.m} required field(s) empty`}>{t.m}</span> : t.n > 0 && t.title === 'Attachments' ? <span className="pill">{t.n}</span> : null}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="ip-body" ref={body} onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); void submit() } }}>
-        {shown.map(([t, ic, fs]) => (
-          <Section key={t} title={t} icon={ic}>
-            {fs.map((f) => <Field key={f.internal} f={f} v={vals[f.internal]} set={(v) => set(f.internal, v)} err={err[f.internal]} engine={engine} />)}
-          </Section>
+        {tabs.map((t, i) => (
+          <div key={t.id} id={`ippanel-${i}`} role={tabbed ? 'tabpanel' : undefined} aria-labelledby={tabbed ? `iptab-${i}` : undefined} hidden={tabbed && activeTab !== i}>
+            <Section title={t.title} icon={t.icon}>
+              {t.fields.map((f) => <Field key={f.internal} f={f} v={vals[f.internal]} set={(v) => set(f.internal, v)} err={err[f.internal]} engine={engine} />)}
+            </Section>
+          </div>
         ))}
         {!shown.length && <p className="muted">This {engine.src.isLibrary ? 'file' : 'list'} has no columns the app can edit.</p>}
 
         {attOk && !engine.src.isLibrary && (
+          <div id={`ippanel-${tabs.length}`} role={tabbed ? 'tabpanel' : undefined} aria-labelledby={tabbed ? `iptab-${tabs.length}` : undefined} hidden={tabbed && activeTab !== tabs.length}>
           <Section title="Attachments" icon="📎">
             <div className="ip-full">
               <div className="ip-drop" onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); addFiles(e.dataTransfer.files) }}>
@@ -126,12 +173,14 @@ export function ItemPanel({ engine, row, onSave, onClose }: { engine: Engine; ro
               </ul>
             </div>
           </Section>
+          </div>
         )}
       </div>
 
       <div className="ip-foot">
         <span className="muted small" aria-live="polite">{dirty ? '● Unsaved changes' : 'No changes'} · <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to save</span>
         <span className="grow" />
+        {tabbed && <><button className="btn" disabled={activeTab === 0} onClick={() => setTab(activeTab - 1)}>← Back</button><button className="btn" disabled={activeTab >= total - 1} onClick={() => setTab(activeTab + 1)}>Next →</button></>}
         <button className="btn" onClick={tryClose} disabled={busy}>Cancel</button>
         {!row && <button className="btn" onClick={() => void submit(true)} disabled={busy}>Save &amp; add another</button>}
         <button className="btn primary" onClick={() => void submit()} disabled={busy || (!!row && !dirty)}>{busy ? 'Saving…' : row ? 'Save changes' : 'Create item'}</button>
@@ -140,7 +189,7 @@ export function ItemPanel({ engine, row, onSave, onClose }: { engine: Engine; ro
       {leave && (
         <Modal title="Discard changes" onClose={() => setLeave(false)}>
           <h2 style={{ marginBottom: 8 }}>Discard your changes?</h2><p className="muted">Everything you typed will be lost.</p>
-          <div className="row" style={{ justifyContent: 'flex-end' }}><button className="btn" onClick={() => setLeave(false)}>Keep editing</button><button className="btn primary" style={{ background: 'var(--bad)' }} onClick={onClose}>Discard</button></div>
+          <div className="row" style={{ justifyContent: 'flex-end' }}><button className="btn" onClick={() => setLeave(false)}>Keep editing</button><button className="btn primary" style={{ background: 'var(--bad)' }} onClick={discard}>Discard</button></div>
         </Modal>
       )}
     </Modal>

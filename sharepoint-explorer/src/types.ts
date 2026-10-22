@@ -67,7 +67,7 @@ export interface ViewDef {
   sourceId: string
   q: Query
   cols: string[]
-  layout: 'table' | 'cards' | 'tiles' | 'board'
+  layout: 'table' | 'cards' | 'tiles' | 'board' | 'calendar'
   owner: string
   /** me = personal; everyone; groups = members of the named SharePoint groups; admins = data admins and app owners only */
   audience: 'me' | 'everyone' | 'groups' | 'admins'

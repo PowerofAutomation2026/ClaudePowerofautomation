@@ -4,6 +4,18 @@ Connect **any SharePoint list or document library** with one button and get a gr
 instant search and PDF / CSV / JSON export. Built for lists with **millions of rows**: the browser never holds more than a
 capped window of rows; everything else is paged, streamed or aggregated.
 
+## How to run
+**A. Try it on your PC (no deployment, sample data):** unzip, double-click **`Run-Demo.cmd`** (installs Node.js if needed, then opens http://127.0.0.1:3000/?demo=1). Or in a terminal: `npm install` then `npm run dev`.
+
+**B. Deploy to Power Platform:** unzip, double-click **`Deploy.cmd`**, enter your environment ID (the GUID in `make.powerapps.com/environments/<GUID>/…`). It installs Node/`pac` if missing, signs you in, wires the SharePoint connector, makes you the app owner, builds and publishes. Then open the app → **Connect** → pick the site and list/library → **Connect**, and share the app with your users.
+
+## Forms for lists with many columns
+* **Tabbed form on one screen**: lists with more than 8 editable columns open the New/Edit form as tabs (Essentials, Status & details 1/2, People & dates, Notes & links, Attachments). Tabs show how many **required** fields are still empty, jump to the first error on save, and work with arrow keys; **Back/Next** buttons move through them. Switch to **One page** any time.
+* **Draft autosave** for new items (resume or discard after a crash or closed tab), **Duplicate** an existing item, quick date buttons, `Ctrl+Enter` to save.
+* **Calendar view** over any date column: click a day to add an item on that date, drag an item to another day to reschedule it, "+n more" pop-ups.
+* **Import from CSV**: map columns, validation per row (choices, numbers, dates, Yes/No, people), progress, and a downloadable file of skipped rows. Template download included.
+* Ideas came from what the Power Apps community keeps asking for around SharePoint list apps (tabbed forms, calendar views, CSV import); the code-apps community itself publishes few public feature threads, so this is a judgment call.
+
 ## Deploy (zero touch)
 
 ```powershell
