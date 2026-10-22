@@ -343,3 +343,4 @@ main > section, main > div { animation: rise .35s cubic-bezier(.2,.8,.2,1); } @k
 .sample-ribbon .btn { background: #fff; color: #111; border-color: #111; }
 .buildstamp { text-align: center; padding: 10px; font-size: .75rem; color: var(--muted); }
 .top { top: 0; }
+.ip-hint { margin-left: 10px; font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--muted); font-size: .78rem; }

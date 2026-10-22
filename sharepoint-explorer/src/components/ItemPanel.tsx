@@ -23,8 +23,8 @@ function initial(f: SpField, row: Row | null): Val {
 }
 const same = (a: Val, b: Val) => JSON.stringify(a) === JSON.stringify(b)
 
-function Section({ title, icon, children }: { title: string; icon: string; children: ReactNode }) {
-  return <section className="ip-sec"><h3><span aria-hidden="true">{icon}</span>{title}</h3><div className="ip-grid">{children}</div></section>
+function Section({ title, icon, hint, children }: { title: string; icon: string; hint?: string; children: ReactNode }) {
+  return <section className="ip-sec"><h3><span aria-hidden="true">{icon}</span>{title}{hint && <small className="ip-hint">{hint}</small>}</h3><div className="ip-grid">{children}</div></section>
 }
 
 export function ItemPanel({ engine, row, prefill, preset, onSave, onClose }: { engine: Engine; row: Row | null; /** new item copied from this one */ prefill?: Row | null; /** values to start a new item with (e.g. a calendar date) */ preset?: Record<string, string>; onSave: (values: Record<string, unknown>, files: File[], again: boolean) => Promise<void>; onClose: () => void }) {
@@ -102,21 +102,7 @@ export function ItemPanel({ engine, row, prefill, preset, onSave, onClose }: { e
   const title = row ? String(row[engine.src.isLibrary ? 'FileLeafRef' : 'Title'] ?? `Item ${row.__id}`) : 'New item'
 
   const addFiles = (fl: FileList | File[] | null) => { if (!fl) return; const arr = Array.from(fl); setFiles((c) => [...c, ...arr]) }   // copy NOW: an <input>'s FileList empties when its value is reset
-  const groups: [string, string, SpField[]][] = [
-    ['Essentials', '✦', fields.filter((f) => f.internal === 'Title' || f.internal === 'FileLeafRef' || f.required)],
-    ['Status & details', '◈', fields.filter((f) => !f.required && f.internal !== 'Title' && f.internal !== 'FileLeafRef' && ['choice', 'multichoice', 'boolean', 'number', 'currency', 'text'].includes(f.kind))],
-    ['People & dates', '◷', fields.filter((f) => !f.required && ['user', 'date'].includes(f.kind))],
-    ['Notes & links', '✎', fields.filter((f) => !f.required && ['note', 'url'].includes(f.kind))],
-  ]
-  const seen = new Set<string>()
-  const shown = groups.map(([t, i, fs]) => [t, i, fs.filter((f) => !seen.has(f.internal) && (seen.add(f.internal), true))] as [string, string, SpField[]]).filter(([, , fs]) => fs.length)
-  // many columns -> tabs on one screen; a big group is split so no tab needs scrolling forever
-  const CHUNK = 8
-  const tabs: { id: string; title: string; icon: string; fields: SpField[] }[] = []
-  for (const [t, ic, fs] of shown) {
-    if (fs.length <= CHUNK + 2) tabs.push({ id: t, title: t, icon: ic, fields: fs })
-    else for (let i = 0; i < fs.length; i += CHUNK) tabs.push({ id: `${t}${i}`, title: `${t} ${i / CHUNK + 1}`, icon: ic, fields: fs.slice(i, i + CHUNK) })
-  }
+  const tabs = useMemo(() => buildTabs(fields), [fields])
   const attTab = attOk && !engine.src.isLibrary
   const tabbed = !onePage && fields.length > 8
   const total = tabs.length + (attTab ? 1 : 0)
@@ -138,8 +124,8 @@ export function ItemPanel({ engine, row, prefill, preset, onSave, onClose }: { e
       {draft && <div className="banner info" role="status" style={{ margin: '10px 20px 0' }}><Icon n="info" /><div style={{ flex: 1 }}>You have an unsaved draft from {relTime(new Date(draft.at).toISOString())}.</div><button className="btn sm" onClick={() => { setVals(draft.vals); setDraft(null) }}>Resume</button><button className="btn sm ghost" onClick={() => { try { localStorage.removeItem(draftKey) } catch { /* ignore */ } setDraft(null) }}>Discard</button></div>}
       {tabbed && (
         <div role="tablist" aria-label="Form sections" className="ip-tabs" onKeyDown={tabKey}>
-          {[...tabs.map((t) => ({ title: t.title, icon: t.icon, n: t.fields.length, m: miss(t.fields), bad: t.fields.some((f) => err[f.internal]) })), ...(attTab ? [{ title: 'Attachments', icon: '📎', n: files.length + (atts?.length ?? 0), m: 0, bad: false }] : [])].map((t, i) => (
-            <button key={t.title} role="tab" id={`iptab-${i}`} aria-selected={activeTab === i} aria-controls={`ippanel-${i}`} tabIndex={activeTab === i ? 0 : -1} className={`ip-tab${t.bad ? ' bad' : ''}`} onClick={() => setTab(i)}>
+          {[...tabs.map((t) => ({ title: t.title, icon: t.icon, n: t.fields.length, m: miss(t.fields), bad: t.fields.some((f) => err[f.internal]), hint: t.hint })), ...(attTab ? [{ title: 'Attachments', icon: '📎', n: files.length + (atts?.length ?? 0), m: 0, bad: false, hint: 'Files attached to this item' }] : [])].map((t, i) => (
+            <button key={t.title} role="tab" id={`iptab-${i}`} aria-selected={activeTab === i} aria-controls={`ippanel-${i}`} tabIndex={activeTab === i ? 0 : -1} className={`ip-tab${t.bad ? ' bad' : ''}`} onClick={() => setTab(i)} title={t.hint}>
               <span aria-hidden="true">{t.icon}</span>{t.title}{t.m > 0 ? <span className="pill bad" title={`${t.m} required field(s) empty`}>{t.m}</span> : t.n > 0 && t.title === 'Attachments' ? <span className="pill">{t.n}</span> : null}
             </button>
           ))}
@@ -149,12 +135,12 @@ export function ItemPanel({ engine, row, prefill, preset, onSave, onClose }: { e
       <div className="ip-body" ref={body} onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); void submit() } }}>
         {tabs.map((t, i) => (
           <div key={t.id} id={`ippanel-${i}`} role={tabbed ? 'tabpanel' : undefined} aria-labelledby={tabbed ? `iptab-${i}` : undefined} hidden={tabbed && activeTab !== i}>
-            <Section title={t.title} icon={t.icon}>
+            <Section title={t.title} icon={t.icon} hint={t.hint}>
               {t.fields.map((f) => <Field key={f.internal} f={f} v={vals[f.internal]} set={(v) => set(f.internal, v)} err={err[f.internal]} engine={engine} />)}
             </Section>
           </div>
         ))}
-        {!shown.length && <p className="muted">This {engine.src.isLibrary ? 'file' : 'list'} has no columns the app can edit.</p>}
+        {!tabs.length && <p className="muted">This {engine.src.isLibrary ? 'file' : 'list'} has no columns the app can edit.</p>}
 
         {attOk && !engine.src.isLibrary && (
           <div id={`ippanel-${tabs.length}`} role={tabbed ? 'tabpanel' : undefined} aria-labelledby={tabbed ? `iptab-${tabs.length}` : undefined} hidden={tabbed && activeTab !== tabs.length}>
@@ -231,4 +217,46 @@ function Field({ f, v, set, err, engine }: { f: SpField; v: Val; set: (v: Val) =
       {err && <span id={`${id}-e`} role="alert" className="ip-err">⚠ {err}</span>}
     </div>
   )
+}
+
+/* ---------------------------------------------------------------- tab names that describe the columns inside */
+const THEMES: [string, string, (f: SpField) => boolean][] = [
+  ['Contact details', '✉', (f) => /e-?mail|phone|mobile|fax|address|street|postal|zip|contact|website|linkedin|twitter/i.test(f.title + f.internal) || (f.kind === 'url' && !/photo|image/i.test(f.title))],
+  ['Pay & budget', '＄', (f) => f.kind === 'currency' || /\b(salary|budget|cost|price|amount|revenue|fee|bonus|spend|invoice|compensation|wage|rate)\b/i.test(f.title + f.internal)],
+  ['Schedule & dates', '◷', (f) => f.kind === 'date'],
+  ['People & roles', '☺', (f) => f.kind === 'user' || /manager|owner|buddy|assignee|supervisor|approver|mentor|sponsor/i.test(f.title)],
+  ['Location & workspace', '⌖', (f) => /\b(location|office|building|room|desk|floor|city|country|region|site|campus|seat)\b/i.test(f.title + f.internal)],
+  ['Equipment & access', '▣', (f) => /\b(laptop|badge|equipment|device|asset|license|licence|software|monitor|keyboard|headset|dock|access|vpn|tool)s?\b/i.test(f.title + f.internal) || f.kind === 'multichoice'],
+  ['Status & progress', '◈', (f) => /\b(status|stage|priority|risk|progress|percent|complete|training|approval|phase|state|outcome|health)\b/i.test(f.title + f.internal) || f.kind === 'boolean'],
+  ['Notes & links', '✎', (f) => f.kind === 'note' || f.kind === 'url'],
+]
+const MAX_TAB = 9
+const names = (fs: SpField[], n = 2) => { const t = fs.slice(0, n).map((f) => f.title); const extra = fs.length - t.length; return `${t.join(' & ')}${extra > 0 ? ` +${extra}` : ''}` }
+const clip = (s: string, n = 30) => (s.length > n ? s.slice(0, n - 1) + '…' : s)
+
+/** Groups the form's columns into tabs whose names say what is inside (Contact details, Pay & budget, Schedule & dates…). */
+export function buildTabs(fields: SpField[]): { id: string; title: string; icon: string; hint: string; fields: SpField[] }[] {
+  const used = new Set<string>()
+  const take = (fs: SpField[]) => fs.filter((f) => !used.has(f.internal) && (used.add(f.internal), true))
+  const out: { id: string; title: string; icon: string; hint: string; fields: SpField[] }[] = []
+  const add = (title: string, icon: string, fs: SpField[]) => {
+    if (!fs.length) return
+    const parts = Math.ceil(fs.length / MAX_TAB)
+    for (let i = 0; i < parts; i++) {
+      const chunk = fs.slice(i * MAX_TAB, (i + 1) * MAX_TAB)
+      out.push({ id: `${title}-${i}`, title: parts > 1 ? `${title} ${i + 1}/${parts}` : title, icon, hint: chunk.map((f) => f.title).join(', '), fields: chunk })
+    }
+  }
+  const basics = take(fields.filter((f) => f.internal === 'Title' || f.internal === 'FileLeafRef' || f.required))
+  const themedAll = THEMES.map(([name, icon, test]) => [name, icon, fields.filter((f) => !used.has(f.internal) && test(f))] as const)
+  // a theme only becomes a tab when it holds at least two columns; a lone column joins the 'other' tab, which is named after its own columns
+  const themed: (readonly [string, string, SpField[]])[] = []
+  for (const [name, icon, fs] of themedAll) { const free = fs.filter((f) => !used.has(f.internal)); if (free.length >= 2) themed.push([name, icon, take(free)]) }
+  const rest = take(fields)
+  // the first tab is named after the columns that must be filled in, e.g. "Employee name & Job title"
+  if (basics.length) add(basics.length > 3 ? 'Required details' : clip(names(basics, 2)), '✦', basics)
+  for (const [name, icon, fs] of themed) add(name, icon, fs)
+  // anything unclassified is named after its own columns, e.g. "Desk number & Probation end"
+  if (rest.length) { for (let i = 0; i < rest.length; i += MAX_TAB) { const chunk = rest.slice(i, i + MAX_TAB); out.push({ id: `rest-${i}`, title: clip(names(chunk, 2)), icon: '◇', hint: chunk.map((f) => f.title).join(', '), fields: chunk }) } }
+  return out
 }
