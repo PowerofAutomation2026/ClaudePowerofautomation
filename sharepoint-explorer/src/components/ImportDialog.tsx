@@ -66,7 +66,7 @@ export function ImportDialog({ engine, onClose, onDone }: { engine: Engine; onCl
       case 'user': {
         const names = v.split(/[;|]/).map((x) => x.trim()).filter(Boolean), out: Principal[] = []
         for (const n of f.multi ? names : names.slice(0, 1)) {
-          if (!cache.current.has(n)) { const r = await engine.backend.searchPrincipals(engine.src, n).catch(() => []); cache.current.set(n, r.find((p) => p.kind === 'user' && (p.email?.toLowerCase() === n.toLowerCase() || p.title.toLowerCase() === n.toLowerCase())) ?? r.find((p) => p.kind === 'user') ?? null) }
+          if (!cache.current.has(n)) { const r = await engine.backend.searchPrincipals(engine.src, n).catch(() => []); cache.current.set(n, r.find((p) => p.kind === 'user' && (p.email?.toLowerCase() === n.toLowerCase() || p.title.toLowerCase() === n.toLowerCase())) ?? null) }   // exact e-mail or name only: never guess a different person
           const p = cache.current.get(n); if (!p) return [[], `${f.title}: person “${n}” not found`]; out.push(p)
         }
         return [out, null]

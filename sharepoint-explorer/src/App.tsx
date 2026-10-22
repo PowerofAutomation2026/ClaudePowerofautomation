@@ -457,7 +457,7 @@ function Shell() {
                 ? <Calendar engine={engine} version={ver} dateFields={dateFields} canAdd={access.canAdd} canEdit={access.canEdit} onNew={(f, iso) => setPanel({ row: null, preset: { [f.internal]: iso } })} onOpen={openRow} onMove={moveDate} />
                 : view === 'board' && !src.isLibrary && boardField
                 ? <Board engine={engine} version={ver} field={boardField} setField={setBoardField} canEdit={access.canEdit} favs={favs} onToggleFav={toggleFav} onMove={moveCard} onOpen={openRow} tokens={tokens} />
-                : <Grid engine={engine} version={ver} cols={cols} selected={selected} widths={widths} setWidth={setWidth} tokens={tokens} view={view === 'board' || view === 'calendar' ? 'table' : src.isLibrary || view !== 'tiles' ? view : 'table'} isLibrary={src.isLibrary} origin={boot.backend.mode === 'live' ? origin : undefined}
+                : <Grid engine={engine} version={ver} cols={cols} selected={selected} widths={widths} setWidth={setWidth} tokens={tokens} view={view === 'board' || view === 'calendar' ? 'table' : src.isLibrary || view !== 'tiles' ? view : 'table'} isLibrary={src.isLibrary} origin={boot.backend.mode === 'live' ? src.siteUrl.replace(/\/$/, '') : undefined}
                 onToggle={(id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })}
                 onToggleAll={() => setSelected((s) => (engine.rows.every((r) => s.has(r.__id)) ? new Set() : new Set(engine.rows.map((r) => r.__id))))}
                 onOpen={openRow} onSort={sortBy} onMenu={(row, at) => setMenu({ row, at })} />}

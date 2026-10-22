@@ -14,7 +14,7 @@ import { lsGet, lsSet, odataQuote, sleep } from '../util'
 import { isFolderMode } from '../query'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-const infoModules = import.meta.glob('../../.power/schemas/appschemas/dataSourcesInfo.ts', { eager: true }) as Record<string, any>
+const infoModules = import.meta.glob('../../.power/**/dataSourcesInfo.ts', { eager: true }) as Record<string, any>
 function loadInfo(): Record<string, any> {
   const mod = Object.values(infoModules)[0]
   if (!mod) return {}
@@ -68,8 +68,9 @@ const spKey = () => (keyP ??= (async () => {
   const c = candidates()
   if (!c.length) throw new Error('No connector is attached to this app. Re-run the deploy script to add the SharePoint connection.')
   if (c.length === 1) return c[0]
-  for (const k of c) { try { const r: any = await sdk().executeAsync({ connectorOperation: { tableName: k, operationName: 'GetDataSets', parameters: {} } } as any); if (r?.success) return k } catch { /* not SharePoint */ } }
-  return c[0]
+  let last = ''
+  for (const k of c) { try { const r: any = await sdk().executeAsync({ connectorOperation: { tableName: k, operationName: 'GetDataSets', parameters: {} } } as any); if (r?.success) return k; last = String(r?.error?.message ?? 'failed') } catch (e) { last = (e as Error).message } }
+  throw new Error(`None of the connectors in this app answered the SharePoint site-list call (${c.join(', ')}). ${last}`)
 })())
 
 /* ------------------------------------------------------------------ throttled, retrying transport */
@@ -89,7 +90,7 @@ function friendly(raw: string): string {
   return raw
 }
 
-async function exec(opName: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<any> {
+async function exec(opName: string, params: Record<string, unknown>, signal?: AbortSignal, idempotent = true): Promise<any> {
   const ds = await spKey()
   let attempt = 0
   for (;;) {
@@ -99,7 +100,7 @@ async function exec(opName: string, params: Record<string, unknown>, signal?: Ab
     const e = res?.error
     const status = Number(e?.status ?? e?.statusCode ?? res?.status ?? 0)
     const text = String(e?.message ?? (typeof e === 'string' ? e : JSON.stringify(e ?? 'Connector call failed')))
-    if ((status === 429 || status === 503 || status === 504 || /throttl|too many requests|timed? ?out/i.test(text)) && attempt < 5) {
+    if ((status === 429 || status === 503 || (idempotent && (status === 504 || /throttl|too many requests|timed? ?out/i.test(text)))) && attempt < 5) {   // never re-send a write after a timeout: it may have been applied
       await sleep(Math.min(20_000, 800 * 2 ** attempt) + Math.random() * 400); attempt++; continue
     }
     let pretty = text
@@ -118,7 +119,7 @@ async function http(site: string, method: 'GET' | 'POST', uri: string, body?: un
   }
   if (body !== undefined) payload.body = typeof body === 'string' ? body : JSON.stringify(body)
   // `dataset` = the site URL: the SDK encodes it for SharePoint and allows overriding it per call
-  return parse(await exec('HttpRequest', { dataset: site.replace(/\/+$/, ''), parameters: payload }, signal))
+  return parse(await exec('HttpRequest', { dataset: site.replace(/\/+$/, ''), parameters: payload }, signal, method === 'GET'))
 }
 
 /* ------------------------------------------------------------------ metadata */
@@ -166,12 +167,14 @@ export const sp: Backend = {
 
   async getFields(site, id): Promise<SpField[]> {
     const base = `_api/web/lists(${guid(id)})`
-    const [fieldsRes, viewRes, choiceRes] = await Promise.all([
+    const [fieldsRes, viewRes, choiceRes, lookupRes] = await Promise.all([
       http(site, 'GET', `${base}/fields?$filter=Hidden eq false&$select=InternalName,Title,TypeAsString,Required,Indexed,Sortable,Filterable,ReadOnlyField&$top=500`),
       http(site, 'GET', `${base}/defaultview/viewfields`).catch(() => null),
       http(site, 'GET', `${base}/fields?$filter=TypeAsString eq 'Choice' or TypeAsString eq 'MultiChoice'&$select=InternalName,Choices`).catch(() => null),
+      http(site, 'GET', `${base}/fields?$filter=TypeAsString eq 'Lookup' or TypeAsString eq 'LookupMulti'&$select=InternalName,LookupField`).catch(() => null),
     ])
     const choices = new Map<string, string[]>(rows(choiceRes).map((c) => [c.InternalName, c.Choices?.results ?? c.Choices ?? []]))
+    const lookups = new Map<string, string>(rows(lookupRes).map((c) => [c.InternalName, String(c.LookupField || 'Title')]))
     const inView: string[] = (viewRes?.Items?.results ?? viewRes?.Items ?? []).map(String)
     const out: SpField[] = []
     for (const r of rows(fieldsRes)) {
@@ -181,7 +184,7 @@ export const sp: Backend = {
       const multi = /Multi$/.test(type)
       out.push({
         internal: r.InternalName, title: r.Title, kind, typeAsString: type, multi, required: !!r.Required, indexed: !!r.Indexed,
-        choices: choices.get(r.InternalName),
+        choices: choices.get(r.InternalName), lookupField: lookups.get(r.InternalName),
         sortable: !!r.Sortable && !['note', 'user', 'lookup', 'multichoice', 'other', 'url'].includes(kind),
         filterable: !!r.Filterable && !['note', 'multichoice', 'other', 'url'].includes(kind),
         system: inView.length ? !inView.includes(r.InternalName) && r.InternalName !== 'FileLeafRef' && r.InternalName !== 'Title' : false,
@@ -386,7 +389,7 @@ export const sp: Backend = {
 
   async loadConfig(): Promise<AppConfig> {
     const fallback = (): AppConfig => lsGet<AppConfig>('spx.config', { v: 1, owners: [], sources: [], updated: '', updatedBy: '' })
-    const cfg = (await kvGet<AppConfig>('config')) ?? fallback()
+    const cfg = (await kvGet<AppConfig>('config', true)) ?? fallback()
     // Owners come ONLY from the deployed bundle (written by the deploy script), never from the editable list.
     return { ...cfg, v: 1, owners: baked.owners as string[], sources: cfg.sources ?? [] }
   },
@@ -411,7 +414,7 @@ export function selectExpand(fields: SpField[], select: string[], isLibrary: boo
   for (const n of select) {
     const f = fields.find((x) => x.internal === n)
     if (!f || n === 'ID') continue
-    if (f.kind === 'user' || (f.kind === 'lookup' && f.typeAsString.startsWith('Lookup'))) { sel.add(`${n}/Title`); if (f.kind === 'user') sel.add(`${n}/Id`); exp.add(n) }
+    if (f.kind === 'user' || (f.kind === 'lookup' && f.typeAsString.startsWith('Lookup'))) { sel.add(`${n}/${f.kind === 'lookup' ? f.lookupField || 'Title' : 'Title'}`); if (f.kind === 'user') sel.add(`${n}/Id`); exp.add(n) }
     else sel.add(n)
   }
   if (isLibrary) ['FileRef', 'FileDirRef', 'FileLeafRef', 'FSObjType', 'File_x0020_Type', 'File_x0020_Size'].forEach((x) => sel.add(x))
@@ -429,7 +432,7 @@ function toRow(item: any, fields: SpField[]): Row {
     let v = item[f.internal]
     if (v && typeof v === 'object' && !Array.isArray(v) && 'results' in v) v = v.results
     if (f.kind === 'user') row[f.internal + '__ids'] = (Array.isArray(v) ? v : v ? [v] : []).map((x: any) => x?.Id).filter((n: unknown) => n != null)
-    if (f.kind === 'user' || f.kind === 'lookup') v = Array.isArray(v) ? v.map((x) => x?.Title ?? x?.Label ?? x).join('; ') : v?.Title ?? v?.Label ?? ''
+    if (f.kind === 'user' || f.kind === 'lookup') v = Array.isArray(v) ? v.map((x) => x?.[f.lookupField || 'Title'] ?? x?.Title ?? x?.Label ?? '').join('; ') : v?.[f.lookupField || 'Title'] ?? v?.Title ?? v?.Label ?? ''
     else if (f.kind === 'number' || f.kind === 'currency') v = v == null ? null : Number(v)
     row[f.internal] = v
   }
@@ -440,13 +443,17 @@ function toRow(item: any, fields: SpField[]): Row {
 const cfgSite = () => baked.configSiteUrl || lsGet<string>('spx.configSite', '')
 const cfgUri = () => `_api/web/lists/getbytitle(${odataQuote(baked.configList)})`
 
-async function kvGet<T>(key: string): Promise<T | null> {
+async function kvGet<T>(key: string, strict = false): Promise<T | null> {
   const site = cfgSite(); if (!site) return null
   try {
     const d = await http(site, 'GET', `${cfgUri()}/items?$select=Id,ConfigJson&$filter=${enc(`Title eq ${odataQuote(key)}`)}&$top=1`)
     const it = rows(d)[0]
     return it?.ConfigJson ? (JSON.parse(it.ConfigJson) as T) : null
-  } catch { return null }   // list not created yet / no access: caller falls back to the browser copy
+  } catch (e) {
+    // only 'the settings list does not exist yet' counts as empty; connection / permission problems must be visible
+    if (strict && !/404|does not exist|not found|List .* not found/i.test((e as Error).message)) throw new Error(`Could not read the app settings list on ${site}: ${(e as Error).message}`)
+    return null
+  }
 }
 
 async function kvSet(key: string, value: unknown, siteArg?: string): Promise<void> {

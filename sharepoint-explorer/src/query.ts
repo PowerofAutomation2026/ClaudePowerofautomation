@@ -147,7 +147,7 @@ const dt = (d: Date) => `datetime'${d.toISOString()}'`
 
 export function clauseToOData(c: Clause, f: SpField): string | null {
   const n = f.internal
-  const fieldRef = f.kind === 'user' || f.kind === 'lookup' ? `${n}/Title` : n
+  const fieldRef = f.kind === 'user' ? `${n}/Title` : f.kind === 'lookup' ? `${n}/${f.lookupField || 'Title'}` : n
   switch (c.op) {
     case 'empty': return `${n} eq null`
     case 'notempty': return `${n} ne null`

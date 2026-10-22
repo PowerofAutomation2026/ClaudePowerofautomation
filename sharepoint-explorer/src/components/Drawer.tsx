@@ -30,7 +30,8 @@ export function openShareDialog(engine: Engine, row: Row): boolean {
   const w = 640, h = 680, l = Math.max(0, (screen.width - w) / 2), t = Math.max(0, (screen.height - h) / 2)
   return !!window.open(shareUrl(engine, row), 'spx_share', `popup=yes,width=${w},height=${h},left=${l},top=${t}`)
 }
-export const downloadUrl = (engine: Engine, row: Row) => `${new URL(engine.src.siteUrl).origin}/_layouts/15/download.aspx?SourceUrl=${encodeURIComponent(new URL(engine.src.siteUrl).origin + encPath(String(row.FileRef)))}`
+/** _layouts handlers are web-scoped: they must be called on the site that holds the library, not the tenant root */
+export const downloadUrl = (engine: Engine, row: Row) => `${engine.src.siteUrl.replace(/\/$/, '')}/_layouts/15/download.aspx?SourceUrl=${encodeURIComponent(new URL(engine.src.siteUrl).origin + encPath(String(row.FileRef)))}`
 
 export function Drawer({ engine, row, index, actions, access, fav, onFav, onInline, onClose, onNav }: { engine: Engine; row: Row; index: number; actions: MenuItem[]; access: Access; fav: boolean; onFav: () => void; onInline: (row: Row, field: SpField, value: unknown) => Promise<void>; onClose: () => void; onNav: (d: number) => void }) {
   const toast = useToast()
@@ -75,7 +76,7 @@ export function Drawer({ engine, row, index, actions, access, fav, onFav, onInli
       </div>
       <div className="body">
         {!lib && <RecordHero engine={engine} row={full} />}
-        {lib && !isFolder && isImage(ext) && engine.backend.mode === 'live' && <div className="dprev"><img src={`${origin}/_layouts/15/getpreview.ashx?path=${encodeURIComponent(origin + full.FileRef)}&resolution=3`} alt={`Preview of ${title}`} onError={(e) => ((e.currentTarget.parentElement as HTMLElement).style.display = 'none')} /></div>}
+        {lib && !isFolder && isImage(ext) && engine.backend.mode === 'live' && <div className="dprev"><img src={`${engine.src.siteUrl.replace(/\/$/, '')}/_layouts/15/getpreview.ashx?path=${encodeURIComponent(origin + encPath(String(full.FileRef)))}&resolution=3`} alt={`Preview of ${title}`} onError={(e) => ((e.currentTarget.parentElement as HTMLElement).style.display = 'none')} /></div>}
         <div className="row" style={{ marginBottom: 8, gap: 6 }}>
           <a className="btn primary" href={url} target="_blank" rel="noreferrer noopener"><Icon n="ext" size={16} />Open in SharePoint</a>
           <Menu label="Share" icon="share" align="left">

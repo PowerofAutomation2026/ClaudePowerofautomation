@@ -8,6 +8,8 @@ export interface SpField {
   kind: FieldKind
   typeAsString: string
   choices?: string[]
+  /** lookup columns: the target column that is shown (default Title) */
+  lookupField?: string
   multi?: boolean
   required?: boolean
   indexed?: boolean

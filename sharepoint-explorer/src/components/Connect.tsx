@@ -33,7 +33,7 @@ export function Connect({ backend, config, isOwner, who, engine, access, onSaved
     setErr(''); setBusy(true); setSel(null)
     try {
       const url = site.trim().replace(/\/+$/, '')
-      if (!/^https:\/\/[^/]+\.sharepoint\.(com|us|de|cn)\//i.test(url + '/') && backend.mode === 'live') throw new Error('Enter a SharePoint site address, e.g. https://contoso.sharepoint.com/sites/Finance')
+      if (!/^https:\/\/[^/\s]+\.[^/\s]+/i.test(url) && backend.mode === 'live') throw new Error('Enter a SharePoint site address, e.g. https://contoso.sharepoint.com/sites/Finance')
       setLists(await backend.listLists(url)); lsSet('spx.lastSite', url); setSite(url)
     } catch (e) { setErr((e as Error).message); setLists(null) } finally { setBusy(false) }
   }

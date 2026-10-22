@@ -192,6 +192,18 @@ try {
   if (-not $added) { throw "Could not add the SharePoint connector. Run manually:  pac code add-data-source -a $api -c $($conn.Id) -d <site url> -t <existing list name>   then re-run this script." }
   Ok "SharePoint connector added ($($conn.Id))"
 
+  # The app compiles the data-source description pac generates into itself. If it is missing, the app cannot reach SharePoint.
+  $schema = @('.power\schemas\appschemas\dataSourcesInfo.ts', '.power\appschemas\dataSourcesInfo.ts') | Where-Object { Test-Path (Join-Path $root $_) } | Select-Object -First 1
+  if (-not $schema) {
+    Warn 'pac did not generate .power\...\dataSourcesInfo.ts (it reported the data source as already present). Re-registering from a clean state...'
+    $raw = if (Test-Path $cfgPath) { [System.IO.File]::ReadAllText($cfgPath).TrimStart([char]0xFEFF) } else { $null }
+    if ($raw) { try { $j = $raw | ConvertFrom-Json; foreach ($k in 'connectionReferences','databaseReferences','dataSources') { if ($j.PSObject.Properties[$k]) { $j.$k = [pscustomobject]@{} } }; [System.IO.File]::WriteAllText($cfgPath, ($j | ConvertTo-Json -Depth 20), $utf8NoBom) } catch { } }
+    $null = Add-Source @(); if (-not (Test-Path (Join-Path $root '.power\schemas\appschemas\dataSourcesInfo.ts'))) { $null = Add-Source @('-d', $ConfigSiteUrl, '-t', $(if ($BootstrapList) { $BootstrapList } else { 'Documents' })) }
+    $schema = @('.power\schemas\appschemas\dataSourcesInfo.ts', '.power\appschemas\dataSourcesInfo.ts') | Where-Object { Test-Path (Join-Path $root $_) } | Select-Object -First 1
+  }
+  if (-not $schema) { throw 'pac did not generate the data-source schema (.power\schemas\appschemas\dataSourcesInfo.ts). Without it the app would show no SharePoint data. Delete power.config.json and the .power folder, then run this script again.' }
+  Ok "Data-source schema present ($schema)"
+
   # ---------- 7. build ----------
   Step 'Building'
   & npm run build
@@ -201,6 +213,7 @@ try {
   }
   if (-not (Test-Path (Join-Path $root 'dist\index.html'))) { throw 'Build produced no dist\index.html' }
   Ok 'Build OK'
+  if (-not (Select-String -Path (Join-Path $root 'dist\assets\*.js') -Pattern 'dataSourceType' -Quiet)) { throw 'The built app does not contain the SharePoint data-source description: it would run without live data. Check the pac output above and re-run.' }
 
   # ---------- 8. publish ----------
   Step 'Publishing to Power Platform'

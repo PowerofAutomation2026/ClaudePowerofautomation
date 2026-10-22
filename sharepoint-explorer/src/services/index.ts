@@ -3,7 +3,8 @@ import { demo } from './demo'
 
 export interface Chosen { backend?: Backend; error?: string }
 
-const isLocalHost = () => /^(localhost|127\.0\.0\.1|\[::1\]|)$/.test(location.hostname)
+const embedded = () => { try { return window.self !== window.top } catch { return true } }   // Power Apps hosts the app in an iframe
+const isLocalHost = () => !embedded() && /^(localhost|127\.0\.0\.1|\[::1\]|)$/.test(location.hostname)
 const withTimeout = <T,>(p: Promise<T>, ms: number, what: string) => Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${what} did not answer within ${ms / 1000} s`)), ms))])
 
 /**
@@ -20,7 +21,7 @@ export async function chooseBackend(): Promise<Chosen> {
     return isLocalHost() ? { backend: demo } : { error: 'No SharePoint connector is compiled into this app. The deploy script must run “pac code add-data-source” before the build, so that .power/schemas/appschemas/dataSourcesInfo.ts exists.' }
   }
   try {
-    const who = await withTimeout(live.sp.whoAmI(), 25_000, 'Power Apps (getContext)')
+    const who = await withTimeout(live.sp.whoAmI(), 60_000, 'Power Apps (getContext)')
     if (!who.upn && !who.name) throw new Error('Power Apps returned no signed-in user')
     return { backend: live.sp }
   } catch (e) {
