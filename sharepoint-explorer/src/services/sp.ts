@@ -541,3 +541,25 @@ async function folderPage(src: SourceConfig, fields: SpField[], select: string[]
   const all = [...(folders ? rows(folders).map((i) => toRow(i, fields)) : []), ...f]
   return { rows: all, scanned: all.length, cursor: f.length >= FOLDER_PAGE ? `id:${f[f.length - 1].__id + 1}` : undefined }
 }
+
+/* ------------------------------------------------------------------ diagnostics (what an admin needs when "it shows demo data / no data") */
+export interface Check { label: string; ok: boolean | null; detail: string }
+const within = <T,>(p: Promise<T>, ms = 9000) => Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`no answer within ${ms / 1000} s (is the app running inside Power Apps?)`)), ms))])
+export async function diagnose(testSite?: string): Promise<Check[]> {
+  const out: Check[] = []
+  const entries = Object.entries<any>(dataSourcesInfo)
+  out.push({ label: 'Data sources compiled into this app', ok: entries.length > 0, detail: entries.length ? entries.map(([k, v]) => `${k} (${v?.dataSourceType ?? '?'}, table ${v?.tableId || '—'}, ${Object.keys(v?.apis ?? {}).length} operations)`).join(' · ') : 'none — .power/schemas/appschemas/dataSourcesInfo.ts was not part of the build. Re-run the deploy script (pac code add-data-source must run before the build).' })
+  out.push({ label: 'Connector candidates', ok: candidates().length > 0, detail: candidates().join(', ') || 'none' })
+  try { const c = await within(getContext()); out.push({ label: 'Power Apps context (getContext)', ok: true, detail: `${c.user.userPrincipalName ?? c.user.fullName ?? 'user'} · environment ${c.app.environmentId}` }) }
+  catch (e) { out.push({ label: 'Power Apps context (getContext)', ok: false, detail: (e as Error).message }) }
+  try { out.push({ label: 'Data source bound to the SharePoint connection', ok: true, detail: await within(spKey()) }) } catch (e) { out.push({ label: 'Data source bound to the SharePoint connection', ok: false, detail: (e as Error).message }) }
+  try { const r = rows(await within(exec('GetDataSets', {}))); out.push({ label: 'SharePoint connection works (list of sites)', ok: true, detail: `${r.length} site(s) returned` }) }
+  catch (e) { out.push({ label: 'SharePoint connection works (list of sites)', ok: false, detail: (e as Error).message }) }
+  const site = testSite || baked.configSiteUrl || lsGet<string>('spx.lastSite', '')
+  if (site) {
+    try { const w = await within(http(site, 'GET', '_api/web?$select=Title,Url')); out.push({ label: `SharePoint REST on ${site}`, ok: true, detail: `${w.Title} — ${w.Url}` }) }
+    catch (e) { out.push({ label: `SharePoint REST on ${site}`, ok: false, detail: (e as Error).message }) }
+  }
+  out.push({ label: 'Config site for shared settings', ok: !!baked.configSiteUrl, detail: baked.configSiteUrl || 'not set at deploy time: other users cannot see what the owner connected' })
+  return out
+}

@@ -10,6 +10,7 @@ import { BulkDialog, SearchEverywhere } from './components/Tools'
 import { downloadUrl, itemUrl, openShareDialog } from './components/Drawer'
 import { FolderIcon } from './components/FileGlyph'
 import { Board } from './components/Board'
+import { DiagnosticsDialog, StartFailure } from './components/Diagnostics'
 import { Calendar } from './components/Calendar'
 import { ImportDialog } from './components/ImportDialog'
 import type { PermTarget } from './types'
@@ -58,6 +59,8 @@ function Shell() {
   const toast = useToast()
   const [boot, setBoot] = useState<{ backend: Backend; who: { upn: string; name: string }; config: AppConfig } | null>(null)
   const [bootErr, setBootErr] = useState('')
+  const [liveErr, setLiveErr] = useState('')
+  const [diag, setDiag] = useState(false)
   const [config, setConfig] = useState<AppConfig | null>(null)
   const [tab, setTab] = useState<Tab>('dashboard')
   const [src, setSrc] = useState<SourceConfig | null>(null)
@@ -99,7 +102,9 @@ function Shell() {
   useEffect(() => {
     (async () => {
       try {
-        const backend = await chooseBackend()
+        const chosen = await chooseBackend()
+        if (!chosen.backend) { setLiveErr(chosen.error ?? 'Unknown start-up error'); return }
+        const backend = chosen.backend
         const [who, config] = await Promise.all([backend.whoAmI(), backend.loadConfig()])
         setBoot({ backend, who, config }); setConfig(config)
         backend.loadViews(who.upn).then(setViewsAll).catch(() => {})
@@ -283,6 +288,7 @@ function Shell() {
       { id: 'data', label: 'Go to Data', icon: 'table', run: () => setTab('data') },
       { id: 'conn', label: isOwner ? 'Connect a list or library' : 'Data source info', icon: 'plug', run: () => setTab('connect') },
       ...(access.canAdd && src && !src.isLibrary ? [{ id: 'imp', label: 'Import items from CSV', icon: 'download' as const, run: () => setImporting(true) }] : []),
+      { id: 'diag', label: 'Connection diagnostics', icon: 'info', run: () => setDiag(true) },
       { id: 'every', label: 'Search everywhere (all lists + Power Platform community)', icon: 'search', run: () => setEverywhere('') },
       ...(access.canAdd && src && !src.isLibrary ? [{ id: 'new', label: 'New item', hint: 'N', icon: 'plus' as const, run: () => setPanel({ row: null }) }] : []),
       ...(access.canAdd && src?.isLibrary ? [{ id: 'nf', label: 'New folder', icon: 'lib' as const, run: () => setNameDlg({ mode: 'folder' }) }, { id: 'up', label: 'Upload files', icon: 'download' as const, run: () => fileIn.current?.click() }] : []),
@@ -302,6 +308,7 @@ function Shell() {
   }, [config, live, view, isOwner, engine, access, src]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ------------------------------------------------ render */
+  if (liveErr) return <StartFailure error={liveErr} />
   if (bootErr) return <main style={{ padding: 24 }}><div className="banner bad" role="alert"><Icon n="info" /><div><b>Could not start.</b> {bootErr}</div></div></main>
   if (!boot || !config) return <main style={{ padding: 24 }} aria-busy="true"><div className="card skel" style={{ height: 120 }} /><span className="sr-only" role="status">Loading…</span></main>
 
@@ -335,7 +342,9 @@ function Shell() {
           ))}
         </nav>
         <span className="grow" />
-        {boot.backend.mode === 'demo' && <span className="pill warn" title="Not running inside Power Apps: using generated sample data">Demo data</span>}
+        {boot.backend.mode === 'demo'
+          ? <span className="pill warn" title="Sample data, not your SharePoint. Open the app from Power Apps to see live data.">Demo data</span>
+          : <button className="pill good" style={{ cursor: 'pointer' }} onClick={() => setDiag(true)} title="Connected to SharePoint. Click for connection diagnostics">● Live</button>}
         {engine && <span className={`pill ${access.role === 'admin' ? 'accent' : access.role === 'writer' ? 'good' : ''}`} title={access.reason} role="status"><Icon n={access.role === 'reader' ? 'lock' : 'check'} size={13} />{roleLabel(access.role)}</span>}
         {boot.backend.mode === 'demo' && (
           <Menu label={<span className="lbl-t">Try role</span>} icon="star">
@@ -344,7 +353,7 @@ function Shell() {
         )}
 
         <button className="btn" aria-pressed={live} onClick={() => setLive(!live)} title="Live pulse: check for new and changed items every 20 seconds" disabled={!engine}>
-          <span className={`live-dot${live ? '' : ' off'}`} aria-hidden="true" /><span className="lbl-t">Live</span>{live && engine && engine.pendingNew > 0 && <span className="pill accent">{engine.pendingNew}</span>}
+          <span className={`live-dot${live ? '' : ' off'}`} aria-hidden="true" /><span className="lbl-t">Pulse</span>{live && engine && engine.pendingNew > 0 && <span className="pill accent">{engine.pendingNew}</span>}
         </button>
         <button className="btn" onClick={() => setEverywhere('')} title="Search every connected list and the Power Platform community (Ctrl+Shift+F)"><Icon n="search" /><span className="lbl-t">Search all</span></button>
         <button className="btn icon" onClick={() => setPalette(true)} aria-label="Command palette (Ctrl+K)" title="Command palette (Ctrl+K)"><Icon n="cmd" /></button>
@@ -490,6 +499,7 @@ function Shell() {
           <div className="row" style={{ justifyContent: 'flex-end' }}><button className="btn" onClick={() => setConfirmDel(null)}>Cancel</button><button className="btn primary" style={{ background: 'var(--bad)' }} disabled={busy} onClick={() => void deleteRows()}>{busy ? 'Deleting…' : 'Delete'}</button></div>
         </Modal>
       )}
+      {diag && <DiagnosticsDialog site={src?.siteUrl} onClose={() => setDiag(false)} />}
       {palette && <Palette cmds={cmds} onClose={() => setPalette(false)} />}
     </div>
   )
