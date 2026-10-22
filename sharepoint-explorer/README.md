@@ -4,6 +4,11 @@ Connect **any SharePoint list or document library** with one button and get a gr
 instant search and PDF / CSV / JSON export. Built for lists with **millions of rows**: the browser never holds more than a
 capped window of rows; everything else is paged, streamed or aggregated.
 
+## Troubleshooting
+* Header shows a green **● Live** and the footer says `Build v1.3.0 · live SharePoint data` when you are on live data. An orange **SAMPLE DATA** bar means you are on made-up data (e.g. `Run-Demo.cmd` or an old copy of the app).
+* Click **● Live** (or “Connection diagnostics” in Ctrl+K) to see what is working: data sources in the build, Power Apps context, the SharePoint connection, a REST test on a site.
+* A column SharePoint refuses to return (some system columns) is skipped automatically instead of breaking the list.
+
 ## How to run
 **A. Try it on your PC (no deployment, sample data):** unzip, double-click **`Run-Demo.cmd`** (installs Node.js if needed, then opens http://127.0.0.1:3000/?demo=1). Or in a terminal: `npm install` then `npm run dev`.
 

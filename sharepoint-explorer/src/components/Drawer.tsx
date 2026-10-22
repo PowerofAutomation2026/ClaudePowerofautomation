@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { titleField } from '../query'
 import type { Engine } from '../engine'
 import type { Access, Attachment, Row, SpField, VersionInfo } from '../types'
 import { isEditable } from '../editable'
@@ -51,7 +52,7 @@ export function Drawer({ engine, row, index, actions, access, fav, onFav, onInli
   }, [row]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (tab === 'history' && !versions) engine.backend.getVersions(engine.src, row.__id).then(setVersions).catch(() => setVersions([])) }, [tab]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const title = cellText(engine.fields.find((f) => f.internal === (lib ? 'FileLeafRef' : 'Title')) ?? ({ kind: 'text', internal: 'Title' } as SpField), full) || `Item ${row.__id}`
+  const title = cellText(engine.fields.find((f) => f.internal === titleField(engine.fields, lib)) ?? ({ kind: 'text', internal: 'Title' } as SpField), full) || `Item ${row.__id}`
   const isFolder = full.FSObjType === 1
   const shown = engine.fields.filter((f) => full[f.internal] != null && full[f.internal] !== '' && f.kind !== 'other' && !(f.internal === 'FileDirRef'))
   const url = itemUrl(engine, full)
@@ -134,7 +135,7 @@ function RecordHero({ engine, row }: { engine: Engine; row: Row }) {
   const people = fs.filter((f) => f.kind === 'user' && row[f.internal]).slice(0, 2)
   const due = fs.find((f) => f.kind === 'date' && /due|end|deadline|date/i.test(f.internal) && row[f.internal])
   if (!chips.length && !pct && !people.length) return null
-  const v = pct ? Math.max(0, Math.min(100, Number(row[pct.internal]))) : 0
+  const v = pct ? Math.max(0, Math.min(100, Math.round(Number(row[pct.internal]) * (pct.percent ? 100 : 1)))) : 0
   return (
     <div className="rhero">
       {pct && <svg width="64" height="64" viewBox="0 0 64 64" role="img" aria-label={`${pct.title}: ${v}%`}><circle cx="32" cy="32" r="26" fill="none" stroke="var(--bg2)" strokeWidth="8" /><circle cx="32" cy="32" r="26" fill="none" stroke="var(--c5)" strokeWidth="8" strokeLinecap="round" strokeDasharray={`${(v / 100) * 163.4} 163.4`} transform="rotate(-90 32 32)" /><text x="32" y="37" textAnchor="middle" fontWeight="800" fontSize="15" fill="var(--text)">{v}%</text></svg>}

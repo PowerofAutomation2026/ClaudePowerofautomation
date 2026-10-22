@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { titleField } from '../query'
 import type { Engine } from '../engine'
 import type { Row, SpField } from '../types'
 import { cellText, fmt } from '../util'
@@ -18,7 +19,7 @@ export function Board({ engine, version, field, setField, canEdit, favs, onToggl
   const [drag, setDrag] = useState<number | null>(null)
   const [over, setOver] = useState<string | null>(null)
   const [more, setMore] = useState<Record<string, number>>({})
-  const title = engine.fields.find((f) => f.internal === (engine.src.isLibrary ? 'FileLeafRef' : 'Title'))
+  const title = engine.fields.find((f) => f.internal === titleField(engine.fields, engine.src.isLibrary))
   const meta = engine.fields.filter((f) => engine.select.includes(f.internal) && f !== title && f.internal !== field.internal && ['user', 'date', 'number', 'currency', 'boolean'].includes(f.kind) && !f.system).slice(0, 3)
   const cols = useMemo(() => {
     const vals = [...(field.choices ?? [])]

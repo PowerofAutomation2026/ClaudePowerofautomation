@@ -35,22 +35,27 @@ export function relTime(iso?: string | null): string {
   return `${Math.round(mo / 12)} y ago`
 }
 
-export const fmtDate = (iso?: string | null, withTime = false) => {
+/** Date-only columns are stored as site-local midnight in UTC: shift by 12 h and read the UTC calendar day so they never show the day before. */
+export const dateOnlyDay = (iso: string): string => { const d = new Date(new Date(iso).getTime() + 12 * 3600_000); return isNaN(+d) ? '' : `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}` }
+export const fmtDate = (iso?: string | null, withTime = false, dateOnly = false) => {
   if (!iso) return ''
   const d = new Date(iso)
   if (isNaN(+d)) return String(iso)
+  if (dateOnly) { const [y, m, day] = dateOnlyDay(String(iso)).split('-').map(Number); return new Date(y, m - 1, day).toLocaleDateString() }
   return withTime ? d.toLocaleString() : d.toLocaleDateString()
 }
+export const stripHtml = (s: string) => { try { return (new DOMParser().parseFromString(s, 'text/html').body.textContent ?? '').replace(/\s+/g, ' ').trim() } catch { return s } }
 
 /** Display text of one cell. Same function feeds the grid, search, CSV and PDF so they always agree. */
 export function cellText(f: SpField, row: Row): string {
   const v = row[f.internal]
   if (v == null || v === '') return ''
   switch (f.kind) {
-    case 'date': return fmtDate(String(v), /time|modified|created/i.test(f.internal) ? true : false)
+    case 'date': return fmtDate(String(v), !f.dateOnly, !!f.dateOnly)
     case 'boolean': return v === true || v === 'true' || v === 1 ? 'Yes' : 'No'
     case 'currency': return typeof v === 'number' ? v.toLocaleString(undefined, { style: 'currency', currency: 'USD' }) : String(v)
-    case 'number': return typeof v === 'number' ? (f.internal === 'File_x0020_Size' ? bytes(v) : nf.format(v)) : String(v)
+    case 'number': return typeof v === 'number' ? (f.percent ? `${Math.round(v * 100)}%` : f.internal === 'File_x0020_Size' ? bytes(v) : nf.format(v)) : String(v)
+    case 'note': return f.richText ? stripHtml(String(v)) : String(v)
     case 'multichoice': return Array.isArray(v) ? v.join('; ') : String(v)
     case 'url': return typeof v === 'object' ? String(v.Url ?? v.Description ?? '') : String(v)
     default: return Array.isArray(v) ? v.join('; ') : typeof v === 'object' ? String(v.Title ?? v.Label ?? JSON.stringify(v)) : String(v)

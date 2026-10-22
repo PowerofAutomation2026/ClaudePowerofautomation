@@ -15,7 +15,7 @@ import { Calendar } from './components/Calendar'
 import { ImportDialog } from './components/ImportDialog'
 import type { PermTarget } from './types'
 import { ViewsMenu } from './components/ViewsMenu'
-import { searchTokens } from './query'
+import { searchTokens, titleField } from './query'
 import { fmt, lsGet, lsSet, relTime, sameUser, uid } from './util'
 import { Connect } from './components/Connect'
 import { Dashboard } from './components/Dashboard'
@@ -34,7 +34,7 @@ export default function App() { return <Toaster><Shell /></Toaster> }
 
 /** Which columns to load: title first, the list's default view next, then the audit columns the dashboard needs. */
 function pickColumns(fields: SpField[], isLibrary: boolean): string[] {
-  const title = isLibrary ? 'FileLeafRef' : 'Title'
+  const title = titleField(fields, isLibrary)
   const out: string[] = []
   let expands = 0
   const add = (f?: SpField) => {
@@ -45,11 +45,12 @@ function pickColumns(fields: SpField[], isLibrary: boolean): string[] {
   const by = (n: string) => fields.find((f) => f.internal === n)
   add(by(title)); fields.filter((f) => !f.system).forEach(add)
   ;['Created', 'Modified', 'Author', 'Editor'].forEach((n) => add(by(n)))
-  fields.forEach(add)
+  // people-made columns before template/system ones, so a long list of system columns never pushes the user's own columns out
+  fields.filter((f) => !out.includes(f.internal)).sort((a, b) => Number(!!b.custom) - Number(!!a.custom)).forEach((f) => { if (f.internal.startsWith('_') && !f.custom) return; add(f) })
   return out
 }
 const defaultVisible = (fields: SpField[], loaded: string[], isLibrary: boolean) => {
-  const title = isLibrary ? 'FileLeafRef' : 'Title'
+  const title = titleField(fields, isLibrary)
   const v = [...new Set([...loaded.filter((n) => n === title), ...loaded.filter((n) => !fields.find((f) => f.internal === n)?.system)])].slice(0, 8)
   for (const n of isLibrary ? ['Modified', 'Editor'] : ['Modified']) if (loaded.includes(n) && !v.includes(n)) v.push(n)
   return v
@@ -209,13 +210,13 @@ function Shell() {
     else if (Object.keys(values).length) await boot.backend.updateItem(engine.src, engine.fields, id, values)
     let failed = 0
     for (const f of files) { try { await boot.backend.addAttachment(engine.src, rid!, f) } catch { failed++ } }
-    if (id != null) { const fresh = await boot.backend.getItem(engine.src, engine.fields, id); if (fresh) { engine.patchRow(fresh); setOpen((o) => (o && o.__id === fresh.__id ? { ...o, ...fresh } : o)) } } else void engine.refresh()
+    if (id != null) { const fresh = await boot.backend.getItem(engine.src, engine.fields, id).catch(() => null); if (!fresh) toast('warn', 'Saved, but the refreshed item could not be read back. Reload to see it.'); if (fresh) { engine.patchRow(fresh); setOpen((o) => (o && o.__id === fresh.__id ? { ...o, ...fresh } : o)) } } else void engine.refresh()
     toast(failed ? 'warn' : 'good', id == null ? 'Item created' : 'Saved' + (failed ? ` — ${failed} attachment(s) failed` : ''))
     if (!again) setPanel(null)
   }
   const toggleFav = (id: number) => setFavs((cur) => { const n = new Set(cur); n.has(id) ? n.delete(id) : n.add(id); if (src) lsSet(`spx.fav.${src.id}`, [...n]); return n })
   const favActive = !!engine?.q.clauses.some((c) => c.field === 'ID' && c.op === 'in')
-  const toggleFavFilter = () => { if (!engine) return; const rest = engine.q.clauses.filter((c) => !(c.field === 'ID' && c.op === 'in')); change({ clauses: favActive ? rest : [...rest, { field: 'ID', op: 'in', value: `★ Favorites (${favs.size})`, values: [...favs].slice(0, 100).map(String) }] }) }
+  const toggleFavFilter = () => { if (!engine) return; const rest = engine.q.clauses.filter((c) => !(c.field === 'ID' && c.op === 'in')); change({ clauses: favActive ? rest : [...rest, { field: 'ID', op: 'in', value: `★ Favorites (${favs.size})`, values: [...favs].slice(0, 40).map(String) }] }) }
   const moveCard = async (row: Row, value: string) => {
     if (!engine || !boot || !boardField) return
     const prev = row[boardField.internal]

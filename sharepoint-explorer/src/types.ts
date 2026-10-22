@@ -10,6 +10,15 @@ export interface SpField {
   choices?: string[]
   /** lookup columns: the target column that is shown (default Title) */
   lookupField?: string
+  lookupList?: string
+  /** name SharePoint uses for this column in /items $select, $filter, JSON and write bodies (SP.Field.EntityPropertyName, e.g. OData__x0031_st_Approver) */
+  prop?: string
+  readOnly?: boolean
+  dateOnly?: boolean
+  percent?: boolean
+  richText?: boolean
+  /** added by people (not part of the list template): shown before system columns */
+  custom?: boolean
   multi?: boolean
   required?: boolean
   indexed?: boolean

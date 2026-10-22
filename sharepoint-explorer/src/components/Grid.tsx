@@ -33,7 +33,7 @@ export function CellView({ f, row, tokens }: { f: SpField; row: Row; tokens: str
     case 'date': return <time dateTime={String(row[f.internal])}>{text}</time>
     default:
       if (f.internal === 'FileLeafRef') return <span className="who"><FileGlyph name={text} folder={row.FSObjType === 1} size={22} />{hl(text, tokens)}</span>
-      if (/percent/i.test(f.internal + f.title) && !isNaN(Number(row[f.internal]))) return <span className="who" style={{ width: '100%' }}><span style={{ flex: 1, height: 6, background: 'var(--bg2)', borderRadius: 9, overflow: 'hidden' }} aria-hidden="true"><i style={{ display: 'block', height: '100%', width: `${Math.min(100, Number(row[f.internal]))}%`, background: 'var(--c5)' }} /></span>{text}</span>
+      if (/percent/i.test(f.internal + f.title) && !isNaN(Number(row[f.internal]))) return <span className="who" style={{ width: '100%' }}><span style={{ flex: 1, height: 6, background: 'var(--bg2)', borderRadius: 9, overflow: 'hidden' }} aria-hidden="true"><i style={{ display: 'block', height: '100%', width: `${Math.min(100, Number(row[f.internal]) * (f.percent ? 100 : 1))}%`, background: 'var(--c5)' }} /></span>{text}</span>
       return hl(text, tokens)
   }
 }

@@ -8,7 +8,7 @@
  *    memory is capped, and every request is cancellable.
  */
 import type { Backend, Query, Row, SourceConfig, SpField } from './types'
-import { emptyQuery, isDefaultQuery, isFolderMode, matchRow, resetHaystack, searchTokens, sortFolderRows, sortRows } from './query'
+import { emptyQuery, isDefaultQuery, isFolderMode, titleField, matchRow, resetHaystack, searchTokens, sortFolderRows, sortRows } from './query'
 
 export const LOCAL_MAX = 25_000
 export const BULK = 5_000
@@ -59,7 +59,7 @@ export class Engine {
   ) {
     this.total = src.itemCount
     this.mode = src.itemCount <= LOCAL_MAX && !src.isLibrary ? 'local' : 'server'
-    this.titleField = src.isLibrary ? 'FileLeafRef' : 'Title'
+    this.titleField = titleField(fields, src.isLibrary)
     this.q = src.isLibrary && src.url ? { ...emptyQuery(), folder: src.url, sort: { field: 'FileLeafRef', dir: 'asc' } } : { ...emptyQuery(), sort: { field: 'ID', dir: 'desc' } }
   }
 

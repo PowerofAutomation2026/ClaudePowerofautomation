@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { Engine } from '../engine'
 import { isEditable } from '../editable'
 import type { Attachment, Principal, Row, SpField } from '../types'
-import { bytes, lsGet, lsSet, relTime } from '../util'
+import { bytes, dateOnlyDay, lsGet, lsSet, relTime } from '../util'
 import { FileGlyph } from './FileGlyph'
 import { PrincipalPicker } from './Permissions'
 import { Icon, Modal, hashColor, initials, useToast } from './ui'
@@ -14,11 +14,11 @@ function initial(f: SpField, row: Row | null): Val {
   const v = row?.[f.internal]
   switch (f.kind) {
     case 'boolean': return v == null ? '' : v === true || v === 'true' || v === 'Yes' ? 'true' : 'false'
-    case 'date': return v ? String(v).slice(0, 10) : ''
+    case 'date': return v ? (f.dateOnly ? dateOnlyDay(String(v)) : String(v).slice(0, 10)) : ''
     case 'multichoice': return Array.isArray(v) ? v.map(String) : v ? String(v).split('; ').filter(Boolean) : []
     case 'user': { const names = Array.isArray(v) ? v.map(String) : v ? String(v).split('; ').filter(Boolean) : []; const ids: number[] = row?.[f.internal + '__ids'] ?? []; return names.map((title, i) => ({ id: ids[i] ?? 0, title, login: '', kind: 'user' as const })) }
     case 'url': return { url: v?.Url ?? '', desc: v?.Description ?? '' }
-    default: return v == null ? '' : String(v)
+    default: return v == null ? '' : f.percent && f.kind === 'number' ? String(Math.round(Number(v) * 100)) : String(v)
   }
 }
 const same = (a: Val, b: Val) => JSON.stringify(a) === JSON.stringify(b)

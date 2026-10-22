@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
+import { titleField } from '../query'
 import type { Engine } from '../engine'
 import type { Clause, Row, SpField } from '../types'
-import { cellText, fmt } from '../util'
+import { cellText, dateOnlyDay, fmt } from '../util'
 import { Icon, hashColor } from './ui'
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-const dayOf = (v: unknown) => { const t = Date.parse(String(v)); return isNaN(t) ? '' : ymd(new Date(t)) }
+const dayOf = (v: unknown, dateOnly = false) => { const t = Date.parse(String(v)); return isNaN(t) ? '' : dateOnly ? dateOnlyDay(String(v)) : ymd(new Date(t)) }
 const isCalClause = (c: Clause, f: string) => c.field === f && (c.op === 'ge' || c.op === 'le')
 
 /** Month calendar over any date column. Click an empty day to add an item on that date; drag an item to another day to reschedule it. */
@@ -18,7 +19,7 @@ export function Calendar({ engine, version, dateFields, canAdd, canEdit, onNew, 
   const [month, setMonth] = useState(() => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1) })
   const [drag, setDrag] = useState<number | null>(null)
   const [openDay, setOpenDay] = useState<string | null>(null)
-  const title = engine.src.isLibrary ? 'FileLeafRef' : 'Title'
+  const title = titleField(engine.fields, engine.src.isLibrary)
   const colorF = engine.fields.find((f) => f.kind === 'choice' && engine.select.includes(f.internal))
 
   const first = new Date(month.getFullYear(), month.getMonth(), 1)
@@ -35,7 +36,7 @@ export function Calendar({ engine, version, dateFields, canAdd, canEdit, onNew, 
 
   const byDay = useMemo(() => {
     const m = new Map<string, Row[]>()
-    for (const r of engine.rows) { const k = dayOf(r[field.internal]); if (k) (m.get(k) ?? m.set(k, []).get(k)!).push(r) }
+    for (const r of engine.rows) { const k = dayOf(r[field.internal], field.dateOnly); if (k) (m.get(k) ?? m.set(k, []).get(k)!).push(r) }
     return m
   }, [engine.rows, field, version]) // eslint-disable-line react-hooks/exhaustive-deps
   const today = ymd(new Date())
@@ -59,7 +60,7 @@ export function Calendar({ engine, version, dateFields, canAdd, canEdit, onNew, 
           return (
             <div key={k} role="gridcell" className={`cal-day${out ? ' out' : ''}${k === today ? ' today' : ''}`} aria-label={`${d.toDateString()}, ${items.length} items`}
               onDragOver={(e) => { if (canEdit && drag != null) e.preventDefault() }}
-              onDrop={async (e) => { e.preventDefault(); const r = engine.rows.find((x) => x.__id === drag); setDrag(null); if (r && dayOf(r[field.internal]) !== k) await onMove(r, field, k) }}>
+              onDrop={async (e) => { e.preventDefault(); const r = engine.rows.find((x) => x.__id === drag); setDrag(null); if (r && dayOf(r[field.internal], field.dateOnly) !== k) await onMove(r, field, k) }}>
               <div className="cal-head"><b>{d.getDate()}</b>{canAdd && !engine.src.isLibrary && <button className="cal-add" aria-label={`Add item on ${d.toDateString()}`} onClick={() => onNew(field, k)}>＋</button>}</div>
               {items.slice(0, 3).map((r) => {
                 const c = colorF && r[colorF.internal] ? hashColor(String(r[colorF.internal])) : 'var(--c1)'

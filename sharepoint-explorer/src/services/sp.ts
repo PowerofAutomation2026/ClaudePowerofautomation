@@ -7,7 +7,7 @@ import { getClient } from '@microsoft/power-apps/data'
 import { getContext } from '@microsoft/power-apps/app'
 import baked from '../appconfig.json'
 import type { Access, AppConfig, Attachment, Backend, PermInfo, PermTarget, Principal, RoleAssign, RoleDef, VersionInfo, ViewDef, FieldKind, Page, Query, Row, SourceConfig, SpField, SpList, SpSite } from '../types'
-import { buildFilter, parseSearch, restName } from '../query'
+import { buildFilter, parseSearch, propOf, restName, titleField } from '../query'
 import { accessFrom } from '../access'
 import { isEditable } from '../editable'
 import { lsGet, lsSet, odataQuote, sleep } from '../util'
@@ -84,6 +84,8 @@ async function slot<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 function friendly(raw: string): string {
+  const fm = /field or property '([^']+)' does not exist|query to field '([^']+)' is not valid/i.exec(raw)
+  if (fm) return `A column in this list cannot be read through SharePoint REST (${fm[1] ?? fm[2]}). The app skips it automatically — reopen the list if it still shows this. ${raw}`
   if (/threshold/i.test(raw)) return 'SharePoint refused the query because it would scan more than 5,000 items without an index (list view threshold). Index the column you are filtering/sorting on (owner: Connect → Index column), or narrow the filter.'
   if (/does not exist|404/i.test(raw) && /list|site|web/i.test(raw)) return `Not found: ${raw}`
   if (/(401|403)|access denied|forbidden/i.test(raw)) return `Access denied by SharePoint - you may not have permission to this list. ${raw}`
@@ -127,7 +129,7 @@ async function http(site: string, method: 'GET' | 'POST', uri: string, body?: un
 const guid = (id: string) => `guid'${id}'`
 const KIND: Record<string, FieldKind> = {
   Text: 'text', Note: 'note', Number: 'number', Integer: 'number', Currency: 'currency', Counter: 'counter', Boolean: 'boolean', DateTime: 'date',
-  Choice: 'choice', MultiChoice: 'multichoice', User: 'user', UserMulti: 'user', Lookup: 'lookup', LookupMulti: 'lookup', URL: 'url',
+  Choice: 'choice', OutcomeChoice: 'choice', MultiChoice: 'multichoice', User: 'user', UserMulti: 'user', Lookup: 'lookup', LookupMulti: 'lookup', URL: 'url',
   Calculated: 'text', File: 'text', TaxonomyFieldType: 'lookup', TaxonomyFieldTypeMulti: 'lookup',
 }
 const SKIP_TYPES = new Set(['Computed', 'ContentTypeId', 'Guid', 'ThreadIndex', 'WorkflowEventType', 'WorkflowStatus', 'ModStat', 'Attachments', 'CrossProjectLink', 'Thumbnail', 'AllDayEvent', 'Recurrence'])
@@ -177,14 +179,21 @@ export const sp: Backend = {
 
   async getFields(site, id): Promise<SpField[]> {
     const base = `_api/web/lists(${guid(id)})`
-    const [fieldsRes, viewRes, choiceRes, lookupRes] = await Promise.all([
-      http(site, 'GET', `${base}/fields?$filter=Hidden eq false&$select=InternalName,Title,TypeAsString,Required,Indexed,Sortable,Filterable,ReadOnlyField&$top=500`),
+    const [fieldsRes, viewRes, choiceRes, lookupRes, dateRes, numRes, noteRes] = await Promise.all([
+      http(site, 'GET', `${base}/fields?$filter=Hidden eq false&$select=InternalName,EntityPropertyName,Title,TypeAsString,Required,Indexed,Sortable,Filterable,ReadOnlyField,FromBaseType,CanBeDeleted&$top=500`),
       http(site, 'GET', `${base}/defaultview/viewfields`).catch(() => null),
       http(site, 'GET', `${base}/fields?$filter=TypeAsString eq 'Choice' or TypeAsString eq 'MultiChoice'&$select=InternalName,Choices`).catch(() => null),
-      http(site, 'GET', `${base}/fields?$filter=TypeAsString eq 'Lookup' or TypeAsString eq 'LookupMulti'&$select=InternalName,LookupField`).catch(() => null),
+      http(site, 'GET', `${base}/fields?$filter=TypeAsString eq 'Lookup' or TypeAsString eq 'LookupMulti'&$select=InternalName,LookupField,LookupList`).catch(() => null),
+      http(site, 'GET', `${base}/fields?$filter=TypeAsString eq 'DateTime'&$select=InternalName,DisplayFormat`).catch(() => null),
+      http(site, 'GET', `${base}/fields?$filter=TypeAsString eq 'Number'&$select=InternalName,ShowAsPercentage`).catch(() => null),
+      http(site, 'GET', `${base}/fields?$filter=TypeAsString eq 'Note'&$select=InternalName,RichText`).catch(() => null),
     ])
     const choices = new Map<string, string[]>(rows(choiceRes).map((c) => [c.InternalName, c.Choices?.results ?? c.Choices ?? []]))
     const lookups = new Map<string, string>(rows(lookupRes).map((c) => [c.InternalName, String(c.LookupField || 'Title')]))
+    const lookupLists = new Map<string, string>(rows(lookupRes).map((c) => [c.InternalName, String(c.LookupList || '')]))
+    const dateOnly = new Set<string>(rows(dateRes).filter((c) => c.DisplayFormat === 0).map((c) => c.InternalName))
+    const percent = new Set<string>(rows(numRes).filter((c) => c.ShowAsPercentage).map((c) => c.InternalName))
+    const rich = new Set<string>(rows(noteRes).filter((c) => c.RichText).map((c) => c.InternalName))
     const inView: string[] = (viewRes?.Items?.results ?? viewRes?.Items ?? []).map(String)
     const out: SpField[] = []
     for (const r of rows(fieldsRes)) {
@@ -192,11 +201,15 @@ export const sp: Backend = {
       if (SKIP_TYPES.has(type) || SKIP_NAMES.has(r.InternalName) || (String(r.InternalName).startsWith('_') && r.InternalName !== '_Comments')) continue   // _ColorTag, _ComplianceFlags… are not selectable item properties
       const kind: FieldKind = r.InternalName === 'ID' ? 'counter' : KIND[type] ?? 'other'
       const multi = /Multi$/.test(type)
+      if (type.startsWith('Lookup') && !lookupLists.get(r.InternalName)) continue   // a lookup without a target list cannot be expanded
+      const tax = /^Taxonomy/.test(type)
       out.push({
         internal: r.InternalName, title: r.Title, kind, typeAsString: type, multi, required: !!r.Required, indexed: !!r.Indexed,
-        choices: choices.get(r.InternalName), lookupField: lookups.get(r.InternalName),
-        sortable: !!r.Sortable && !['note', 'user', 'lookup', 'multichoice', 'other', 'url'].includes(kind),
-        filterable: !!r.Filterable && !['note', 'multichoice', 'other', 'url'].includes(kind),
+        choices: choices.get(r.InternalName), lookupField: lookups.get(r.InternalName), lookupList: lookupLists.get(r.InternalName),
+        prop: String(r.EntityPropertyName || '') || undefined, readOnly: !!r.ReadOnlyField, custom: !r.FromBaseType && !!r.CanBeDeleted,
+        dateOnly: dateOnly.has(r.InternalName), percent: percent.has(r.InternalName), richText: rich.has(r.InternalName),
+        sortable: !!r.Sortable && !tax && !['note', 'user', 'lookup', 'multichoice', 'other', 'url'].includes(kind),
+        filterable: !!r.Filterable && !tax && !multi && !['note', 'multichoice', 'other', 'url'].includes(kind),
         system: inView.length ? !inView.includes(r.InternalName) && r.InternalName !== 'FileLeafRef' && r.InternalName !== 'Title' : false,
       })
     }
@@ -220,13 +233,14 @@ export const sp: Backend = {
       uri = cursor.slice(5)
     } else {
       if (byId && cursor?.startsWith('id:')) extra.push(`Id ${asc ? 'ge' : 'le'} ${Number(cursor.slice(3))}`)
-      const filter = buildFilter(q, fields, src.isLibrary, extra)
-      const order = byId ? `Id ${asc ? 'asc' : 'desc'}` : `${restName(q.sort.field)} ${asc ? 'asc' : 'desc'}`
+      const bigLib = src.isLibrary && src.itemCount > 5000   // FSObjType is not indexed: on big libraries filter folders out client-side instead
+      const filter = buildFilter(q, fields, src.isLibrary, extra, bigLib)
+      const order = byId ? `Id ${asc ? 'asc' : 'desc'}` : `${propOf(fields.find((f) => f.internal === q.sort.field) ?? { internal: q.sort.field })} ${asc ? 'asc' : 'desc'}`
       uri = `_api/web/lists(${guid(src.listId)})/items?${selectExpand(fields, select, src.isLibrary)}&$orderby=${enc(order)}&$top=${Math.min(top, 5000)}${filter ? `&$filter=${enc(filter)}` : ''}`
     }
     const d = await http(src.siteUrl, 'GET', uri, undefined, {}, signal)
     const items = rows(d)
-    const out = items.map((i) => toRow(i, fields))
+    const out = items.filter((i) => !(src.isLibrary && src.itemCount > 5000 && !q.folders && Number(i.FSObjType) === 1)).map((i) => toRow(i, fields))
     let next: string | undefined
     if (byId) {
       if (items.length >= Math.min(top, 5000) && out.length) next = `id:${out[out.length - 1].__id + (asc ? 1 : -1)}`
@@ -239,11 +253,12 @@ export const sp: Backend = {
   },
 
   async getItem(src, fields, id) {
-    const sel = fields.map((f) => f.internal)
-    try {
-      const d = await http(src.siteUrl, 'GET', `_api/web/lists(${guid(src.listId)})/items(${id})?${selectExpand(fields, sel, src.isLibrary)}`)
-      return toRow(d, fields)
-    } catch { return null }
+    // selecting every column of a real list fails (lookup threshold = 12, unselectable system columns): ask for a safe subset
+    const people = (f: SpField) => f.kind === 'user' || f.kind === 'lookup'
+    const want = fields.filter((f) => f.kind !== 'other' && f.internal !== 'ID' && !(f.readOnly && !/^(Author|Editor|Created|Modified|FileLeafRef)$/.test(f.internal)) || /^(Author|Editor|Created|Modified|FileLeafRef)$/.test(f.internal))
+    const sel = [...want.filter((f) => !people(f)).map((f) => f.internal), ...want.filter(people).slice(0, 10).map((f) => f.internal)]
+    try { return toRow(await http(src.siteUrl, 'GET', `_api/web/lists(${guid(src.listId)})/items(${id})?${selectExpand(fields, sel, src.isLibrary)}`), fields) }
+    catch (e) { if (/field or property|query to field/i.test((e as Error).message)) throw e; return null }
   },
 
   async changes(src, fields, select, afterId, since) {
@@ -293,7 +308,7 @@ export const sp: Backend = {
   },
 
   async suggest(src, fields, text, signal) {
-    const tf = src.isLibrary ? 'FileLeafRef' : 'Title'
+    const tf = titleField(fields, src.isLibrary)
     if (!fields.some((f) => f.internal === tf) || text.length < 2) return []
     try {
       const d = await http(src.siteUrl, 'GET', `_api/web/lists(${guid(src.listId)})/items?$select=Id,${tf}&$filter=${enc(`startswith(${tf},${odataQuote(text)})${src.isLibrary ? ' and FSObjType eq 0' : ''}`)}&$orderby=Id desc&$top=8`, undefined, {}, signal)
@@ -422,7 +437,7 @@ export const sp: Backend = {
   const wrap = <K extends 'query' | 'getItem' | 'changes'>(k: K) => { const orig = (sp[k] as (...a: any[]) => Promise<any>).bind(sp); (sp as any)[k] = (...a: any[]) => recover(() => orig(...a)) }
   wrap('query'); wrap('getItem'); wrap('changes')
 }
-const enc = (s: string) => encodeURIComponent(s).replace(/%24/g, '$')
+const enc = (s: string) => encodeURIComponent(s).replace(/%24/g, '$').replace(/%2C/gi, ',').replace(/%28/g, '(').replace(/%29/g, ')')
 
 /** columns SharePoint told us do not exist as item properties for this list (learned at run time, see recover()) */
 const unusable = new Set<string>()
@@ -432,8 +447,8 @@ export function selectExpand(fields: SpField[], select: string[], isLibrary: boo
   const exp = new Set<string>()
   for (const n of select) {
     const f = fields.find((x) => x.internal === n)
-    if (!f || n === 'ID' || unusable.has(n) || unusable.has(restName(n))) continue
-    const rn = restName(n)
+    if (!f || n === 'ID' || unusable.has(n) || unusable.has(propOf(f))) continue
+    const rn = propOf(f)
     if (f.kind === 'user' || (f.kind === 'lookup' && f.typeAsString.startsWith('Lookup'))) { sel.add(`${rn}/${f.kind === 'lookup' ? f.lookupField || 'Title' : 'Title'}`); if (f.kind === 'user') sel.add(`${rn}/Id`); exp.add(rn) }
     else sel.add(rn)
   }
@@ -459,7 +474,7 @@ function toRow(item: any, fields: SpField[]): Row {
   if (item.FSObjType != null) row.FSObjType = Number(item.FSObjType)
   if (item.File_x0020_Size != null) row.File_x0020_Size = Number(item.File_x0020_Size)
   for (const f of fields) {
-    const key = restName(f.internal) in item ? restName(f.internal) : f.internal
+    const key = propOf(f) in item ? propOf(f) : f.internal
     if (!(key in item)) continue
     let v = item[key]
     if (v && typeof v === 'object' && !Array.isArray(v) && 'results' in v) v = v.results
@@ -483,7 +498,7 @@ async function kvGet<T>(key: string, strict = false): Promise<T | null> {
     return it?.ConfigJson ? (JSON.parse(it.ConfigJson) as T) : null
   } catch (e) {
     // only 'the settings list does not exist yet' counts as empty; connection / permission problems must be visible
-    if (strict && !/404|does not exist|not found|List .* not found/i.test((e as Error).message)) throw new Error(`Could not read the app settings list on ${site}: ${(e as Error).message}`)
+    if (strict && !/HTTP 404|List '[^']*' does not exist|does not exist at site|not found/i.test((e as Error).message) ) throw new Error(`Could not read the app settings list on ${site}: ${(e as Error).message}`)
     return null
   }
 }
@@ -514,7 +529,7 @@ async function writeBody(src: SourceConfig, fields: SpField[], values: Record<st
   for (const [k, v] of Object.entries(values)) {
     const f = fields.find((x) => x.internal === k)
     if (!f || (!isEditable(f) && k !== 'FileLeafRef')) continue
-    const rk = restName(k)
+    const rk = propOf(f)
     const empty = v === '' || v == null || (Array.isArray(v) && !v.length)
     if (f.kind === 'user') {
       const ps = ((v as Principal[] | undefined) ?? []).filter((p) => p.id > 0 || p.login)
@@ -523,7 +538,7 @@ async function writeBody(src: SourceConfig, fields: SpField[], values: Record<st
     } else if (f.kind === 'multichoice') body[rk] = { __metadata: { type: 'Collection(Edm.String)' }, results: (v as string[]) ?? [] }
     else if (f.kind === 'url') { const u = v as { url?: string; desc?: string } | null; body[rk] = u?.url ? { __metadata: { type: 'SP.FieldUrlValue' }, Url: u.url, Description: u.desc || u.url } : null }
     else if (empty) body[rk] = null
-    else if (f.kind === 'number' || f.kind === 'currency') body[rk] = Number(v)
+    else if (f.kind === 'number' || f.kind === 'currency') body[rk] = f.percent ? Number(v) / 100 : Number(v)
     else if (f.kind === 'date') body[rk] = /^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? `${v}T12:00:00Z` : new Date(String(v)).toISOString()   // noon UTC: a date-only value never slips to the previous day in any time zone
     else body[rk] = v
   }
