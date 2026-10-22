@@ -6,7 +6,7 @@
 import { getClient } from '@microsoft/power-apps/data'
 import { getContext } from '@microsoft/power-apps/app'
 import baked from '../appconfig.json'
-import type { Access, AppConfig, Attachment, FormatRule, Backend, PermInfo, PermTarget, Principal, RoleAssign, RoleDef, VersionInfo, ViewDef, FieldKind, Page, Query, Row, SourceConfig, SpField, SpList, SpSite } from '../types'
+import type { Access, AppConfig, Attachment, DashConfig, FormatRule, Backend, PermInfo, PermTarget, Principal, RoleAssign, RoleDef, VersionInfo, ViewDef, FieldKind, Page, Query, Row, SourceConfig, SpField, SpList, SpSite } from '../types'
 import { buildFilter, parseSearch, propOf, restName, titleField } from '../query'
 import { accessFrom } from '../access'
 import { isEditable } from '../editable'
@@ -301,6 +301,8 @@ export const sp: Backend = {
     const [shared, mine] = await Promise.all([kvGet<ViewDef[]>('views:shared'), kvGet<ViewDef[]>(`views:${upn.toLowerCase()}`)])
     return { shared: shared ?? lsGet<ViewDef[]>('spx.views.shared', []), mine: mine ?? lsGet<ViewDef[]>(`spx.views.mine.${upn}`, []) }
   },
+  async loadDashboard(sourceId) { return (await kvGet<DashConfig>(`dashboard:${sourceId}`)) ?? lsGet<DashConfig | null>(`spx.dash.${sourceId}`, null) },
+  async saveDashboard(sourceId, cfg) { lsSet(`spx.dash.${sourceId}`, cfg); await kvSet(`dashboard:${sourceId}`, cfg) },
   async loadFormat(sourceId, upn) {
     const [shared, mine] = await Promise.all([kvGet<FormatRule[]>(`format:${sourceId}`), kvGet<FormatRule[]>(`format:${sourceId}:${upn.toLowerCase()}`)])
     return { shared: shared ?? [], mine: mine ?? lsGet<FormatRule[]>(`spx.format.${sourceId}.${upn}`, []) }

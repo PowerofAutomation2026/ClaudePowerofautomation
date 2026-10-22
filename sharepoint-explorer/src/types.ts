@@ -159,6 +159,8 @@ export interface Backend {
   /** fast typeahead: titles/names that start with or contain `text` */
   suggest(src: SourceConfig, fields: SpField[], text: string, signal?: AbortSignal): Promise<string[]>
   setRole?(r: Role): void
+  loadDashboard(sourceId: string): Promise<DashConfig | null>
+  saveDashboard(sourceId: string, cfg: DashConfig): Promise<void>
   loadFormat(sourceId: string, upn: string): Promise<{ shared: FormatRule[]; mine: FormatRule[] }>
   saveFormat(sourceId: string, rules: FormatRule[], audience: 'me' | 'everyone', upn: string): Promise<'cloud' | 'device'>
 
@@ -198,3 +200,26 @@ export interface FormatRule {
   text?: 'bold' | 'strike'
   enabled: boolean
 }
+
+/* ---- admin-customisable dashboard ---- */
+export type WidgetType = 'kpi' | 'bar' | 'donut' | 'timeline' | 'top' | 'goal' | 'text'
+export interface Widget {
+  id: string
+  type: WidgetType
+  title: string
+  size: 1 | 2 | 3
+  /** group-by / date column */
+  field?: string
+  agg?: 'count' | 'sum' | 'avg' | 'min' | 'max'
+  /** numeric column for sum/avg/min/max and for ranking in "top" */
+  valueField?: string
+  /** optional filter: only rows matching it count */
+  clause?: Clause
+  topN?: number
+  bucket?: 'auto' | 'day' | 'week' | 'month' | 'year'
+  goal?: number
+  color?: string
+  text?: string
+  sortDir?: 'asc' | 'desc'
+}
+export interface DashConfig { v: 1; widgets: Widget[]; refreshSec: number; updated: string; updatedBy: string }

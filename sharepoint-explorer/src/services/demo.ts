@@ -1,5 +1,5 @@
 /** Demo backend: a fake tenant with a 2,000,000-row list so the whole UI can be tried (and stress-tested) in a browser. */
-import type { Access, AppConfig, Attachment, FormatRule, Backend, PermInfo, PermTarget, Principal, RoleAssign, RoleDef, VersionInfo, Page, Query, Role, Row, SourceConfig, SpField, SpList, ViewDef } from '../types'
+import type { Access, AppConfig, Attachment, DashConfig, FormatRule, Backend, PermInfo, PermTarget, Principal, RoleAssign, RoleDef, VersionInfo, Page, Query, Role, Row, SourceConfig, SpField, SpList, ViewDef } from '../types'
 import { accessFrom, PERM } from '../access'
 import { emptyQuery, isFolderMode, matchRow, searchTokens } from '../query'
 import { lsGet, lsSet, sleep } from '../util'
@@ -190,6 +190,8 @@ export const demo: Backend = {
   },
   async deleteItem(src, id) { const L = listOf(src.listId); await sleep(150); deleted.add(key(L.kind, id)); L.itemCount-- },
   async loadViews(upn) { return { shared: lsGet<ViewDef[]>('spx.demo.views.shared', []), mine: lsGet<ViewDef[]>('spx.demo.views.' + upn, []) } },
+  async loadDashboard(id) { return lsGet<DashConfig | null>('spx.demo.dash.' + id, null) },
+  async saveDashboard(id, cfg) { lsSet('spx.demo.dash.' + id, cfg) },
   async loadFormat(id, upn) { return { shared: lsGet<FormatRule[]>('spx.demo.format.' + id, []), mine: lsGet<FormatRule[]>('spx.demo.format.' + id + '.' + upn, []) } },
   async saveFormat(id, rules, aud, upn) { lsSet(aud === 'everyone' ? 'spx.demo.format.' + id : 'spx.demo.format.' + id + '.' + upn, rules); return 'device' as const },
   async saveShared(v) { lsSet('spx.demo.views.shared', v) },

@@ -4,6 +4,16 @@ Connect **any SharePoint list or document library** with one button and get a gr
 instant search and PDF / CSV / JSON export. Built for lists with **millions of rows**: the browser never holds more than a
 capped window of rows; everything else is paged, streamed or aggregated.
 
+## Customizable live dashboard (admins)
+
+Until an admin designs one, everyone sees the auto-built dashboard. Data admins and app owners get a **Customize dashboard** button:
+
+- **Widgets:** Number (count / sum / average / smallest / largest of any column), Goal gauge, Bar chart, Donut chart, Timeline (day / week / month / year), Top-N list, and Note.
+- Each widget can have its own title, width, grouping column and an optional **"only count items where…"** filter; click a KPI or chart slice to jump to the matching items.
+- Add, edit, remove and reorder widgets, set the auto-refresh (30 s / 1 min / 5 min) and press **Save for everyone**. The layout is stored per list in the `SPX_Config` list, so everybody sees the admin's dashboard, always computed from live data and each person's own SharePoint permissions.
+- **Reset to auto** returns everyone to the auto-built dashboard. Regular users never see the editor.
+- On huge lists the widgets use the latest 3,000 items (exact total shown for unfiltered counts); **Scan everything** streams every item without freezing the app.
+
 ## Inline editing and colour rules
 * **Edit right in the grid (Excel-style)**: double-click a cell, or move with the arrow keys and press **Enter / F2**. **Enter** saves and moves down, **Tab / Shift+Tab** saves and moves sideways, **Esc** cancels, **Ctrl+Z** undoes the last edit (20 steps). Text, numbers, currency, dates, Yes/No and choice columns edit inline; notes, people, multi-choice and links open the full form. Contributors/admins only; every edit is checked against SharePoint permissions and rolled back with a message if refused. The title column still opens details on click; **Shift+Enter** always opens details.
 * **Colour rules (conditional formatting)**: *Format* → add rules like *Status is Blocked → red ⚑* or *Due date before today → orange*. Row or cell scope, bold/strike-through, ordered priority, relative dates (`today`, `today-7`, `today+30`), a legend with counts (click to filter). Saved **just for you** or, for data admins/owners, **for everyone** on the list. Applied in table, board and calendar; colour is always paired with a marker for accessibility.

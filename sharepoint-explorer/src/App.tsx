@@ -21,7 +21,7 @@ import { ViewsMenu } from './components/ViewsMenu'
 import { searchTokens, titleField } from './query'
 import { fmt, lsGet, lsSet, relTime, sameUser, uid } from './util'
 import { Connect } from './components/Connect'
-import { Dashboard } from './components/Dashboard'
+import { DashboardHost } from './components/CustomDashboard'
 import { Drawer } from './components/Drawer'
 import { ExportDialog } from './components/ExportDialog'
 import { FilterBar, useShortcuts } from './components/Filters'
@@ -432,7 +432,7 @@ function Shell() {
           <DashHero name={boot.who.name} src={src} total={total} access={access} onData={() => setTab('data')} onNew={() => (src.isLibrary ? fileIn.current?.click() : setPanel({ row: null }))} onSearch={() => setEverywhere('')} onAccess={() => setPerm({ target: { kind: 'list' }, title: src.label })} />
         )}
         {!loadingSrc && engine && src && tab === 'dashboard' && (
-          <Dashboard engine={engine} version={ver} title={src.label} onFilter={addClause} onGoData={() => setTab('data')} />
+          <DashboardHost engine={engine} version={ver} title={src.label} canEdit={isOwner || access.role === 'admin'} who={boot.who.name} onFilter={addClause} onGoData={() => setTab('data')} />
         )}
 
         {!loadingSrc && engine && src && tab === 'data' && (
