@@ -4,6 +4,8 @@ import type { Row, SpField } from '../types'
 import { cellText, fmt } from '../util'
 import { Icon, hashColor, initials } from './ui'
 import { FileGlyph, extOf } from './FileGlyph'
+import { CellEditor, canInline, type Move } from './CellEditor'
+import type { Painter } from '../format'
 import { bytes } from '../util'
 
 export const ROW_H = 40
@@ -38,21 +40,30 @@ export function CellView({ f, row, tokens }: { f: SpField; row: Row; tokens: str
   }
 }
 
-interface RowProps { row: Row; idx: number; cols: SpField[]; tpl: string; width: number; selected: boolean; active: boolean; tokens: string[]; onOpen: (r: Row) => void; onToggle: (id: number) => void; onMenu?: (r: Row, at: DOMRect) => void }
-const GridRow = memo(function GridRow({ row, idx, cols, tpl, width, selected, active, tokens, onOpen, onToggle, onMenu }: RowProps) {
+interface RowProps { row: Row; idx: number; cols: SpField[]; tpl: string; width: number; selected: boolean; active: boolean; tokens: string[]; onOpen: (r: Row) => void; onToggle: (id: number) => void; onMenu?: (r: Row, at: DOMRect) => void; activeCol: number; editingField: string | null; canEdit: boolean; isLibrary: boolean; fmt: ReturnType<Painter>; onCell: (r: Row, col: number, edit: boolean) => void; onCommit: (r: Row, f: SpField, v: unknown, move: Move) => void; onCancelEdit: () => void }
+const GridRow = memo(function GridRow({ row, idx, cols, tpl, width, selected, active, tokens, onOpen, onToggle, onMenu, activeCol, editingField, canEdit, isLibrary, fmt, onCell, onCommit, onCancelEdit }: RowProps) {
   return (
     <div role="row" id={`row-${idx}`} aria-rowindex={idx + 2} aria-selected={selected}
-      className={`g-row${active ? ' active' : ''}${row.__new ? ' fresh' : ''}`}
+      className={`g-row${active ? ' active' : ''}${row.__new ? ' fresh' : ''}${fmt?.row ? ` fmt fmt-${fmt.row.color}${fmt.row.text === 'strike' ? ' fmt-strike' : ''}${fmt.row.text === 'bold' ? ' fmt-bold' : ''}` : ''}`} data-rule={fmt?.row?.id}
       style={{ top: idx * ROW_H, height: ROW_H, gridTemplateColumns: tpl, width }} onClick={() => onOpen(row)}
       onContextMenu={(e) => { if (onMenu) { e.preventDefault(); onMenu(row, new DOMRect(e.clientX, e.clientY, 0, 0)) } }}>
       <div role="gridcell" className="g-c sel" onClick={(e) => e.stopPropagation()}>
         <input type="checkbox" checked={selected} onChange={() => onToggle(row.__id)} aria-label={`Select item ${row.__id}`} />
       </div>
-      {cols.map((f) => (
-        <div role="gridcell" key={f.internal} className={`g-c${f.kind === 'number' || f.kind === 'currency' || f.kind === 'counter' ? ' num' : ''}`} title={cellText(f, row)}>
-          <CellView f={f} row={row} tokens={tokens} />
-        </div>
-      ))}
+      {cols.map((f, ci) => {
+        const inl = canEdit && canInline(f, row, isLibrary)
+        const editing = editingField === f.internal
+        const cf = fmt?.cells[f.internal]
+        return (
+          <div role="gridcell" key={f.internal} id={`cell-${idx}-${ci}`} aria-readonly={!inl} data-rule={cf?.id}
+            className={`g-c${f.kind === 'number' || f.kind === 'currency' || f.kind === 'counter' ? ' num' : ''}${inl ? ' editable' : ''}${active && activeCol === ci ? ' cur' : ''}${editing ? ' editing' : ''}${cf ? ` fmt-${cf.color} fmt-cell${cf.text === 'bold' ? ' fmt-bold' : cf.text === 'strike' ? ' fmt-strike' : ''}` : ''}`}
+            title={cellText(f, row)} onClick={(e) => { onCell(row, ci, false); if (inl && ci !== 0) e.stopPropagation() }}   /* title column or read-only cell: open details; other editable cells: just select (double-click / Enter / F2 edits) */
+            onDoubleClick={(e) => { e.stopPropagation(); onCell(row, ci, true) }}>
+            {editing ? <CellEditor f={f} row={row} label={`${f.title}, row ${idx + 1}`} onCommit={(v, m) => onCommit(row, f, v, m)} onCancel={onCancelEdit} />
+              : <>{ci === 0 && fmt?.row && <span className="fmk" aria-hidden="true">{fmt.row.marker ?? '●'}</span>}{ci === 0 && fmt?.row && <span className="sr-only">Rule: {fmt.row.name ?? fmt.row.color}. </span>}<CellView f={f} row={row} tokens={tokens} /></>}
+          </div>
+        )
+      })}
       {onMenu && <div role="gridcell" className="g-c sel"><button className="btn icon sm ghost" aria-label={`Actions for ${cellText(cols[0], row) || 'item ' + row.__id}`} aria-haspopup="menu" onClick={(e) => { e.stopPropagation(); onMenu(row, e.currentTarget.getBoundingClientRect()) }}>⋯</button></div>}
     </div>
   )
@@ -75,6 +86,10 @@ export interface GridProps {
   onMenu?: (row: Row, at: DOMRect) => void
   onNavigate?: (row: Row) => void
   origin?: string
+  canEdit?: boolean
+  painter?: Painter
+  onInline?: (row: Row, f: SpField, value: unknown) => Promise<void>
+  onEditForm?: (row: Row) => void
 }
 
 export function Grid(p: GridProps) {
@@ -83,6 +98,8 @@ export function Grid(p: GridProps) {
   const ref = useRef<HTMLDivElement>(null)
   const [vp, setVp] = useState({ top: 0, h: 600, w: 1000 })
   const [active, setActive] = useState(0)
+  const [activeCol, setActiveCol] = useState(0)
+  const [editing, setEditing] = useState<{ id: number; field: string } | null>(null)
   const raf = useRef(0)
 
   const measure = useCallback(() => {
@@ -129,13 +146,14 @@ export function Grid(p: GridProps) {
     switch (e.key) {
       case 'ArrowDown': a = Math.min(n - 1, a + perRow); break
       case 'ArrowUp': a = Math.max(0, a - perRow); break
-      case 'ArrowRight': if (cards) a = Math.min(n - 1, a + 1); else return; break
-      case 'ArrowLeft': if (cards) a = Math.max(0, a - 1); else return; break
+      case 'ArrowRight': if (cards) a = Math.min(n - 1, a + 1); else { e.preventDefault(); setActiveCol((c) => Math.min(cols.length - 1, c + 1)); return } break
+      case 'ArrowLeft': if (cards) a = Math.max(0, a - 1); else { e.preventDefault(); setActiveCol((c) => Math.max(0, c - 1)); return } break
+      case 'F2': { e.preventDefault(); const f = cols[activeCol]; if (f && rows[a] && p.canEdit && canInline(f, rows[a], p.isLibrary)) setEditing({ id: rows[a].__id, field: f.internal }); return }
       case 'PageDown': a = Math.min(n - 1, a + page); break
       case 'PageUp': a = Math.max(0, a - page); break
       case 'Home': a = 0; break
       case 'End': a = n - 1; break
-      case 'Enter': e.preventDefault(); if (rows[a]) p.onOpen(rows[a]); return
+      case 'Enter': { e.preventDefault(); const f = cols[activeCol]; const r = rows[a]; if (r && !e.shiftKey && !cards && p.canEdit && f && canInline(f, r, p.isLibrary)) setEditing({ id: r.__id, field: f.internal }); else if (r) p.onOpen(r); return }
       case ' ': if ((e.target as HTMLElement).tagName === 'INPUT') return; e.preventDefault(); if (rows[a]) p.onToggle(rows[a].__id); return
       default: return
     }
@@ -143,6 +161,17 @@ export function Grid(p: GridProps) {
   }
   useEffect(() => { setActive(0); if (ref.current) ref.current.scrollTop = 0 }, [engine.q, engine.src.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const commit = async (r: Row, f: SpField, v: unknown, move: Move) => {
+    setEditing(null)
+    const idx = rows.findIndex((x) => x.__id === r.__id)
+    try { await p.onInline?.(r, f, v) } catch { /* the caller already told the user and rolled back */ }
+    if (move === 'down' && idx >= 0) { const ni = Math.min(rows.length - 1, idx + 1); setActive(ni); scrollTo(ni); if (canInline(f, rows[ni], p.isLibrary)) setEditing({ id: rows[ni].__id, field: f.internal }) }
+    else if (move === 'right' || move === 'left') {
+      let ci = cols.findIndex((c) => c.internal === f.internal)
+      for (;;) { ci += move === 'right' ? 1 : -1; if (ci < 0 || ci >= cols.length) break; if (r && canInline(cols[ci], r, p.isLibrary)) { setActiveCol(ci); setEditing({ id: r.__id, field: cols[ci].internal }); return } }
+    }
+    ref.current?.focus({ preventScroll: true })
+  }
   const titleF = cols[0]
   const allSel = rows.length > 0 && rows.every((r) => p.selected.has(r.__id))
   const cardFields = cols.slice(1, 5)
@@ -184,7 +213,9 @@ export function Grid(p: GridProps) {
         )}
         <div className="g-body" style={{ height: lines * rh + (engine.hasMore || engine.loading ? 48 : 0), width: cards ? undefined : totalW }}>
           {!cards && visibleRows.map(({ r, i }) => (
-            <GridRow key={r.__id} row={r} idx={i} cols={cols} tpl={tpl} width={totalW} selected={p.selected.has(r.__id)} active={i === active} tokens={p.tokens} onOpen={p.onOpen} onToggle={p.onToggle} onMenu={p.onMenu} />
+            <GridRow key={r.__id} row={r} idx={i} cols={cols} tpl={tpl} width={totalW} selected={p.selected.has(r.__id)} active={i === active} tokens={p.tokens} onOpen={p.onOpen} onToggle={p.onToggle} onMenu={p.onMenu}
+              activeCol={activeCol} editingField={editing?.id === r.__id ? editing.field : null} canEdit={!!p.canEdit} isLibrary={p.isLibrary} fmt={p.painter?.(r) ?? null}
+              onCell={(row, col, edit) => { setActive(i); setActiveCol(col); if (edit && p.canEdit && canInline(cols[col], row, p.isLibrary)) setEditing({ id: row.__id, field: cols[col].internal }); else if (edit) p.onEditForm?.(row) }} onCommit={commit} onCancelEdit={() => { setEditing(null); ref.current?.focus({ preventScroll: true }) }} />
           ))}
           {cards && visibleRows.map(({ r, i }) => {
             const line = Math.floor(i / perRow), col = i % perRow

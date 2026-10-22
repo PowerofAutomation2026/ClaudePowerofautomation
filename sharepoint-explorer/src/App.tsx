@@ -12,6 +12,9 @@ import { FolderIcon } from './components/FileGlyph'
 import { Board } from './components/Board'
 import { DiagnosticsDialog, StartFailure } from './components/Diagnostics'
 import { Calendar } from './components/Calendar'
+import { FormatDialog } from './components/FormatDialog'
+import { compileRules, legendCounts } from './format'
+import type { FormatRule } from './types'
 import { ImportDialog } from './components/ImportDialog'
 import type { PermTarget } from './types'
 import { ViewsMenu } from './components/ViewsMenu'
@@ -86,6 +89,9 @@ function Shell() {
   const [viewsAll, setViewsAll] = useState<{ shared: ViewDef[]; mine: ViewDef[] }>({ shared: [], mine: [] })
   const [panel, setPanel] = useState<{ row: Row | null; prefill?: Row | null; preset?: Record<string, string> } | null>(null)
   const [importing, setImporting] = useState(false)
+  const [fmtOpen, setFmtOpen] = useState(false)
+  const [fmtRules, setFmtRules] = useState<{ shared: FormatRule[]; mine: FormatRule[]; hideShared: boolean }>({ shared: [], mine: [], hideShared: false })
+  const [undo, setUndo] = useState<{ row: Row; f: SpField; prev: unknown }[]>([])
   const [menu, setMenu] = useState<{ row: Row; at: DOMRect } | null>(null)
   const [uploads, setUploads] = useState<UploadItem[] | null>(null)
   const [nameDlg, setNameDlg] = useState<{ mode: 'folder' | 'rename'; row?: Row } | null>(null)
@@ -140,6 +146,8 @@ function Shell() {
       const vis = lsGet<string[]>(`spx.cols.${s.id}`, []).filter((n) => select.includes(n))
       setVisible(vis.length ? vis : defaultVisible(fields, select, cur.isLibrary))
       setWidths(lsGet(`spx.w.${s.id}`, {}))
+      boot.backend.loadFormat(s.id, boot.who.upn).then((r) => setFmtRules((c) => ({ ...r, hideShared: c.hideShared }))).catch(() => setFmtRules({ shared: [], mine: [], hideShared: false }))
+      setUndo([])
       setFavs(new Set(lsGet<number[]>(`spx.fav.${s.id}`, [])))
       setBoardField(fields.find((f) => f.kind === 'choice' && select.includes(f.internal) && (f.choices?.length ?? 0) > 1) ?? null)
       setSrc(cur); setEngine(eng); lsSet(`spx.active.${boot.backend.mode}`, s.id)
@@ -238,6 +246,31 @@ function Shell() {
     try { await boot.backend.updateItem(engine.src, engine.fields, row.__id, { [f.internal]: iso }); toast('good', `Rescheduled to ${new Date(iso + 'T12:00:00').toLocaleDateString()}`) }
     catch (e) { engine.patchRow({ ...row, [f.internal]: prev }); toast('bad', `Could not reschedule: ${(e as Error).message}`) }
   }
+  const effectiveRules = useMemo(() => [...(fmtRules.hideShared ? [] : fmtRules.shared), ...fmtRules.mine], [fmtRules])
+  const painter = useMemo(() => (engine ? compileRules(effectiveRules, engine.fields) : undefined), [effectiveRules, engine])
+  const legend = useMemo(() => (engine && painter ? legendCounts(engine.rows, effectiveRules, engine.fields) : []), [engine, painter, effectiveRules, ver]) // eslint-disable-line react-hooks/exhaustive-deps
+  const gridEdit = async (row: Row, f: SpField, value: unknown, isUndo = false) => {
+    if (!engine || !boot) return
+    const prev = row[f.internal]
+    engine.patchRow({ ...row, [f.internal]: f.kind === 'date' && typeof value === 'string' && value ? `${value}T12:00:00.000Z` : value })   // optimistic
+    try {
+      if (f.internal === 'FileLeafRef') { await boot.backend.renameItem(engine.src, engine.fields, row.__id, String(value)); void engine.refresh() }
+      else {
+        await boot.backend.updateItem(engine.src, engine.fields, row.__id, { [f.internal]: value })
+        const fresh = await boot.backend.getItem(engine.src, engine.fields, row.__id).catch(() => null)
+        if (fresh) engine.patchRow(fresh)
+      }
+      if (!isUndo) setUndo((u) => [...u.slice(-19), { row, f, prev }])
+      toast('good', isUndo ? `Undone: ${f.title}` : `${f.title} saved`)
+    } catch (e) { engine.patchRow(row); toast('bad', `Not saved (${f.title}): ${(e as Error).message}`); throw e }
+  }
+  const undoLast = async () => {
+    const last = undo[undo.length - 1]; if (!last || !engine) return
+    setUndo((u) => u.slice(0, -1))
+    const cur = engine.rows.find((r) => r.__id === last.row.__id) ?? last.row
+    const v = last.f.kind === 'date' && last.prev ? (last.f.dateOnly ? String(last.prev).slice(0, 10) : String(last.prev).slice(0, 10)) : last.prev ?? ''
+    try { await gridEdit(cur, last.f, last.f.kind === 'boolean' ? last.prev === true || last.prev === 'true' : v, true) } catch { /* toast shown */ }
+  }
   const libRoot = src?.url ?? ''
   const curFolder = engine?.q.folder ?? libRoot
   const origin = src ? new URL(src.siteUrl).origin : ''
@@ -281,6 +314,7 @@ function Shell() {
     '/': (e) => { e.preventDefault(); setTab('data'); setTimeout(() => searchRef.current?.focus(), 30) },
     'mod+k': (e) => { e.preventDefault(); setPalette(true) },
     'mod+shift+f': (e) => { e.preventDefault(); setEverywhere('') },
+    'mod+z': (e) => { const t = e.target as HTMLElement; if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT') return; if (undo.length) { e.preventDefault(); void undoLast() } },
     n: (e) => { if (access.canAdd && src && !src.isLibrary && tab === 'data') { e.preventDefault(); setPanel({ row: null }) } },
   })
   const cmds: Cmd[] = useMemo(() => {
@@ -443,6 +477,7 @@ function Shell() {
                 </div>
               )}
               <ViewsMenu views={srcViews} access={access} cfg={config} upn={boot.who.upn} onApply={applyView} onSave={saveView} onDelete={(v) => void deleteView(v)} />
+              <button className="btn sm" onClick={() => setFmtOpen(true)} aria-pressed={effectiveRules.length > 0}>🎨 Format{effectiveRules.length ? <span className="pill">{effectiveRules.filter((r) => r.enabled).length}</span> : null}</button>
               <Menu icon="cols" label={<span className="lbl-t">Columns</span>}>
                 {() => <div role="group" aria-label="Visible columns">{engine.select.map((n) => { const f = engine.fields.find((x) => x.internal === n)!; return <label key={n} className="item"><input type="checkbox" checked={visible.includes(n)} onChange={() => toggleCol(n)} />{f.title}</label> })}</div>}
               </Menu>
@@ -458,13 +493,19 @@ function Shell() {
               </Menu>
             </div>
 
+            {legend.length > 0 && (
+              <div className="chips" aria-label="Colour rule legend">
+                {legend.map(({ rule, n }) => <button key={rule.id} className={`chip fmt-${rule.color} legend`} title="Show only these rows" onClick={() => addClause(rule.clause)}><span aria-hidden="true">{rule.marker ?? '●'}</span>{rule.name ?? engine.fields.find((f) => f.internal === rule.clause.field)?.title} <b>{n}</b></button>)}
+                {fmtRules.shared.length > 0 && <button className="btn sm ghost" onClick={() => setFmtRules((c) => ({ ...c, hideShared: !c.hideShared }))}>{fmtRules.hideShared ? 'Show shared rules' : 'Hide shared rules'}</button>}
+              </div>
+            )}
             <div className="dropzone" onDragOver={(e) => { if (src.isLibrary && e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true) } }} onDragLeave={(e) => { if (e.currentTarget === e.target) setDragging(false) }} onDrop={(e) => void onDrop(e)}>
               {dragging && <div className="dropveil" role="status"><div><FolderIcon size={44} /><div>Drop to upload to <b>{decodeURIComponent(curFolder.split('/').pop() ?? '')}</b></div></div></div>}
               {view === 'calendar' && !src.isLibrary && dateFields.length
-                ? <Calendar engine={engine} version={ver} dateFields={dateFields} canAdd={access.canAdd} canEdit={access.canEdit} onNew={(f, iso) => setPanel({ row: null, preset: { [f.internal]: iso } })} onOpen={openRow} onMove={moveDate} />
+                ? <Calendar engine={engine} version={ver} dateFields={dateFields} canAdd={access.canAdd} canEdit={access.canEdit} onNew={(f, iso) => setPanel({ row: null, preset: { [f.internal]: iso } })} onOpen={openRow} onMove={moveDate} painter={painter} />
                 : view === 'board' && !src.isLibrary && boardField
-                ? <Board engine={engine} version={ver} field={boardField} setField={setBoardField} canEdit={access.canEdit} favs={favs} onToggleFav={toggleFav} onMove={moveCard} onOpen={openRow} tokens={tokens} />
-                : <Grid engine={engine} version={ver} cols={cols} selected={selected} widths={widths} setWidth={setWidth} tokens={tokens} view={view === 'board' || view === 'calendar' ? 'table' : src.isLibrary || view !== 'tiles' ? view : 'table'} isLibrary={src.isLibrary} origin={boot.backend.mode === 'live' ? src.siteUrl.replace(/\/$/, '') : undefined}
+                ? <Board engine={engine} version={ver} field={boardField} setField={setBoardField} canEdit={access.canEdit} favs={favs} onToggleFav={toggleFav} onMove={moveCard} onOpen={openRow} tokens={tokens} painter={painter} />
+                : <Grid engine={engine} version={ver} cols={cols} selected={selected} widths={widths} setWidth={setWidth} tokens={tokens} canEdit={access.canEdit} painter={painter} onInline={(r, f, v) => gridEdit(r, f, v)} onEditForm={(r) => setPanel({ row: r })} view={view === 'board' || view === 'calendar' ? 'table' : src.isLibrary || view !== 'tiles' ? view : 'table'} isLibrary={src.isLibrary} origin={boot.backend.mode === 'live' ? src.siteUrl.replace(/\/$/, '') : undefined}
                 onToggle={(id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })}
                 onToggleAll={() => setSelected((s) => (engine.rows.every((r) => s.has(r.__id)) ? new Set() : new Set(engine.rows.map((r) => r.__id))))}
                 onOpen={openRow} onSort={sortBy} onMenu={(row, at) => setMenu({ row, at })} />}
@@ -494,6 +535,8 @@ function Shell() {
       {picker && engine && src && <FolderPicker backend={boot.backend} src={src} root={libRoot} start={curFolder} title={`${picker.mode} “${rowName(picker.row)}” to…`} onClose={() => setPicker(null)}
         onPick={async (dest) => { const m = picker; setPicker(null); try { await (m.mode === 'Move' ? boot.backend.moveItem(src, m.row, dest) : boot.backend.copyItem(src, m.row, dest)); toast('good', `${m.mode === 'Move' ? 'Moved' : 'Copied'} to ${decodeURIComponent(dest.split('/').pop() ?? '')}`); void engine.refresh() } catch (e) { toast('bad', (e as Error).message) } }} />}
       {perm && engine && src && <PermissionsDialog backend={boot.backend} src={src} target={perm.target} title={perm.title} canManage={access.canManage} onClose={() => setPerm(null)} />}
+      {fmtOpen && engine && src && <FormatDialog engine={engine} mine={fmtRules.mine} shared={fmtRules.shared} mayShare={isOwner || access.role === 'admin'} onClose={() => setFmtOpen(false)}
+        onSave={async (rules, aud) => { try { const where = await boot.backend.saveFormat(src.id, rules, aud, boot.who.upn); setFmtRules((c) => (aud === 'me' ? { ...c, mine: rules } : { ...c, shared: rules })); setFmtOpen(false); toast('good', `Colour rules saved${aud === 'me' && where === 'device' ? ' in this browser only' : aud === 'everyone' ? ' for everyone' : ''}`) } catch (e) { toast('bad', (e as Error).message) } }} />}
       {importing && engine && <ImportDialog engine={engine} onClose={() => setImporting(false)} onDone={() => void engine.refresh()} />}
       {bulk && engine && <BulkDialog engine={engine} rows={bulk} onClose={() => setBulk(null)} onDone={() => { setBulk(null); setSelected(new Set()) }} />}
       {everywhere !== null && config && <SearchEverywhere backend={boot.backend} sources={config.sources} initial={everywhere} onClose={() => setEverywhere(null)} onOpen={async (s, q) => { if (s.id !== src?.id) await openSource(s, 'data'); else setTab('data'); setTimeout(() => engine && change({ search: q }), 300) }} />}
@@ -506,7 +549,7 @@ function Shell() {
           <div className="row" style={{ justifyContent: 'flex-end' }}><button className="btn" onClick={() => setConfirmDel(null)}>Cancel</button><button className="btn primary" style={{ background: 'var(--bad)' }} disabled={busy} onClick={() => void deleteRows()}>{busy ? 'Deleting…' : 'Delete'}</button></div>
         </Modal>
       )}
-      <footer className="buildstamp">Build {__BUILD__} · {boot.backend.mode === 'live' ? 'live SharePoint data' : 'SAMPLE data'}</footer>
+      <footer className="buildstamp"><div>Build {__BUILD__} · {boot.backend.mode === 'live' ? 'live SharePoint data' : 'SAMPLE data'}</div><div className="credit">Created by <b>Kirolos</b> — Power of Automation</div></footer>
       {diag && <DiagnosticsDialog site={src?.siteUrl} onClose={() => setDiag(false)} />}
       {palette && <Palette cmds={cmds} onClose={() => setPalette(false)} />}
     </div>

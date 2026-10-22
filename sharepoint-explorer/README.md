@@ -4,6 +4,11 @@ Connect **any SharePoint list or document library** with one button and get a gr
 instant search and PDF / CSV / JSON export. Built for lists with **millions of rows**: the browser never holds more than a
 capped window of rows; everything else is paged, streamed or aggregated.
 
+## Inline editing and colour rules
+* **Edit right in the grid (Excel-style)**: double-click a cell, or move with the arrow keys and press **Enter / F2**. **Enter** saves and moves down, **Tab / Shift+Tab** saves and moves sideways, **Esc** cancels, **Ctrl+Z** undoes the last edit (20 steps). Text, numbers, currency, dates, Yes/No and choice columns edit inline; notes, people, multi-choice and links open the full form. Contributors/admins only; every edit is checked against SharePoint permissions and rolled back with a message if refused. The title column still opens details on click; **Shift+Enter** always opens details.
+* **Colour rules (conditional formatting)**: *Format* → add rules like *Status is Blocked → red ⚑* or *Due date before today → orange*. Row or cell scope, bold/strike-through, ordered priority, relative dates (`today`, `today-7`, `today+30`), a legend with counts (click to filter). Saved **just for you** or, for data admins/owners, **for everyone** on the list. Applied in table, board and calendar; colour is always paired with a marker for accessibility.
+* Both features were picked by the Fable 5.1 advisor from community demand (editable grids and conditional formatting are among the most requested things for SharePoint list apps).
+
 ## Troubleshooting
 * Header shows a green **● Live** and the footer says `Build v1.3.0 · live SharePoint data` when you are on live data. An orange **SAMPLE DATA** bar means you are on made-up data (e.g. `Run-Demo.cmd` or an old copy of the app).
 * Click **● Live** (or “Connection diagnostics” in Ctrl+K) to see what is working: data sources in the build, Power Apps context, the SharePoint connection, a REST test on a site.
@@ -131,3 +136,6 @@ adds that operation to the generated data-source description (`src/services/sp.t
 > (the deploy script was run against a stubbed `pac`). It has **not** been run against a real tenant. Treat the first deployment as a pilot:
 > connect a small list first, then a big one. If connector registration is rejected, run the command the script prints:
 > `pac code add-data-source -a shared_sharepointonline -c <connectionId> -d <site> -t <existing list>`.
+
+---
+Created by **Kirolos** — Power of Automation

@@ -4,13 +4,15 @@ import type { Engine } from '../engine'
 import type { Row, SpField } from '../types'
 import { cellText, fmt } from '../util'
 import { CellView } from './Grid'
+import type { Painter } from '../format'
 import { Icon, hashColor, initials } from './ui'
 
 const NONE = '— No value —'
 const PER_COL = 60
 
 /** Kanban board: one column per choice value; drag a card to another column to change that value (contributors and admins). */
-export function Board({ engine, version, field, setField, canEdit, favs, onToggleFav, onMove, onOpen, tokens }: {
+export function Board({ engine, version, field, setField, canEdit, favs, onToggleFav, onMove, onOpen, tokens, painter }: {
+  painter?: Painter
   engine: Engine; version: number; field: SpField; setField: (f: SpField) => void; canEdit: boolean; favs: Set<number>; onToggleFav: (id: number) => void
   onMove: (row: Row, value: string) => Promise<void>; onOpen: (r: Row) => void; tokens: string[]
 }) {
@@ -54,9 +56,9 @@ export function Board({ engine, version, field, setField, canEdit, favs, onToggl
               <header><i aria-hidden="true" /><b>{c}</b><span className="pill">{fmt(rows.length)}</span></header>
               <div className="bcards">
                 {rows.slice(0, limit).map((r) => (
-                  <article key={r.__id} className={`bcard${drag === r.__id ? ' dragging' : ''}${r.__new ? ' fresh' : ''}`} draggable={canEdit} onDragStart={(e) => { setDrag(r.__id); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(r.__id)) }} onDragEnd={() => { setDrag(null); setOver(null) }}>
+                  <article key={r.__id} className={`bcard${drag === r.__id ? ' dragging' : ''}${r.__new ? ' fresh' : ''}${painter?.(r)?.row ? ` fmt fmt-${painter(r)!.row!.color}` : ''}`} draggable={canEdit} onDragStart={(e) => { setDrag(r.__id); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(r.__id)) }} onDragEnd={() => { setDrag(null); setOver(null) }}>
                     <div className="row" style={{ flexWrap: 'nowrap', alignItems: 'flex-start', gap: 6 }}>
-                      <button className="bt" onClick={() => onOpen(r)}>{cellText(title ?? field, r) || `Item ${r.__id}`}</button>
+                      <button className="bt" onClick={() => onOpen(r)}>{painter?.(r)?.row && <span className="fmk" aria-hidden="true">{painter(r)!.row!.marker ?? '●'} </span>}{cellText(title ?? field, r) || `Item ${r.__id}`}</button>
                       <button className={`fav${favs.has(r.__id) ? ' on' : ''}`} aria-pressed={favs.has(r.__id)} aria-label={`Favorite ${cellText(title ?? field, r)}`} onClick={() => onToggleFav(r.__id)}><Icon n="star" size={15} /></button>
                     </div>
                     <div className="bmeta">{meta.map((f) => r[f.internal] != null && r[f.internal] !== '' ? <span key={f.internal} title={f.title}><CellView f={f} row={r} tokens={[]} /></span> : null)}</div>

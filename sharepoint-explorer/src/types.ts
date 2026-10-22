@@ -159,6 +159,8 @@ export interface Backend {
   /** fast typeahead: titles/names that start with or contain `text` */
   suggest(src: SourceConfig, fields: SpField[], text: string, signal?: AbortSignal): Promise<string[]>
   setRole?(r: Role): void
+  loadFormat(sourceId: string, upn: string): Promise<{ shared: FormatRule[]; mine: FormatRule[] }>
+  saveFormat(sourceId: string, rules: FormatRule[], audience: 'me' | 'everyone', upn: string): Promise<'cloud' | 'device'>
 
   /* ---- document libraries ---- */
   createFolder(src: SourceConfig, parentUrl: string, name: string): Promise<void>
@@ -182,4 +184,17 @@ export interface Backend {
   listRoleDefs(src: SourceConfig): Promise<RoleDef[]>
   /** organisation-wide sharing link (view or edit) created through SharePoint's own sharing service */
   createShareLink(src: SourceConfig, id: number, edit: boolean): Promise<string>
+}
+
+/* ---- conditional formatting (colour rules) ---- */
+export type FmtColor = 'red' | 'orange' | 'yellow' | 'green' | 'blue' | 'purple' | 'gray'
+export interface FormatRule {
+  id: string
+  name?: string
+  clause: Clause
+  scope: 'row' | 'cell'
+  color: FmtColor
+  marker?: string
+  text?: 'bold' | 'strike'
+  enabled: boolean
 }

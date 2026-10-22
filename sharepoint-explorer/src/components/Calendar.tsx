@@ -4,6 +4,7 @@ import type { Engine } from '../engine'
 import type { Clause, Row, SpField } from '../types'
 import { cellText, dateOnlyDay, fmt } from '../util'
 import { Icon, hashColor } from './ui'
+import type { Painter } from '../format'
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -11,7 +12,8 @@ const dayOf = (v: unknown, dateOnly = false) => { const t = Date.parse(String(v)
 const isCalClause = (c: Clause, f: string) => c.field === f && (c.op === 'ge' || c.op === 'le')
 
 /** Month calendar over any date column. Click an empty day to add an item on that date; drag an item to another day to reschedule it. */
-export function Calendar({ engine, version, dateFields, canAdd, canEdit, onNew, onOpen, onMove }: {
+export function Calendar({ engine, version, dateFields, canAdd, canEdit, onNew, onOpen, onMove, painter }: {
+  painter?: Painter
   engine: Engine; version: number; dateFields: SpField[]; canAdd: boolean; canEdit: boolean
   onNew: (field: SpField, iso: string) => void; onOpen: (r: Row) => void; onMove: (r: Row, field: SpField, iso: string) => Promise<void>
 }) {
@@ -64,7 +66,8 @@ export function Calendar({ engine, version, dateFields, canAdd, canEdit, onNew, 
               <div className="cal-head"><b>{d.getDate()}</b>{canAdd && !engine.src.isLibrary && <button className="cal-add" aria-label={`Add item on ${d.toDateString()}`} onClick={() => onNew(field, k)}>＋</button>}</div>
               {items.slice(0, 3).map((r) => {
                 const c = colorF && r[colorF.internal] ? hashColor(String(r[colorF.internal])) : 'var(--c1)'
-                return <button key={r.__id} className="cal-ev" style={{ ['--tc' as string]: c }} draggable={canEdit} onDragStart={(e) => { setDrag(r.__id); e.dataTransfer.setData('text/plain', String(r.__id)) }} onDragEnd={() => setDrag(null)} onClick={() => onOpen(r)} title={cellText({ internal: title, kind: 'text' } as SpField, r)}>{String(r[title] ?? `#${r.__id}`)}</button>
+                const pr = painter?.(r)?.row
+                return <button key={r.__id} className={`cal-ev${pr ? ` fmt fmt-${pr.color}` : ''}`} style={{ ['--tc' as string]: c }} draggable={canEdit} onDragStart={(e) => { setDrag(r.__id); e.dataTransfer.setData('text/plain', String(r.__id)) }} onDragEnd={() => setDrag(null)} onClick={() => onOpen(r)} title={cellText({ internal: title, kind: 'text' } as SpField, r)}>{pr && <span aria-hidden="true">{pr.marker ?? '●'} </span>}{String(r[title] ?? `#${r.__id}`)}</button>
               })}
               {items.length > 3 && <button className="cal-more" onClick={() => setOpenDay(openDay === k ? null : k)} aria-expanded={openDay === k}>+{items.length - 3} more</button>}
               {openDay === k && <div className="cal-pop" role="dialog" aria-label={`All items on ${d.toDateString()}`}>{items.map((r) => <button key={r.__id} className="cal-ev" style={{ ['--tc' as string]: colorF && r[colorF.internal] ? hashColor(String(r[colorF.internal])) : 'var(--c1)' }} onClick={() => { setOpenDay(null); onOpen(r) }}>{String(r[title] ?? `#${r.__id}`)}</button>)}</div>}

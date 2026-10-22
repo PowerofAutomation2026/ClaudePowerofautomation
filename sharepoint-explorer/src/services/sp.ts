@@ -6,7 +6,7 @@
 import { getClient } from '@microsoft/power-apps/data'
 import { getContext } from '@microsoft/power-apps/app'
 import baked from '../appconfig.json'
-import type { Access, AppConfig, Attachment, Backend, PermInfo, PermTarget, Principal, RoleAssign, RoleDef, VersionInfo, ViewDef, FieldKind, Page, Query, Row, SourceConfig, SpField, SpList, SpSite } from '../types'
+import type { Access, AppConfig, Attachment, FormatRule, Backend, PermInfo, PermTarget, Principal, RoleAssign, RoleDef, VersionInfo, ViewDef, FieldKind, Page, Query, Row, SourceConfig, SpField, SpList, SpSite } from '../types'
 import { buildFilter, parseSearch, propOf, restName, titleField } from '../query'
 import { accessFrom } from '../access'
 import { isEditable } from '../editable'
@@ -300,6 +300,15 @@ export const sp: Backend = {
   async loadViews(upn) {
     const [shared, mine] = await Promise.all([kvGet<ViewDef[]>('views:shared'), kvGet<ViewDef[]>(`views:${upn.toLowerCase()}`)])
     return { shared: shared ?? lsGet<ViewDef[]>('spx.views.shared', []), mine: mine ?? lsGet<ViewDef[]>(`spx.views.mine.${upn}`, []) }
+  },
+  async loadFormat(sourceId, upn) {
+    const [shared, mine] = await Promise.all([kvGet<FormatRule[]>(`format:${sourceId}`), kvGet<FormatRule[]>(`format:${sourceId}:${upn.toLowerCase()}`)])
+    return { shared: shared ?? [], mine: mine ?? lsGet<FormatRule[]>(`spx.format.${sourceId}.${upn}`, []) }
+  },
+  async saveFormat(sourceId, rules, audience, upn) {
+    if (audience === 'everyone') { await kvSet(`format:${sourceId}`, rules); return 'cloud' }
+    lsSet(`spx.format.${sourceId}.${upn}`, rules)
+    try { await kvSet(`format:${sourceId}:${upn.toLowerCase()}`, rules); return 'cloud' } catch { return 'device' }
   },
   async saveShared(views) { lsSet('spx.views.shared', views); await kvSet('views:shared', views) },
   async saveMine(upn, views) {

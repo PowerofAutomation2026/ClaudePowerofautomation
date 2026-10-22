@@ -71,7 +71,7 @@ export function parseSearch(s: string): ParsedSearch {
 }
 export function searchTokens(s: string): string[] { const p = parseSearch(s); return [...p.terms, ...p.fielded.map((f) => f.value)] }
 
-function clauseMatches(c: Clause, row: Row, f: SpField): boolean {
+export function clauseMatches(c: Clause, row: Row, f: SpField): boolean {
   const raw = row[f.internal]
   const text = cellText(f, row).toLowerCase()
   const v = c.value.toLowerCase()
