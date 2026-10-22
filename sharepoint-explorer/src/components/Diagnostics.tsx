@@ -48,7 +48,7 @@ export function StartFailure({ error }: { error: string }) {
         <DiagnosticsPanel />
         <div className="row" style={{ marginTop: 14 }}>
           <button className="btn primary" onClick={() => location.reload()}><Icon n="refresh" size={15} />Retry</button>
-          <a className="btn" href={`${location.pathname}?demo=1`}>Look at the sample data instead</a>
+          {(() => { try { return window.self === window.top } catch { return false } })() && <a className="btn" href={`${location.pathname}?demo=1`}>Look at the sample data instead</a>}
         </div>
       </div>
     </main>

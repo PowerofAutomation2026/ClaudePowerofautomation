@@ -16,10 +16,11 @@ interface Props {
 
 export function Connect({ backend, config, isOwner, who, engine, access, onSaved }: Props) {
   const toast = useToast()
-  const [site, setSite] = useState(lsGet<string>('spx.lastSite', backend.mode === 'demo' ? 'https://contoso.sharepoint.com/sites/demo' : ''))
+  const [site, setSite] = useState(lsGet<string>(`spx.lastSite.${backend.mode}`, backend.mode === 'demo' ? 'https://contoso.sharepoint.com/sites/demo' : ''))
   const [sites, setSites] = useState<SpSite[]>([])
   const [lists, setLists] = useState<SpList[] | null>(null)
   const [sel, setSel] = useState<SpList | null>(null)
+  const [web, setWeb] = useState('')   // the normalised web URL the lists were loaded from
   const [label, setLabel] = useState('')
   const [q, setQ] = useState('')
   const [kind, setKind] = useState<'all' | 'list' | 'lib'>('all')
@@ -32,9 +33,9 @@ export function Connect({ backend, config, isOwner, who, engine, access, onSaved
   const load = async () => {
     setErr(''); setBusy(true); setSel(null)
     try {
-      const url = site.trim().replace(/\/+$/, '')
+      const url = await backend.resolveWeb(site)
       if (!/^https:\/\/[^/\s]+\.[^/\s]+/i.test(url) && backend.mode === 'live') throw new Error('Enter a SharePoint site address, e.g. https://contoso.sharepoint.com/sites/Finance')
-      setLists(await backend.listLists(url)); lsSet('spx.lastSite', url); setSite(url)
+      setLists(await backend.listLists(url)); lsSet(`spx.lastSite.${backend.mode}`, url); setSite(url); setWeb(url)
     } catch (e) { setErr((e as Error).message); setLists(null) } finally { setBusy(false) }
   }
 
@@ -45,7 +46,7 @@ export function Connect({ backend, config, isOwner, who, engine, access, onSaved
     setBusy(true); setErr('')
     try {
       const src: SourceConfig = {
-        id: `${sel.id}`.slice(0, 40), siteUrl: site, listId: sel.id, title: sel.title, label: label.trim() || sel.title, isLibrary: sel.isLibrary,
+        id: `${sel.id}`.slice(0, 40), siteUrl: web || site, listId: sel.id, title: sel.title, label: label.trim() || sel.title, isLibrary: sel.isLibrary,
         itemCount: sel.itemCount, url: sel.url, added: new Date().toISOString(), addedBy: who.upn,
       }
       const next: AppConfig = { ...config, sources: [...config.sources.filter((s) => !(s.listId === src.listId && s.siteUrl === src.siteUrl)), src], activeId: src.id, updated: new Date().toISOString(), updatedBy: who.upn }

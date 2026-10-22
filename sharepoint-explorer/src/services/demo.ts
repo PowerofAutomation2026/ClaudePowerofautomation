@@ -106,6 +106,7 @@ const defaultAssign = (): RoleAssign[] => [
 export const demo: Backend = {
   mode: 'demo',
   async whoAmI() { return { upn: 'you@contoso.com', name: 'Demo Owner' } },
+  async resolveWeb(t) { return t.replace(/\/+$/, '') },
   async listSites() { return [{ url: SITE, title: 'Demo site' }, { url: 'https://contoso.sharepoint.com/sites/hr', title: 'HR portal' }] },
   async listLists() { await sleep(200); return LISTS.map(({ n: _n, kind: _k, ...l }) => l) },
   async getList(_s, id) { const { n: _n, kind: _k, ...l } = listOf(id); return l },

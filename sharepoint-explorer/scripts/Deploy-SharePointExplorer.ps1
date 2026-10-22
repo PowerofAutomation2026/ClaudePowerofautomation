@@ -17,6 +17,8 @@
 .PARAMETER ConfigSiteUrl     SharePoint site that (a) stores the app's shared settings - a small list "SPX_Config" the owner creates there on first
                              Connect - and (b) is used to register the SharePoint connector with `pac` (it needs one site + one existing list
                              to bootstrap; the app itself can then reach ANY site). Strongly recommended.
+.PARAMETER AppId             Update this existing app (GUID from make.powerapps.com > Apps > Details) instead of letting pac decide. Use it if the
+                             script says an app with this name already exists and it cannot work out which one.
 .PARAMETER BootstrapList     Name of an existing list/library on the config site used to register the connector. Default: tries
                              'Documents', 'Shared Documents', 'Site Pages'.
 .PARAMETER NonInteractive    Never prompt; fail instead.
@@ -34,6 +36,7 @@ param(
   [string[]]$OwnerUpn,
   [string]$ConfigSiteUrl,
   [string]$BootstrapList,
+  [string]$AppId,
   [switch]$NonInteractive,
   [switch]$SkipPrereqInstall
 )
@@ -153,6 +156,17 @@ try {
     if (++$attempt -ge 10) { throw 'SharePoint connection still missing after 10 checks.' }
   }
   $conn = @(Get-Connections) | Where-Object { $_.Api -eq $api } | Select-Object -First 1
+  # A restored power.config.json may point at a connection/app that no longer exists: start clean when it names a different connection
+  if (Test-Path $cfgPath) {
+    $rawCfg = [System.IO.File]::ReadAllText($cfgPath)
+    $ids = [regex]::Matches($rawCfg, '[0-9a-fA-F]{32}|[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}') | ForEach-Object { $_.Value.ToLower() }
+    if ($rawCfg -match 'connectionReferences' -and $rawCfg -match 'shared_sharepointonline' -and ($ids -notcontains $conn.Id.ToLower())) {
+      Warn 'power.config.json refers to a different SharePoint connection than the one that exists now - clearing the old binding.'
+      try { $j = $rawCfg.TrimStart([char]0xFEFF) | ConvertFrom-Json; foreach ($k in 'connectionReferences','databaseReferences','dataSources') { if ($j.PSObject.Properties[$k]) { $j.$k = [pscustomobject]@{} } }; [System.IO.File]::WriteAllText($cfgPath, ($j | ConvertTo-Json -Depth 20), $utf8NoBom) } catch { }
+      $dp = Join-Path $root '.power'; if (Test-Path $dp) { Remove-Item $dp -Recurse -Force }
+    }
+  }
+
   # No config site given: discover one from the user's own SharePoint connection (asked only if discovery finds nothing)
   if (-not $ConfigSiteUrl) {
     foreach ($cmd in @(@('code','list-datasets','-a',$api,'-c',$conn.Id), @('code','list-datasets','--apiId',$api,'--connectionId',$conn.Id))) {
@@ -213,7 +227,16 @@ try {
   }
   if (-not (Test-Path (Join-Path $root 'dist\index.html'))) { throw 'Build produced no dist\index.html' }
   Ok 'Build OK'
-  if (-not (Select-String -Path (Join-Path $root 'dist\assets\*.js') -Pattern 'dataSourceType' -Quiet)) { throw 'The built app does not contain the SharePoint data-source description: it would run without live data. Check the pac output above and re-run.' }
+  # the data-source key that pac generated must appear in the bundle (a generic word like dataSourceType would also be in our own code)
+  $schemaFile = @('.power\schemas\appschemas\dataSourcesInfo.ts', '.power\appschemas\dataSourcesInfo.ts') | Where-Object { Test-Path (Join-Path $root $_) } | Select-Object -First 1
+  $dsKey = $null
+  if ($schemaFile) { $m = [regex]::Match([System.IO.File]::ReadAllText((Join-Path $root $schemaFile)), '["'']?([A-Za-z0-9_\-]+)["'']?\s*:\s*\{\s*["'']?tableId'); if ($m.Success) { $dsKey = $m.Groups[1].Value } }
+  if ($dsKey) {
+    if (-not (Select-String -Path (Join-Path $root 'dist\assets\*.js') -Pattern ([regex]::Escape($dsKey)) -Quiet)) { throw "The built app does not contain the SharePoint data source '$dsKey': it would run without live data. Check the pac output above and re-run." }
+    Ok "Bundle contains data source '$dsKey'"
+  } else { Warn 'Could not read the data-source key from the generated schema; skipping the bundle check.' }
+  $pkgVer = (Get-Content (Join-Path $root 'package.json') -Raw | ConvertFrom-Json).version
+  Ok "Build stamp: v$pkgVer (shown in the app footer)"
 
   # ---------- 8. publish ----------
   Step 'Publishing to Power Platform'
@@ -224,28 +247,26 @@ try {
     Write-Host $text
     return $text
   }
+  function Set-AppId([string]$id) {
+    $raw = [System.IO.File]::ReadAllText($cfgPath).TrimStart([char]0xFEFF)
+    if ($raw -match '"appId"\s*:') { $raw = [regex]::Replace($raw, '"appId"\s*:\s*(null|"[^"]*")', '"appId": "' + $id + '"') }
+    else { $raw = [regex]::Replace($raw, '^\s*\{', '{' + "`n  `"appId`": `"$id`",", 1) }
+    [System.IO.File]::WriteAllText($cfgPath, $raw, $utf8NoBom)
+  }
+  if ($AppId) { Set-AppId $AppId.Trim(); Ok "Updating app $AppId" }
   $configBefore = if (Test-Path $cfgPath) { [System.IO.File]::ReadAllText($cfgPath) } else { $null }
   $out = Push-App
   if ($configBefore -and -not (Test-Path $cfgPath)) { [System.IO.File]::WriteAllText($cfgPath, $configBefore, $utf8NoBom); Warn 'pac removed power.config.json - restored it' }
 
-  if ($out -match 'ApplicationDisplayNameIsInUse' -and $out -match "Existing App: '([0-9a-fA-F-]{36})'") {   # same name already exists: update it in place
-    $existing = $Matches[1]
+  if ($out -match 'ApplicationDisplayNameIsInUse') {   # an app with this name already exists: update THAT app (never publish a second, differently named copy)
+    $existing = $null
+    if ($out -match "Existing App: '([0-9a-fA-F-]{36})'") { $existing = $Matches[1] }
+    else { $existing = ([regex]::Matches($out, '[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}') | ForEach-Object { $_.Value } | Where-Object { $_ -ne $EnvironmentId } | Select-Object -First 1) }
+    if (-not $existing) { throw "An app named '$DisplayName' already exists in this environment but its id could not be read from pac's message. Open make.powerapps.com > Apps > $DisplayName > Details, copy the App ID and run again with -AppId <id> (or delete the old app first). Not publishing a duplicate on purpose." }
     Warn "An app named '$DisplayName' already exists ($existing). Updating that app..."
-    $raw = [System.IO.File]::ReadAllText($cfgPath).TrimStart([char]0xFEFF)
-    if ($raw -match '"appId"\s*:') { $raw = [regex]::Replace($raw, '"appId"\s*:\s*(null|"[^"]*")', '"appId": "' + $existing + '"') }
-    else { $raw = [regex]::Replace($raw, '^\s*\{', '{' + "`n  `"appId`": `"$existing`",", 1) }
-    [System.IO.File]::WriteAllText($cfgPath, $raw, $utf8NoBom)
+    Set-AppId $existing
     $out = Push-App
-    if (-not (Test-Path $cfgPath)) { [System.IO.File]::WriteAllText($cfgPath, $raw, $utf8NoBom) }
-  }
-  if ($out -notmatch '(?i)pushed successfully' -and $out -match 'ApplicationDisplayNameIsInUse' -and (Test-Path $cfgPath)) {   # last resort: publish under a dated name
-    $newName = "$DisplayName " + (Get-Date -Format 'yyMMdd-HHmm')
-    Warn "Could not update the existing app. Publishing as a NEW app named '$newName' (delete the old one later in make.powerapps.com)."
-    $raw = [System.IO.File]::ReadAllText($cfgPath).TrimStart([char]0xFEFF)
-    $raw = [regex]::Replace($raw, '"appId"\s*:\s*"[^"]*"', '"appId": null')
-    $raw = [regex]::Replace($raw, '"appDisplayName"\s*:\s*"[^"]*"', '"appDisplayName": "' + $newName + '"')
-    [System.IO.File]::WriteAllText($cfgPath, $raw, $utf8NoBom)
-    $out = Push-App
+    if (-not (Test-Path $cfgPath) -and $configBefore) { [System.IO.File]::WriteAllText($cfgPath, $configBefore, $utf8NoBom); Set-AppId $existing }
   }
   if ($out -notmatch '(?i)pushed successfully') {
     if (-not (Test-Path $cfgPath) -and (Test-Path $cfgBackup)) { Copy-Item $cfgBackup $cfgPath -Force }
@@ -256,7 +277,9 @@ try {
   $playUrl = if ($out -match '(https://apps\.powerapps\.com/play/\S+)') { $Matches[1] } else { $null }
   Write-Host "`nDone. App published." -ForegroundColor Green
   if ($playUrl) { Write-Host "Open it: $playUrl" -ForegroundColor Green }
-  Write-Host "Or: https://make.powerapps.com/environments/$EnvironmentId/apps  (look for '$DisplayName')." -ForegroundColor Green
+  $finalId = try { ([System.IO.File]::ReadAllText($cfgPath).TrimStart([char]0xFEFF) | ConvertFrom-Json).appId } catch { $null }
+  Write-Host "Or: https://make.powerapps.com/environments/$EnvironmentId/apps  (look for '$DisplayName'; app id: $finalId)." -ForegroundColor Green
+  Write-Host "IMPORTANT: close any open tab of the app, reopen it from that Apps list in environment $EnvironmentId and press Ctrl+F5. The footer must say 'Build v$pkgVer · live SharePoint data'. If it still shows an older build or a SAMPLE DATA bar, you are opening a different/older copy of the app." -ForegroundColor Yellow
   Write-Host ''
   Write-Host 'Next steps' -ForegroundColor Cyan
   Write-Host "  1. Open the app -> approve the SharePoint consent prompt -> Connect tab -> pick the site, list or library -> press Connect." -ForegroundColor Gray

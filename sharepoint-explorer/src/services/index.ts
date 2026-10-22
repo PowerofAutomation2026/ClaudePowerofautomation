@@ -12,7 +12,7 @@ const withTimeout = <T,>(p: Promise<T>, ms: number, what: string) => Promise.rac
  * quietly shows sample data. The demo tenant is used only on a developer machine (localhost / no connector) or with ?demo=1.
  */
 export async function chooseBackend(): Promise<Chosen> {
-  if (/[?&]demo=1/.test(location.search)) return { backend: demo }
+  if (/[?&]demo=1/.test(location.search) && !embedded()) return { backend: demo }   // never inside Power Apps: a stray ?demo=1 must not turn a live app into sample data
   let live: typeof import('./sp')
   try { live = await import('./sp') } catch (e) {
     return isLocalHost() ? { backend: demo } : { error: `The SharePoint module failed to load: ${(e as Error).message}` }

@@ -192,7 +192,7 @@ export function Grid(p: GridProps) {
             return (
               tiles ? (
               <button key={r.__id} id={`row-${i}`} className={`ptile${i === active ? ' active' : ''}${r.__new ? ' fresh' : ''}`} style={style} onClick={() => p.onOpen(r)} onContextMenu={(e) => { if (p.onMenu) { e.preventDefault(); p.onMenu(r, new DOMRect(e.clientX, e.clientY, 0, 0)) } }} aria-label={cellText(titleF, r) || `Item ${r.__id}`}>
-                <span className="tile-art"><FileGlyph name={String(r.FileLeafRef ?? '')} folder={r.FSObjType === 1} size={r.FSObjType === 1 ? 64 : 56} thumb={p.origin && r.FileRef ? `${p.origin}/_layouts/15/getpreview.ashx?path=${encodeURIComponent(new URL(p.origin).origin + String(r.FileRef).split('/').map(encodeURIComponent).join('/'))}&resolution=1` : undefined} /></span>
+                <span className="tile-art"><FileGlyph name={String(r.FileLeafRef ?? '')} folder={r.FSObjType === 1} size={r.FSObjType === 1 ? 64 : 56} thumb={p.origin && r.FileRef ? `${p.origin}/_layouts/15/getpreview.ashx?path=${encodeURIComponent(new URL(p.origin).origin + String(r.FileRef))}&resolution=1` : undefined} /></span>
                 <b className="tile-name">{String(r.FileLeafRef ?? cellText(titleF, r))}</b>
                 <span className="muted small">{r.FSObjType === 1 ? 'Folder' : `${extOf(String(r.FileLeafRef ?? '')).toUpperCase() || 'File'} · ${bytes(Number(r.File_x0020_Size))}`}</span>
               </button>

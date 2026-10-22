@@ -15,6 +15,7 @@ const OFFICE = /^(docx?|xlsx?|pptx?|vsdx?|one)$/i
 export function itemUrl(engine: Engine, row: Row): string {
   const origin = new URL(engine.src.siteUrl).origin
   const web = engine.src.siteUrl.replace(/\/$/, '')
+  if (engine.src.isLibrary && !row.FileRef) return `${web}/_layouts/15/listform.aspx?PageType=4&ListId=${encodeURIComponent('{' + engine.src.listId + '}')}&ID=${row.__id}`
   if (engine.src.isLibrary && row.FileRef) {
     const ref = String(row.FileRef)
     if (row.FSObjType === 1 && engine.src.url) return `${origin}${encPath(engine.src.url)}/Forms/AllItems.aspx?id=${encodeURIComponent(ref)}`
@@ -31,7 +32,7 @@ export function openShareDialog(engine: Engine, row: Row): boolean {
   return !!window.open(shareUrl(engine, row), 'spx_share', `popup=yes,width=${w},height=${h},left=${l},top=${t}`)
 }
 /** _layouts handlers are web-scoped: they must be called on the site that holds the library, not the tenant root */
-export const downloadUrl = (engine: Engine, row: Row) => `${engine.src.siteUrl.replace(/\/$/, '')}/_layouts/15/download.aspx?SourceUrl=${encodeURIComponent(new URL(engine.src.siteUrl).origin + encPath(String(row.FileRef)))}`
+export const downloadUrl = (engine: Engine, row: Row) => `${engine.src.siteUrl.replace(/\/$/, '')}/_layouts/15/download.aspx?SourceUrl=${encodeURIComponent(String(row.FileRef))}`   // server-relative path, encoded once (what SharePoint's own UI sends)
 
 export function Drawer({ engine, row, index, actions, access, fav, onFav, onInline, onClose, onNav }: { engine: Engine; row: Row; index: number; actions: MenuItem[]; access: Access; fav: boolean; onFav: () => void; onInline: (row: Row, field: SpField, value: unknown) => Promise<void>; onClose: () => void; onNav: (d: number) => void }) {
   const toast = useToast()
@@ -76,9 +77,10 @@ export function Drawer({ engine, row, index, actions, access, fav, onFav, onInli
       </div>
       <div className="body">
         {!lib && <RecordHero engine={engine} row={full} />}
-        {lib && !isFolder && isImage(ext) && engine.backend.mode === 'live' && <div className="dprev"><img src={`${engine.src.siteUrl.replace(/\/$/, '')}/_layouts/15/getpreview.ashx?path=${encodeURIComponent(origin + encPath(String(full.FileRef)))}&resolution=3`} alt={`Preview of ${title}`} onError={(e) => ((e.currentTarget.parentElement as HTMLElement).style.display = 'none')} /></div>}
+        {lib && !isFolder && isImage(ext) && engine.backend.mode === 'live' && <div className="dprev"><img src={`${engine.src.siteUrl.replace(/\/$/, '')}/_layouts/15/getpreview.ashx?path=${encodeURIComponent(origin + String(full.FileRef))}&resolution=3`} alt={`Preview of ${title}`} onError={(e) => ((e.currentTarget.parentElement as HTMLElement).style.display = 'none')} /></div>}
         <div className="row" style={{ marginBottom: 8, gap: 6 }}>
           <a className="btn primary" href={url} target="_blank" rel="noreferrer noopener"><Icon n="ext" size={16} />Open in SharePoint</a>
+          <div className="muted small" style={{ flexBasis: '100%', overflowWrap: 'anywhere' }}>Link: <a href={url} target="_blank" rel="noreferrer noopener">{url}</a></div>
           <Menu label="Share" icon="share" align="left">
             {(close) => <div>
               <button onClick={() => { close(); copyLink(false) }}><Icon n="copy" size={16} />Copy link — people in my organization can view</button>

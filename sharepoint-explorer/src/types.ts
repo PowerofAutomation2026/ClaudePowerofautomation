@@ -126,6 +126,8 @@ export interface Backend {
   mode: 'live' | 'demo'
   whoAmI(): Promise<{ upn: string; name: string }>
   listSites(): Promise<SpSite[]>
+  /** canonical web URL for whatever the owner typed (strips /SitePages/Home.aspx, /Lists/…, query strings, …) */
+  resolveWeb(typed: string): Promise<string>
   listLists(siteUrl: string): Promise<SpList[]>
   getList(siteUrl: string, listId: string): Promise<SpList>
   getFields(siteUrl: string, listId: string): Promise<SpField[]>

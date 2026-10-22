@@ -133,7 +133,7 @@ function Shell() {
     engine?.dispose()
     try {
       const [fields, list] = await Promise.all([boot.backend.getFields(s.siteUrl, s.listId), boot.backend.getList(s.siteUrl, s.listId).catch(() => null)])
-      const cur: SourceConfig = { ...s, itemCount: list?.itemCount ?? s.itemCount, url: s.url ?? list?.url }
+      const cur: SourceConfig = { ...s, itemCount: list?.itemCount ?? s.itemCount, url: s.url || list?.url }
       const select = pickColumns(fields, cur.isLibrary)
       const eng = new Engine(boot.backend, cur, fields, select)
       const vis = lsGet<string[]>(`spx.cols.${s.id}`, []).filter((n) => select.includes(n))
@@ -141,7 +141,7 @@ function Shell() {
       setWidths(lsGet(`spx.w.${s.id}`, {}))
       setFavs(new Set(lsGet<number[]>(`spx.fav.${s.id}`, [])))
       setBoardField(fields.find((f) => f.kind === 'choice' && select.includes(f.internal) && (f.choices?.length ?? 0) > 1) ?? null)
-      setSrc(cur); setEngine(eng); lsSet('spx.active', s.id)
+      setSrc(cur); setEngine(eng); lsSet(`spx.active.${boot.backend.mode}`, s.id)
       boot.backend.getAccess(cur, config!, boot.who.upn).then(setAccess).catch(() => setAccess((a) => ({ ...a, role: 'reader', canAdd: false, canEdit: false, canDelete: false, canManage: false, reason: 'Could not read your permissions: read-only.' })))
       if (goTab) setTab(goTab)
       void eng.start()
@@ -150,7 +150,7 @@ function Shell() {
 
   useEffect(() => {
     if (!boot || !config || src || loadingSrc) return
-    const want = config.sources.find((s) => s.id === lsGet('spx.active', '')) ?? config.sources.find((s) => s.id === config.activeId) ?? config.sources[0]
+    const want = config.sources.find((s) => s.id === lsGet(`spx.active.${boot?.backend.mode}`, '')) ?? config.sources.find((s) => s.id === config.activeId) ?? config.sources[0]
     if (want) void openSource(want, 'dashboard')
     else setTab(isOwner ? 'connect' : 'data')
   }, [boot, config]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -252,7 +252,7 @@ function Shell() {
       { label: 'Rename', icon: 'A', hidden: !(lib && access.canEdit), run: () => setNameDlg({ mode: 'rename', row: r }) },
       { label: 'Move to…', icon: '↦', hidden: !(lib && access.canEdit), run: () => setPicker({ mode: 'Move', row: r }) },
       { label: 'Copy to…', icon: 'copy', hidden: !(lib && access.canEdit && !isFolder), run: () => setPicker({ mode: 'Copy', row: r }) },
-      { label: 'Download', icon: 'download', hidden: !(lib && !isFolder), run: () => window.open(downloadUrl(engine, r), '_blank', 'noopener') },
+      { label: 'Download', icon: 'download', hidden: !(lib && !isFolder), run: () => { if (!window.open(downloadUrl(engine, r), '_blank', 'noopener')) { navigator.clipboard?.writeText(downloadUrl(engine, r)); toast('warn', 'Pop-up blocked — the download link was copied instead.') } } },
       { label: 'Copy link (organization can view)', icon: 'share', run: () => boot?.backend.createShareLink(engine.src, r.__id, false).then((u) => navigator.clipboard?.writeText(u)).then(() => toast('good', 'Sharing link copied')).catch((e) => toast('bad', (e as Error).message)) },
       { label: favs.has(r.__id) ? 'Remove favorite' : 'Add to favorites', icon: 'star', run: () => toggleFav(r.__id) },
       { label: 'Share…', icon: 'share', run: () => { if (!openShareDialog(engine, r)) toast('warn', 'Pop-up blocked: allow pop-ups for this site to open SharePoint’s Share dialog.') } },

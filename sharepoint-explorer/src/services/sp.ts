@@ -141,6 +141,16 @@ export const sp: Backend = {
     return { upn: c.user.userPrincipalName ?? '', name: c.user.fullName ?? c.user.userPrincipalName ?? '' }
   },
 
+  async resolveWeb(typed) {
+    let u = typed.trim().split(/[?#]/)[0].replace(/\/+$/, '')
+    u = u.replace(/\/(_layouts|_api|SitePages|Lists|Forms|Shared%20Documents|Shared Documents)(\/.*)?$/i, '').replace(/\/[^/]+\.aspx$/i, '').replace(/\/+$/, '')
+    // ask SharePoint for the real web URL (fixes casing, vanity domains, sub-webs); fall back to the cleaned text
+    for (let cand = u; /^https:\/\/[^/]+\/./.test(cand); cand = cand.slice(0, cand.lastIndexOf('/'))) {
+      try { const w = await http(cand, 'GET', '_api/web?$select=Url'); if (w?.Url) return String(w.Url).replace(/\/+$/, '') } catch { /* try the parent */ }
+    }
+    return u
+  },
+
   async listSites(): Promise<SpSite[]> {
     const out: SpSite[] = []
     try {
@@ -389,7 +399,9 @@ export const sp: Backend = {
 
   async loadConfig(): Promise<AppConfig> {
     const fallback = (): AppConfig => lsGet<AppConfig>('spx.config', { v: 1, owners: [], sources: [], updated: '', updatedBy: '' })
-    const cfg = (await kvGet<AppConfig>('config', true)) ?? fallback()
+    const remote = await kvGet<AppConfig>('config', true)
+    // with a config site the shared list is the only truth: a per-device cache from another site/tenant must not resurface
+    const cfg = remote ?? (cfgSite() ? { v: 1 as const, owners: [], sources: [], updated: '', updatedBy: '' } : fallback())
     // Owners come ONLY from the deployed bundle (written by the deploy script), never from the editable list.
     return { ...cfg, v: 1, owners: baked.owners as string[], sources: cfg.sources ?? [] }
   },
