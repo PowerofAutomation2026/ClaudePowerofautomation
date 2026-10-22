@@ -554,6 +554,7 @@ export interface Check { label: string; ok: boolean | null; detail: string }
 const within = <T,>(p: Promise<T>, ms = 9000) => Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`no answer within ${ms / 1000} s (is the app running inside Power Apps?)`)), ms))])
 export async function diagnose(testSite?: string): Promise<Check[]> {
   const out: Check[] = []
+  out.push({ label: 'App build', ok: true, detail: `${__BUILD__} · page host ${location.hostname} · ${window.self !== window.top ? 'running inside Power Apps (iframe)' : 'running as a standalone page'}` })
   const entries = Object.entries<any>(dataSourcesInfo)
   out.push({ label: 'Data sources compiled into this app', ok: entries.length > 0, detail: entries.length ? entries.map(([k, v]) => `${k} (${v?.dataSourceType ?? '?'}, table ${v?.tableId || '—'}, ${Object.keys(v?.apis ?? {}).length} operations)`).join(' · ') : 'none — .power/schemas/appschemas/dataSourcesInfo.ts was not part of the build. Re-run the deploy script (pac code add-data-source must run before the build).' })
   out.push({ label: 'Connector candidates', ok: candidates().length > 0, detail: candidates().join(', ') || 'none' })

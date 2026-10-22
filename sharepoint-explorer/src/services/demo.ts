@@ -15,11 +15,11 @@ const EXT = ['pdf', 'docx', 'xlsx', 'pptx', 'png', 'mp4', 'txt', 'zip']
 const NOUN = ['Migration', 'Audit', 'Rollout', 'Review', 'Upgrade', 'Onboarding', 'Renewal', 'Forecast', 'Integration', 'Launch']
 
 const LISTS: (SpList & { n: number; kind: 'tasks' | 'customers' | 'docs' | 'small' | 'wide' })[] = [
-  { id: 'demo-tasks', title: 'Project Tasks', isLibrary: false, itemCount: 2_000_000, baseTemplate: 100, url: '/sites/demo/Lists/Tasks', description: 'Two million tasks across regions', n: 2_000_000, kind: 'tasks' },
-  { id: 'demo-docs', title: 'Policy Documents', isLibrary: true, itemCount: 180_000, baseTemplate: 101, url: '/sites/demo/Policies', description: 'Document library', n: 180_000, kind: 'docs' },
-  { id: 'demo-cust', title: 'Customers', isLibrary: false, itemCount: 18_000, baseTemplate: 100, url: '/sites/demo/Lists/Customers', description: 'Small enough to run fully in memory', n: 18_000, kind: 'customers' },
-  { id: 'demo-wide', title: 'Employee Onboarding', isLibrary: false, itemCount: 640, baseTemplate: 100, url: '/sites/demo/Lists/Onboarding', description: 'A wide list with 22 columns: try New item for the tabbed form', n: 640, kind: 'wide' },
-  { id: 'demo-small', title: 'Team Events', isLibrary: false, itemCount: 240, baseTemplate: 100, url: '/sites/demo/Lists/Events', description: 'Tiny list', n: 240, kind: 'small' },
+  { id: 'demo-tasks', title: 'SAMPLE – Project Tasks', isLibrary: false, itemCount: 2_000_000, baseTemplate: 100, url: '/sites/demo/Lists/Tasks', description: 'Two million tasks across regions', n: 2_000_000, kind: 'tasks' },
+  { id: 'demo-docs', title: 'SAMPLE – Policy Documents', isLibrary: true, itemCount: 180_000, baseTemplate: 101, url: '/sites/demo/Policies', description: 'Document library', n: 180_000, kind: 'docs' },
+  { id: 'demo-cust', title: 'SAMPLE – Customers', isLibrary: false, itemCount: 18_000, baseTemplate: 100, url: '/sites/demo/Lists/Customers', description: 'Small enough to run fully in memory', n: 18_000, kind: 'customers' },
+  { id: 'demo-wide', title: 'SAMPLE – Employee Onboarding', isLibrary: false, itemCount: 640, baseTemplate: 100, url: '/sites/demo/Lists/Onboarding', description: 'A wide list with 22 columns: try New item for the tabbed form', n: 640, kind: 'wide' },
+  { id: 'demo-small', title: 'SAMPLE – Team Events', isLibrary: false, itemCount: 240, baseTemplate: 100, url: '/sites/demo/Lists/Events', description: 'Tiny list', n: 240, kind: 'small' },
 ]
 
 const f = (internal: string, title: string, kind: SpField['kind'], extra: Partial<SpField> = {}): SpField =>

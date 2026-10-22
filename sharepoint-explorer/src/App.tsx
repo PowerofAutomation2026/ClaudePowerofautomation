@@ -322,6 +322,12 @@ function Shell() {
   return (
     <div className="app">
       <a className="skip" href="#main">Skip to content</a>
+      {boot.backend.mode === 'demo' && (
+        <div className="sample-ribbon" role="alert">
+          <b>SAMPLE DATA</b> — these are made-up lists, not your SharePoint. Open the app from Power Apps (make.powerapps.com → Apps) to see your real lists and libraries.
+          <button className="btn sm" onClick={() => setDiag(true)}>Why am I seeing this?</button>
+        </div>
+      )}
       <header className="top">
         <div className="brand" aria-label="PNC SharePoint Team — Explorer">
           <PncMark />
@@ -499,6 +505,7 @@ function Shell() {
           <div className="row" style={{ justifyContent: 'flex-end' }}><button className="btn" onClick={() => setConfirmDel(null)}>Cancel</button><button className="btn primary" style={{ background: 'var(--bad)' }} disabled={busy} onClick={() => void deleteRows()}>{busy ? 'Deleting…' : 'Delete'}</button></div>
         </Modal>
       )}
+      <footer className="buildstamp">Build {__BUILD__} · {boot.backend.mode === 'live' ? 'live SharePoint data' : 'SAMPLE data'}</footer>
       {diag && <DiagnosticsDialog site={src?.siteUrl} onClose={() => setDiag(false)} />}
       {palette && <Palette cmds={cmds} onClose={() => setPalette(false)} />}
     </div>

@@ -338,3 +338,8 @@ main > section, main > div { animation: rise .35s cubic-bezier(.2,.8,.2,1); } @k
 .cal-more { border: 0; background: none; color: var(--accent); font-size: .78rem; font-weight: 700; cursor: pointer; text-align: left; }
 .cal-pop { position: absolute; z-index: 40; left: 4px; top: 30px; width: 220px; max-height: 240px; overflow: auto; background: var(--surface); border: 1px solid var(--line2); border-radius: 12px; box-shadow: var(--shadow-lg); padding: 6px; display: grid; gap: 4px; }
 @media (max-width: 1560px) { .top .lbl-t { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; } }   /* hidden visually, still the button's accessible name */
+
+.sample-ribbon { position: relative; z-index: 70; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: center; padding: 8px 14px; background: repeating-linear-gradient(135deg, #f58025 0 14px, #e06f12 14px 28px); color: #111; font-weight: 600; text-align: center; }
+.sample-ribbon .btn { background: #fff; color: #111; border-color: #111; }
+.buildstamp { text-align: center; padding: 10px; font-size: .75rem; color: var(--muted); }
+.top { top: 0; }
