@@ -452,19 +452,24 @@ const enc = (s: string) => encodeURIComponent(s).replace(/%24/g, '$').replace(/%
 
 /** columns SharePoint told us do not exist as item properties for this list (learned at run time, see recover()) */
 const unusable = new Set<string>()
+/** people/lookup columns whose $expand SharePoint rejects (seen on some libraries): read their text via FieldValuesAsText instead */
+const noExpand = new Set<string>()
 
 export function selectExpand(fields: SpField[], select: string[], isLibrary: boolean): string {
   const sel = new Set<string>(['Id'])
   const exp = new Set<string>()
+  let viaText = false
   for (const n of select) {
     const f = fields.find((x) => x.internal === n)
     if (!f || n === 'ID' || unusable.has(n) || unusable.has(propOf(f))) continue
     const rn = propOf(f)
-    if (f.kind === 'user' || (f.kind === 'lookup' && f.typeAsString.startsWith('Lookup'))) { sel.add(`${rn}/${f.kind === 'lookup' ? f.lookupField || 'Title' : 'Title'}`); if (f.kind === 'user') sel.add(`${rn}/Id`); exp.add(rn) }
+    if ((f.kind === 'user' || f.kind === 'lookup') && noExpand.has(rn)) { sel.add(`FieldValuesAsText/${f.internal}`); viaText = true }
+    else if (f.kind === 'user' || (f.kind === 'lookup' && f.typeAsString.startsWith('Lookup'))) { sel.add(`${rn}/${f.kind === 'lookup' ? f.lookupField || 'Title' : 'Title'}`); if (f.kind === 'user') sel.add(`${rn}/Id`); exp.add(rn) }
     else sel.add(rn)
   }
   if (isLibrary) ['FileRef', 'FileDirRef', 'FileLeafRef', 'FSObjType', 'File_x0020_Type', 'File_x0020_Size'].forEach((x) => sel.add(x))
   const e = [...exp].slice(0, 12)
+  if (viaText) e.push('FieldValuesAsText')
   return `$select=${[...sel].filter((s) => !s.includes('/') || e.includes(s.split('/')[0])).join(',')}${e.length ? `&$expand=${e.join(',')}` : ''}`
 }
 
@@ -472,6 +477,8 @@ export function selectExpand(fields: SpField[], select: string[], isLibrary: boo
 async function recover<T>(fn: () => Promise<T>): Promise<T> {
   for (let i = 0; ; i++) {
     try { return await fn() } catch (e) {
+      const ex = /\$expand query is not valid for field '([^']+)'/i.exec((e as Error).message)
+      if (ex && i < 8 && !noExpand.has(ex[1])) { noExpand.add(ex[1]); continue }
       const m = /field or property '([^']+)' does not exist/i.exec((e as Error).message)
       if (!m || i >= 8 || unusable.has(m[1])) throw e
       unusable.add(m[1]); if (m[1].startsWith('OData_')) unusable.add(m[1].slice(6))
@@ -486,6 +493,7 @@ function toRow(item: any, fields: SpField[]): Row {
   if (item.File_x0020_Size != null) row.File_x0020_Size = Number(item.File_x0020_Size)
   for (const f of fields) {
     const key = propOf(f) in item ? propOf(f) : f.internal
+    if (!(key in item) && item.FieldValuesAsText && f.internal in item.FieldValuesAsText) { row[f.internal] = item.FieldValuesAsText[f.internal]; continue }
     if (!(key in item)) continue
     let v = item[key]
     if (v && typeof v === 'object' && !Array.isArray(v) && 'results' in v) v = v.results
