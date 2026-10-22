@@ -1,0 +1,114 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Beginner Guide: Copy SharePoint Folder Structure</title>
+<style>
+:root{--bg:#f6f7fb;--card:#fff;--ink:#1d2433;--mut:#5b6577;--acc:#0f6cbd;--hi:#e8590c;--ok:#2b8a3e;--line:#dde1ea}
+@media(prefers-color-scheme:dark){:root{--bg:#12151c;--card:#1b2029;--ink:#e8ebf2;--mut:#9aa4b8;--acc:#5aa9f0;--line:#2c3442}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.6 system-ui,Segoe UI,sans-serif}
+main{max-width:860px;margin:0 auto;padding:24px 16px 80px}
+h1{font-size:2rem;margin:.2em 0}h2{margin:0 0 .4em;font-size:1.3rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;margin:20px 0}
+.num{display:inline-grid;place-items:center;width:34px;height:34px;border-radius:50%;background:var(--acc);color:#fff;font-weight:700;margin-right:8px}
+.btn{display:inline-block;background:var(--acc);color:#fff;padding:14px 22px;border-radius:10px;text-decoration:none;font-weight:700;font-size:1.1rem}
+.note{border-left:4px solid var(--hi);padding:8px 14px;background:rgba(232,89,12,.08);border-radius:6px;margin:12px 0}
+.tip{border-left-color:var(--ok);background:rgba(43,138,62,.1)}
+code,.mono{background:rgba(120,130,150,.18);padding:1px 6px;border-radius:5px;font-family:ui-monospace,Consolas,monospace;font-size:.92em}
+.shot{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:14px 0;background:#fff;color:#222;font:14px system-ui,sans-serif}
+.bar{background:#e9ecf1;padding:6px 10px;display:flex;gap:6px;align-items:center;color:#555;font-size:12px}
+.bar i{width:10px;height:10px;border-radius:50%;background:#c4c9d3;display:inline-block}
+.bar span{margin-left:8px;background:#fff;border-radius:10px;padding:2px 10px;flex:1}
+.body{display:flex;min-height:150px}.side{width:150px;background:#f1f3f7;padding:10px;border-right:1px solid #e1e4ea}
+.side div{padding:5px 8px;border-radius:5px;margin-bottom:2px}.main{flex:1;padding:14px}
+.hl{outline:3px solid var(--hi);outline-offset:2px;border-radius:5px;position:relative}
+.hl::after{content:attr(data-t);position:absolute;left:100%;top:50%;transform:translateY(-50%);margin-left:10px;background:var(--hi);color:#fff;padding:2px 8px;border-radius:6px;font-size:12px;white-space:nowrap;font-weight:700}
+.field{border:1px solid #bbb;border-radius:5px;padding:6px 8px;margin:4px 0 10px;background:#fff;color:#444}
+.pb{display:inline-block;background:#0f6cbd;color:#fff;padding:6px 14px;border-radius:5px;margin:4px 6px 4px 0}
+.cap{font-size:.85rem;color:var(--mut);margin:-6px 0 10px}
+table{border-collapse:collapse;width:100%}td,th{border:1px solid var(--line);padding:8px;text-align:left}
+details{margin:8px 0}summary{cursor:pointer;font-weight:600}
+@media(max-width:560px){.side{display:none}.hl::after{position:static;display:block;transform:none;margin:4px 0 0}}
+</style></head><body><main>
+<h1>Copy a SharePoint Folder Structure<br><small style="font-size:1rem;color:var(--mut);font-weight:400">A step-by-step guide for complete beginners</small></h1>
+<p>This guide installs a ready-made automation ("flow") that copies every folder from one SharePoint library to another site, then marks each original folder <b>Copied = Yes</b>. You do not need to write any code. Allow about 15 minutes.</p>
+<div class="note"><b>About the pictures:</b> the screenshots are simplified drawings, not photos of your screen. Microsoft changes its screens often, so words and positions may differ slightly. Look for the button names in <b>bold</b> and the orange highlights.</div>
+
+<div class="card"><h2>Before you start: checklist</h2><ul>
+<li>A work or school Microsoft 365 account that can use Power Automate.</li>
+<li>You can <b>open both SharePoint sites</b> and have <b>Edit</b> or <b>Owner</b> rights on both (the flow creates folders and adds a column).</li>
+<li>Your environment must have Dataverse (the "Solutions" menu must exist). Most work accounts do. If you cannot see "Solutions", ask your IT admin.</li></ul>
+<div class="note tip">Tip: try it first with two <b>test</b> sites or test libraries, not live data.</div></div>
+
+<div class="card"><h2><span class="num">1</span>Download the package</h2>
+<p>Click the button. A file named <code>FolderStructureCopy_1_0_0_0.zip</code> is saved to your Downloads folder.</p>
+<p><a class="btn" download="FolderStructureCopy_1_0_0_0.zip" href="data:application/zip;base64,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">⬇ Download the flow package (.zip)</a></p>
+<div class="note"><b>Do not unzip it.</b> Power Automate needs the .zip file exactly as it is.</div></div>
+
+<div class="card"><h2><span class="num">2</span>Open Power Automate and sign in</h2>
+<p>Go to <span class="mono">make.powerautomate.com</span> and sign in with your work account.</p>
+<div class="shot"><div class="bar"><i></i><i></i><i></i><span>make.powerautomate.com</span></div>
+<div class="body"><div class="side"><div>Home</div><div>Create</div><div>My flows</div><div class="hl" data-t="Click Solutions">Solutions</div><div>Connections</div></div>
+<div class="main"><b>Power Automate</b><p>Welcome back!</p></div></div></div>
+<p>In the left menu click <b>Solutions</b>. If it is hidden, click <b>More</b> then <b>Solutions</b>.</p></div>
+
+<div class="card"><h2><span class="num">3</span>Check the environment (top right)</h2>
+<p>Top right shows the <b>Environment</b> name. Use your company's normal one (often called "Default" or your company name). If unsure, ask IT which to use.</p></div>
+
+<div class="card"><h2><span class="num">4</span>Import the solution</h2>
+<div class="shot"><div class="bar"><i></i><i></i><i></i><span>Solutions</span></div>
+<div class="body"><div class="side"><div>Home</div><div>My flows</div><div><b>Solutions</b></div></div>
+<div class="main"><span class="pb">+ New solution</span><span class="pb hl" style="background:#fff;color:#0f6cbd;border:1px solid #0f6cbd" data-t="Click Import solution">Import solution</span></div></div></div>
+<p>Click <b>Import solution</b> (top of the page). In the panel that opens, click <b>Browse</b>, choose the downloaded zip, then click <b>Next</b>.</p>
+<div class="shot"><div class="bar"><i></i><i></i><i></i><span>Import a solution</span></div><div class="main">
+<p><b>Import a solution</b></p><div class="field hl" data-t="Browse for the zip">FolderStructureCopy_1_0_0_0.zip</div><span class="pb">Next</span></div></div>
+<p>The next screen shows the solution details. Click <b>Next</b> again.</p></div>
+
+<div class="card"><h2><span class="num">5</span>Connect SharePoint</h2>
+<p>You will see a row called <b>SharePoint</b> with a dropdown. This is you giving the flow permission to use SharePoint as you.</p>
+<div class="shot"><div class="bar"><i></i><i></i><i></i><span>Import a solution – Connections</span></div><div class="main">
+<p><b>Connection References</b></p><div class="field hl" data-t="Pick or add a connection">SharePoint &nbsp; ▾ Select a connection</div><span class="pb">Import</span></div></div>
+<ol><li>Click the dropdown. If you see your email, pick it.</li>
+<li>If not, click <b>+ New connection</b>, then <b>Create</b>, and sign in with your work account if asked. Come back to the import tab and click the <b>refresh</b> icon.</li>
+<li>Click <b>Import</b>.</li></ol>
+<p>Wait for the green banner: <b>"Solution imported successfully."</b> (about 1 minute).</p></div>
+
+<div class="card"><h2><span class="num">6</span>Open the flow and turn it on</h2>
+<ol><li>Click <b>Folder Structure Copy</b> in the solutions list.</li>
+<li>Click <b>Copy SharePoint Folder Structure</b> (a flow).</li>
+<li>Click <b>Turn on</b> (top). If it says <b>Turn off</b> it is already on.</li></ol>
+<div class="shot"><div class="bar"><i></i><i></i><i></i><span>Copy SharePoint Folder Structure</span></div><div class="main">
+<span class="pb">Edit</span><span class="pb hl" style="background:#fff;color:#0f6cbd;border:1px solid #0f6cbd" data-t="Turn on, then Run">Turn on</span><span class="pb">Run</span></div></div>
+<div class="note">If you get an error about a connection, click <b>Edit</b>, fix any red-marked connection by choosing yours, then click <b>Save</b>.</div></div>
+
+<div class="card"><h2><span class="num">7</span>Find the 4 things the flow asks for</h2>
+<table><tr><th>Question</th><th>How to find it</th><th>Example</th></tr>
+<tr><td>Source site URL</td><td>Open the source site, copy the address up to the site name only (stop before <code>/Shared Documents</code>).</td><td><code>https://contoso.sharepoint.com/sites/Source</code></td></tr>
+<tr><td>Source library</td><td>The library's <b>name</b> as shown in the left menu or page title.</td><td><code>Documents</code></td></tr>
+<tr><td>Destination site URL</td><td>Same as above for the target site.</td><td><code>https://contoso.sharepoint.com/sites/Target</code></td></tr>
+<tr><td>Destination library</td><td>The library name on the target site.</td><td><code>Documents</code></td></tr></table>
+<div class="note">Library name vs. web address: a library called <b>Documents</b> often has an address ending in <code>Shared Documents</code>. Type the <b>name</b> (Documents), not the address piece.</div></div>
+
+<div class="card"><h2><span class="num">8</span>Run it</h2>
+<p>Click <b>Run</b>. A panel asks for your answers:</p>
+<div class="shot"><div class="bar"><i></i><i></i><i></i><span>Run flow</span></div><div class="main">
+<b>Source site URL</b><div class="field">https://contoso.sharepoint.com/sites/Source</div>
+<b>Source library</b><div class="field">Documents</div>
+<b>Destination site URL</b><div class="field">https://contoso.sharepoint.com/sites/Target</div>
+<b>Destination library</b><div class="field">Documents</div>
+<b>Skip already flagged folders</b><div class="field">☑ Yes</div>
+<span class="pb hl" data-t="Click Run flow">Run flow</span></div></div>
+<p>Click <b>Run flow</b>, then <b>Done</b>. Open the flow's page and watch <b>28-day run history</b>: status goes <i>Running</i> → <b>Succeeded</b>. Small libraries take under a minute.</p></div>
+
+<div class="card"><h2><span class="num">9</span>Check it worked</h2>
+<ol><li>Open the <b>destination</b> library: the same folders and sub-folders should exist (empty; files are not copied).</li>
+<li>Open the <b>source</b> library: there is a new column <b>Copied</b>; every folder shows <b>Yes</b>. If you do not see the column, click <b>+ Add column → Show/hide columns</b> and tick <b>Copied</b>.</li></ol>
+<div class="shot"><div class="bar"><i></i><i></i><i></i><span>Source site – Documents</span></div><div class="main">
+<table><tr><th>Name</th><th class="hl" data-t="New flag column">Copied</th></tr><tr><td>📁 Finance</td><td>Yes</td></tr><tr><td>📁 HR</td><td>Yes</td></tr><tr><td>📁 Projects</td><td>Yes</td></tr></table></div></div>
+<p>Run it again any time: with "Skip already flagged" ticked it only copies new folders.</p></div>
+
+<div class="card"><h2>If something goes wrong</h2>
+<details><summary>I cannot see "Solutions"</summary>Your environment has no Dataverse. Ask IT for one, or tell me and I will give you a non-solution version.</details>
+<details><summary>Import fails</summary>Take a screenshot of the error and send it to me; I will fix the package.</details>
+<details><summary>Run shows Failed</summary>Click the failed run, then the red step. Common causes: a typo in the site URL (do not add a trailing /), a wrong library name, or you lack Edit rights on one of the sites. Fix the input and Run again; nothing gets duplicated.</details>
+<details><summary>"Access denied" or 403</summary>You need Edit/Owner on both sites. Ask the site owner.</details>
+<details><summary>How do I undo?</summary>Delete the new folders in the destination library. The flow never deletes anything. The <b>Copied</b> column can be removed in library settings.</details></div>
+<p class="cap">Package built for testing. Always try it on test data first.</p>
+</main></body></html>
