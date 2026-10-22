@@ -5,7 +5,7 @@ import { emptyQuery } from '../query'
 import { exportDashboardPdf } from '../export'
 import type { Clause, SpField } from '../types'
 import { bytes, fmt, relTime, yieldToUi } from '../util'
-import { BarList, Donut, Timeline, type Datum } from './Charts'
+import { BarList, Donut, Gauge, Spark, Timeline, type Datum } from './Charts'
 import { Counter, Icon, useToast } from './ui'
 
 const SAMPLE = 2000
@@ -141,12 +141,12 @@ export function Dashboard({ engine, version, onFilter, onGoData, title }: Props)
         <div className="card kpi"><div className="l">Items in {engine.src.isLibrary ? 'library' : 'list'}</div><div className="v"><Counter value={total} /></div><div className="d muted">{local ? 'fully loaded in memory' : 'server-side, never fully loaded'}</div></div>
         <div className="card kpi"><div className="l">Analysed</div><div className="v"><Counter value={agg.rows} /></div><div className="d muted">{scopeLabel}</div></div>
         <div className="card kpi"><div className="l">New in last 7 days</div><div className="v"><Counter value={agg.last7} /></div>
-          <div className="d" style={{ color: delta >= 0 ? 'var(--good)' : 'var(--warn)' }}>{delta >= 0 ? '▲' : '▼'} {fmt(Math.abs(delta))} vs. previous week</div></div>
+          <div className="d" style={{ color: delta >= 0 ? 'var(--good)' : 'var(--warn)' }}>{delta >= 0 ? '▲' : '▼'} {fmt(Math.abs(delta))} vs. previous week</div><Spark data={agg.recent(14)} label="Items created per day, last 14 days" /></div>
         <div className="card kpi"><div className="l">Last change</div><div className="v" style={{ fontSize: '1.4rem' }}>{agg.lastModified ? relTime(new Date(agg.lastModified).toISOString()) : '—'}</div><div className="d muted">{agg.stale ? `${fmt(agg.stale)} untouched > 1 year` : 'nothing stale'}</div></div>
         {engine.src.isLibrary
           ? <div className="card kpi"><div className="l">Storage (analysed files)</div><div className="v" style={{ fontSize: '1.5rem' }}>{bytes(agg.totalBytes)}</div><div className="d muted">{fmt(agg.ext.size)} file types</div></div>
           : model.nums[0] && <div className="card kpi"><div className="l">{model.nums[0].field.title} · total</div><div className="v" style={{ fontSize: '1.5rem' }}>{fmt(Math.round(model.nums[0].sum))}</div><div className="d muted">avg {fmt(Math.round(model.nums[0].sum / model.nums[0].n))}</div></div>}
-        <div className="card kpi"><div className="l">Data health</div><div className="v"><Counter value={model.score} />%</div><div className="d muted">average fill rate</div></div>
+        <div className="card kpi" style={{ display: 'flex', gap: 12, alignItems: 'center' }}><Gauge value={model.score} label="Data health" /><div><div className="l">Data health</div><div className="d muted">average fill rate of your columns</div></div></div>
       </section>
 
       <div className="dgrid">

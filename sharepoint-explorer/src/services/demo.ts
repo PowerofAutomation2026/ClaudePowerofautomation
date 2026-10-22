@@ -183,7 +183,7 @@ export const demo: Backend = {
   async deleteItem(src, id) { const L = listOf(src.listId); await sleep(150); deleted.add(key(L.kind, id)); L.itemCount-- },
   async loadViews(upn) { return { shared: lsGet<ViewDef[]>('spx.demo.views.shared', []), mine: lsGet<ViewDef[]>('spx.demo.views.' + upn, []) } },
   async saveShared(v) { lsSet('spx.demo.views.shared', v) },
-  async saveMine(upn, v) { lsSet('spx.demo.views.' + upn, v) },
+  async saveMine(upn, v) { lsSet('spx.demo.views.' + upn, v); return 'device' as const },
 
   /* ---- libraries ---- */
   async createFolder(_s, parent, name) {

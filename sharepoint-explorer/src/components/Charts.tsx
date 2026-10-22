@@ -83,3 +83,28 @@ export function Timeline({ data, label }: { data: Datum[]; label: string }) {
     </div>
   )
 }
+
+/** Tiny trend line for KPI cards. */
+export function Spark({ data, label }: { data: number[]; label: string }) {
+  const max = Math.max(1, ...data), W = 120, H = 34
+  const pts = data.map((v, i) => `${(i / Math.max(1, data.length - 1)) * W},${H - 3 - (v / max) * (H - 8)}`)
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} role="img" aria-label={label} preserveAspectRatio="none" style={{ marginTop: 6 }}>
+      <defs><linearGradient id="spk" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="var(--accent)" stopOpacity=".35" /><stop offset="1" stopColor="var(--accent)" stopOpacity="0" /></linearGradient></defs>
+      <polygon points={`0,${H} ${pts.join(' ')} ${W},${H}`} fill="url(#spk)" />
+      <polyline points={pts.join(' ')} fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+    </svg>
+  )
+}
+
+/** Ring gauge (0-100) for scores such as data health. */
+export function Gauge({ value, label }: { value: number; label: string }) {
+  const r = 30, c = 2 * Math.PI * r, col = value >= 85 ? 'var(--good)' : value >= 60 ? 'var(--warn)' : 'var(--bad)'
+  return (
+    <svg width="78" height="78" viewBox="0 0 78 78" role="img" aria-label={`${label}: ${value}%`}>
+      <circle cx="39" cy="39" r={r} fill="none" stroke="var(--bg2)" strokeWidth="9" />
+      <circle cx="39" cy="39" r={r} fill="none" stroke={col} strokeWidth="9" strokeLinecap="round" strokeDasharray={`${(value / 100) * c} ${c}`} transform="rotate(-90 39 39)" style={{ transition: 'stroke-dasharray .8s cubic-bezier(.2,.8,.2,1)' }} />
+      <text x="39" y="44" textAnchor="middle" fontSize="17" fontWeight="800" fill="var(--text)">{value}</text>
+    </svg>
+  )
+}

@@ -23,7 +23,7 @@ export const opsFor = (f: SpField) => {
 export const describeClause = (c: Clause, fields: SpField[]) => {
   const f = fields.find((x) => x.internal === c.field)
   const op = opsFor(f ?? ({ kind: 'text' } as SpField)).find((o) => o.op === c.op)?.label ?? c.op
-  const v = c.op === 'in' ? (c.values ?? []).join(' | ') : c.op === 'empty' || c.op === 'notempty' ? '' : c.value
+  const v = c.op === 'in' ? (c.value || (c.values ?? []).join(' | ')) : c.op === 'empty' || c.op === 'notempty' ? '' : c.value
   return `${f?.title ?? c.field} ${op} ${v}`.trim()
 }
 
@@ -155,7 +155,8 @@ export function clauseToOData(c: Clause, f: SpField): string | null {
     case 'startswith': return `startswith(${fieldRef},${odataQuote(c.value)})`
     case 'in': {
       const vs = c.values ?? []
-      return vs.length ? '(' + vs.map((v) => `${fieldRef} eq ${odataQuote(v)}`).join(' or ') + ')' : null
+      const num = f.kind === 'counter' || f.kind === 'number' || f.kind === 'currency'
+      return vs.length ? '(' + vs.map((v) => `${fieldRef} eq ${num ? Number(v) : odataQuote(v)}`).join(' or ') + ')' : null
     }
     case 'lastdays': return `${n} ge ${dt(new Date(Date.now() - Number(c.value || 0) * 86_400_000))}`
     case 'eq': case 'neq': case 'gt': case 'ge': case 'lt': case 'le': {

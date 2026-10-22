@@ -67,7 +67,7 @@ export interface ViewDef {
   sourceId: string
   q: Query
   cols: string[]
-  layout: 'table' | 'cards' | 'tiles'
+  layout: 'table' | 'cards' | 'tiles' | 'board'
   owner: string
   /** me = personal; everyone; groups = members of the named SharePoint groups; admins = data admins and app owners only */
   audience: 'me' | 'everyone' | 'groups' | 'admins'
@@ -141,7 +141,8 @@ export interface Backend {
   deleteItem(src: SourceConfig, id: number): Promise<void>
   loadViews(upn: string): Promise<{ shared: ViewDef[]; mine: ViewDef[] }>
   saveShared(views: ViewDef[]): Promise<void>
-  saveMine(upn: string, views: ViewDef[]): Promise<void>
+  /** personal views never need admin rights: always kept on this device, and in the cloud when the user may write to the settings list */
+  saveMine(upn: string, views: ViewDef[]): Promise<'cloud' | 'device'>
   /** fast typeahead: titles/names that start with or contain `text` */
   suggest(src: SourceConfig, fields: SpField[], text: string, signal?: AbortSignal): Promise<string[]>
   setRole?(r: Role): void

@@ -96,6 +96,13 @@ export class Aggregator {
     }
   }
 
+  /** items created per day for the last `days` days (oldest first), for sparklines */
+  recent(days = 14): number[] {
+    const out: number[] = []
+    for (let i = days - 1; i >= 0; i--) out.push(this.created.get(dayKey(Date.now() - i * DAY)) ?? 0)
+    return out
+  }
+
   top(internal: string, n = 8): { label: string; value: number }[] {
     const s = this.stats.get(internal)
     if (!s) return []

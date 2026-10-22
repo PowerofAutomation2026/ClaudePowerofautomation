@@ -274,7 +274,10 @@ export const sp: Backend = {
     return { shared: shared ?? lsGet<ViewDef[]>('spx.views.shared', []), mine: mine ?? lsGet<ViewDef[]>(`spx.views.mine.${upn}`, []) }
   },
   async saveShared(views) { lsSet('spx.views.shared', views); await kvSet('views:shared', views) },
-  async saveMine(upn, views) { lsSet(`spx.views.mine.${upn}`, views); await kvSet(`views:${upn.toLowerCase()}`, views) },
+  async saveMine(upn, views) {
+    lsSet(`spx.views.mine.${upn}`, views)
+    try { await kvSet(`views:${upn.toLowerCase()}`, views); return 'cloud' } catch { return 'device' }   // a read-only user cannot write the settings list: keep the view on this device
+  },
 
   async suggest(src, fields, text, signal) {
     const tf = src.isLibrary ? 'FileLeafRef' : 'Title'

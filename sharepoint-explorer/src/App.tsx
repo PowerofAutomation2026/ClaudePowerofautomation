@@ -7,8 +7,9 @@ import { ItemPanel } from './components/ItemPanel'
 import { ActionMenu, Breadcrumb, FolderPicker, NameDialog, UploadDialog, collectDropped, fromPicker, type MenuItem, type UploadItem } from './components/Library'
 import { PermissionsDialog } from './components/Permissions'
 import { BulkDialog, SearchEverywhere } from './components/Tools'
-import { downloadUrl, itemUrl } from './components/Drawer'
+import { downloadUrl, itemUrl, openShareDialog } from './components/Drawer'
 import { FolderIcon } from './components/FileGlyph'
+import { Board } from './components/Board'
 import type { PermTarget } from './types'
 import { ViewsMenu } from './components/ViewsMenu'
 import { searchTokens } from './query'
@@ -63,7 +64,10 @@ function Shell() {
   const [srcErr, setSrcErr] = useState('')
   const [theme, setTheme] = useState<ThemePref>(lsGet('spx.theme', 'system'))
   const [fs, setFs] = useState<number>(lsGet('spx.fs', 16))
-  const [view, setView] = useState<'table' | 'cards' | 'tiles'>(lsGet('spx.view', 'table'))
+  const [view, setView] = useState<'table' | 'cards' | 'tiles' | 'board'>(lsGet('spx.view', 'table'))
+  const [accent, setAccent] = useState<string>(lsGet('spx.accent', 'pnc'))
+  const [favs, setFavs] = useState<Set<number>>(new Set())
+  const [boardField, setBoardField] = useState<SpField | null>(null)
   const [visible, setVisible] = useState<string[]>([])
   const [widths, setWidths] = useState<Record<string, number>>({})
   const [selected, setSelected] = useState<Set<number>>(new Set())
@@ -112,6 +116,8 @@ function Shell() {
   }, [theme])
   useEffect(() => { lsSet('spx.fs', fs); document.documentElement.style.fontSize = `${fs}px` }, [fs])
 
+  useEffect(() => { lsSet('spx.accent', accent); document.documentElement.dataset.accent = accent }, [accent])
+
   /* ------------------------------------------------ opening a source */
   const openSource = useCallback(async (s: SourceConfig, goTab?: Tab) => {
     if (!boot) return
@@ -125,6 +131,8 @@ function Shell() {
       const vis = lsGet<string[]>(`spx.cols.${s.id}`, []).filter((n) => select.includes(n))
       setVisible(vis.length ? vis : defaultVisible(fields, select, cur.isLibrary))
       setWidths(lsGet(`spx.w.${s.id}`, {}))
+      setFavs(new Set(lsGet<number[]>(`spx.fav.${s.id}`, [])))
+      setBoardField(fields.find((f) => f.kind === 'choice' && select.includes(f.internal) && (f.choices?.length ?? 0) > 1) ?? null)
       setSrc(cur); setEngine(eng); lsSet('spx.active', s.id)
       boot.backend.getAccess(cur, config!, boot.who.upn).then(setAccess).catch(() => setAccess((a) => ({ ...a, role: 'reader', canAdd: false, canEdit: false, canDelete: false, canManage: false, reason: 'Could not read your permissions: read-only.' })))
       if (goTab) setTab(goTab)
@@ -172,15 +180,14 @@ function Shell() {
     if (!engine || !src || !boot) return
     const v: ViewDef = { id: uid(), name, sourceId: src.id, q: engine.q, cols: visible, layout: view, owner: boot.who.upn, audience, groups, created: new Date().toISOString() }
     try {
-      if (audience === 'me') { const mine = [...viewsAll.mine, v]; await boot.backend.saveMine(boot.who.upn, mine); setViewsAll((c) => ({ ...c, mine })) }
-      else { const shared = [...viewsAll.shared, v]; await boot.backend.saveShared(shared); setViewsAll((c) => ({ ...c, shared })) }
-      toast('good', `View “${name}” saved`)
+      if (audience === 'me') { const mine = [...viewsAll.mine, v]; setViewsAll((c) => ({ ...c, mine })); const where = await boot.backend.saveMine(boot.who.upn, mine); toast('good', `View “${name}” saved${where === 'device' ? ' on this device' : ''}`) }
+      else { const shared = [...viewsAll.shared, v]; await boot.backend.saveShared(shared); setViewsAll((c) => ({ ...c, shared })); toast('good', `View “${name}” shared`) }
     } catch (e) { toast('bad', `Could not save the view: ${(e as Error).message}`) }
   }
   const deleteView = async (v: ViewDef) => {
     if (!boot) return
     try {
-      if (v.audience === 'me') { const mine = viewsAll.mine.filter((x) => x.id !== v.id); await boot.backend.saveMine(boot.who.upn, mine); setViewsAll((c) => ({ ...c, mine })) }
+      if (v.audience === 'me') { const mine = viewsAll.mine.filter((x) => x.id !== v.id); setViewsAll((c) => ({ ...c, mine })); await boot.backend.saveMine(boot.who.upn, mine) }
       else { const shared = viewsAll.shared.filter((x) => x.id !== v.id); await boot.backend.saveShared(shared); setViewsAll((c) => ({ ...c, shared })) }
     } catch (e) { toast('bad', (e as Error).message) }
   }
@@ -198,6 +205,22 @@ function Shell() {
     toast(failed ? 'warn' : 'good', id == null ? 'Item created' : 'Saved' + (failed ? ` — ${failed} attachment(s) failed` : ''))
     if (!again) { setPanel(null); if (id != null) setOpen((o) => o) }
   }
+  const toggleFav = (id: number) => setFavs((cur) => { const n = new Set(cur); n.has(id) ? n.delete(id) : n.add(id); if (src) lsSet(`spx.fav.${src.id}`, [...n]); return n })
+  const favActive = !!engine?.q.clauses.some((c) => c.field === 'ID' && c.op === 'in')
+  const toggleFavFilter = () => { if (!engine) return; const rest = engine.q.clauses.filter((c) => !(c.field === 'ID' && c.op === 'in')); change({ clauses: favActive ? rest : [...rest, { field: 'ID', op: 'in', value: `★ Favorites (${favs.size})`, values: [...favs].slice(0, 100).map(String) }] }) }
+  const moveCard = async (row: Row, value: string) => {
+    if (!engine || !boot || !boardField) return
+    const prev = row[boardField.internal]
+    engine.patchRow({ ...row, [boardField.internal]: value })   // optimistic: the card jumps immediately
+    try { await boot.backend.updateItem(engine.src, engine.fields, row.__id, { [boardField.internal]: value }); toast('good', value ? `Moved to ${value}` : 'Cleared') }
+    catch (e) { engine.patchRow({ ...row, [boardField.internal]: prev }); toast('bad', `Could not move the card: ${(e as Error).message}`) }
+  }
+  const inlineSave = async (row: Row, f: SpField, value: unknown) => {
+    if (!engine || !boot) return
+    await boot.backend.updateItem(engine.src, engine.fields, row.__id, { [f.internal]: value })
+    engine.patchRow({ ...row, [f.internal]: value })
+    toast('good', `${f.title} updated`)
+  }
   const libRoot = src?.url ?? ''
   const curFolder = engine?.q.folder ?? libRoot
   const origin = src ? new URL(src.siteUrl).origin : ''
@@ -213,6 +236,8 @@ function Shell() {
       { label: 'Move to…', icon: '↦', hidden: !(lib && access.canEdit), run: () => setPicker({ mode: 'Move', row: r }) },
       { label: 'Copy to…', icon: 'copy', hidden: !(lib && access.canEdit && !isFolder), run: () => setPicker({ mode: 'Copy', row: r }) },
       { label: 'Download', icon: 'download', hidden: !(lib && !isFolder), run: () => window.open(downloadUrl(engine, r), '_blank', 'noopener') },
+      { label: favs.has(r.__id) ? 'Remove favorite' : 'Add to favorites', icon: 'star', run: () => toggleFav(r.__id) },
+      { label: 'Share…', icon: 'share', run: () => { if (!openShareDialog(engine, r)) toast('warn', 'Pop-up blocked: allow pop-ups for this site to open SharePoint’s Share dialog.') } },
       { label: 'Copy link', icon: 'copy', run: () => navigator.clipboard?.writeText(itemUrl(engine, r)).then(() => toast('good', 'Link copied')) },
       { label: access.canManage ? 'Manage access' : 'Who has access', icon: 'lock', sep: true, run: () => setPerm({ target: { kind: 'item', id: r.__id, name: rowName(r) }, title: rowName(r) }) },
       { label: 'Delete', icon: 'trash', danger: true, sep: true, hidden: !access.canDelete, run: () => setConfirmDel([r]) },
@@ -309,10 +334,12 @@ function Shell() {
         </button>
         <button className="btn" onClick={() => setEverywhere('')} title="Search every connected list and the Power Platform community (Ctrl+Shift+F)"><Icon n="search" /><span className="lbl-t">Search all</span></button>
         <button className="btn icon" onClick={() => setPalette(true)} aria-label="Command palette (Ctrl+K)" title="Command palette (Ctrl+K)"><Icon n="cmd" /></button>
-        <Menu icon={theme === 'dark' ? 'moon' : theme === 'contrast' ? 'contrast' : 'sun'} label={<span className="lbl-t">Display</span>}>
+        <Menu icon={theme === 'dark' ? 'moon' : theme === 'contrast' ? 'contrast' : 'sun'} label={<span className="sr-only">Display settings</span>}>
           {(close) => <div role="group" aria-label="Display settings">
             <div className="hd">Theme</div>
             {(['system', 'light', 'dark', 'contrast'] as const).map((t) => <button key={t} role="menuitemradio" aria-checked={theme === t} onClick={() => { setTheme(t); close() }}><Icon n={t === 'dark' ? 'moon' : t === 'contrast' ? 'contrast' : 'sun'} />{t === 'contrast' ? 'High contrast' : t[0].toUpperCase() + t.slice(1)}</button>)}
+            <hr /><div className="hd">Accent colour</div>
+            <div className="row" style={{ padding: '4px 10px', gap: 8 }} role="radiogroup" aria-label="Accent colour">{(['pnc', 'teal', 'violet', 'rose', 'emerald'] as const).map((a) => <button key={a} role="radio" aria-checked={accent === a} aria-label={a === 'pnc' ? 'PNC blue and orange' : a} className="swatch" data-sw={a} onClick={() => setAccent(a)} />)}</div>
             <hr /><div className="hd">Text size</div>
             <div className="row" style={{ padding: '4px 10px' }}>
               <button className="btn sm" onClick={() => setFs(Math.max(12, fs - 1))} aria-label="Smaller text">A−</button><span aria-live="polite">{fs}px</span><button className="btn sm" onClick={() => setFs(Math.min(24, fs + 1))} aria-label="Larger text">A+</button>
@@ -337,6 +364,9 @@ function Shell() {
           </div>
         )}
 
+        {!loadingSrc && engine && src && tab === 'dashboard' && (
+          <DashHero name={boot.who.name} src={src} total={total} access={access} onData={() => setTab('data')} onNew={() => (src.isLibrary ? fileIn.current?.click() : setPanel({ row: null }))} onSearch={() => setEverywhere('')} onAccess={() => setPerm({ target: { kind: 'list' }, title: src.label })} />
+        )}
         {!loadingSrc && engine && src && tab === 'dashboard' && (
           <Dashboard engine={engine} version={ver} title={src.label} onFilter={addClause} onGoData={() => setTab('data')} />
         )}
@@ -371,6 +401,7 @@ function Shell() {
                   </div>}
                 </Menu>
               )}
+              {favs.size > 0 && <button className="btn sm" aria-pressed={favActive} onClick={toggleFavFilter}><Icon n="star" size={14} />Favorites <span className="pill">{favs.size}</span></button>}
               {access.canEdit && selected.size > 1 && <button className="btn sm" onClick={() => setBulk(engine.rows.filter((r) => selected.has(r.__id)))}>✎ Edit {selected.size}</button>}
               {(access.canManage || access.role === 'admin') && <button className="btn sm" onClick={() => setPerm({ target: { kind: 'list' }, title: src.label })}><Icon n="lock" size={14} />Access</button>}
               {access.canDelete && selected.size > 0 && <button className="btn sm danger" onClick={() => setConfirmDel(engine.rows.filter((r) => selected.has(r.__id)))}><Icon n="trash" size={14} />Delete {selected.size}</button>}
@@ -387,6 +418,7 @@ function Shell() {
               <div role="group" aria-label="Layout" className="row" style={{ gap: 2 }}>
                 <button className="btn icon" aria-pressed={view === 'table'} aria-label="Table view" onClick={() => { setView('table'); lsSet('spx.view', 'table') }}><Icon n="table" /></button>
                 <button className="btn icon" aria-pressed={view === 'cards'} aria-label="Card view" onClick={() => { setView('cards'); lsSet('spx.view', 'cards') }}><Icon n="cards" /></button>
+                {!src.isLibrary && boardField && <button className="btn icon" aria-pressed={view === 'board'} aria-label="Board view" title="Board (Kanban)" onClick={() => { setView('board'); lsSet('spx.view', 'board') }}><Icon n="board" /></button>}
                 {src.isLibrary && <button className="btn icon" aria-pressed={view === 'tiles'} aria-label="Tile view" onClick={() => { setView('tiles'); lsSet('spx.view', 'tiles') }}><Icon n="grid" /></button>}
               </div>
               <Menu icon="download" label={<span className="lbl-t">Export</span>}>
@@ -396,10 +428,12 @@ function Shell() {
 
             <div className="dropzone" onDragOver={(e) => { if (src.isLibrary && e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true) } }} onDragLeave={(e) => { if (e.currentTarget === e.target) setDragging(false) }} onDrop={(e) => void onDrop(e)}>
               {dragging && <div className="dropveil" role="status"><div><FolderIcon size={44} /><div>Drop to upload to <b>{decodeURIComponent(curFolder.split('/').pop() ?? '')}</b></div></div></div>}
-              <Grid engine={engine} version={ver} cols={cols} selected={selected} widths={widths} setWidth={setWidth} tokens={tokens} view={src.isLibrary || view !== 'tiles' ? view : 'table'} isLibrary={src.isLibrary} origin={boot.backend.mode === 'live' ? origin : undefined}
+              {view === 'board' && !src.isLibrary && boardField
+                ? <Board engine={engine} version={ver} field={boardField} setField={setBoardField} canEdit={access.canEdit} favs={favs} onToggleFav={toggleFav} onMove={moveCard} onOpen={openRow} tokens={tokens} />
+                : <Grid engine={engine} version={ver} cols={cols} selected={selected} widths={widths} setWidth={setWidth} tokens={tokens} view={view === 'board' ? 'table' : src.isLibrary || view !== 'tiles' ? view : 'table'} isLibrary={src.isLibrary} origin={boot.backend.mode === 'live' ? origin : undefined}
                 onToggle={(id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })}
                 onToggleAll={() => setSelected((s) => (engine.rows.every((r) => s.has(r.__id)) ? new Set() : new Set(engine.rows.map((r) => r.__id))))}
-                onOpen={openRow} onSort={sortBy} onMenu={(row, at) => setMenu({ row, at })} />
+                onOpen={openRow} onSort={sortBy} onMenu={(row, at) => setMenu({ row, at })} />}
             </div>
             <div className="gfoot" style={{ borderRadius: 12, border: '1px solid var(--line)', marginTop: 8 }}>
               <span>{selected.size ? <b>{fmt(selected.size)} selected</b> : 'Click a row for details · ↑↓ to move · Space to select'}</span>
@@ -415,7 +449,7 @@ function Shell() {
 
       {open && engine && (() => {
         const i = engine.rows.findIndex((r) => r.__id === open.__id)
-        return <Drawer engine={engine} row={open} index={Math.max(0, i)} actions={actionsFor(open).filter((a) => a.label !== 'Details' && a.label !== 'Copy link' && a.label !== 'Download')} onClose={() => setOpen(null)} onNav={(d) => { const n = engine.rows[i + d]; if (n) setOpen(n) }} />
+        return <Drawer engine={engine} row={open} index={Math.max(0, i)} access={access} fav={favs.has(open.__id)} onFav={() => toggleFav(open.__id)} onInline={inlineSave} actions={actionsFor(open).filter((a) => a.label !== 'Details' && a.label !== 'Copy link' && a.label !== 'Download')} onClose={() => setOpen(null)} onNav={(d) => { const n = engine.rows[i + d]; if (n) setOpen(n) }} />
       })()}
       {exp && engine && src && <ExportDialog engine={engine} cols={cols} selected={selected} title={src.label} initial={exp} onClose={() => setExp(null)} />}
       {panel && engine && <ItemPanel engine={engine} row={panel.row} onClose={() => setPanel(null)} onSave={(v, f, again) => saveItem(panel.row ? panel.row.__id : null, v, f, again)} />}
@@ -439,6 +473,27 @@ function Shell() {
       )}
       {palette && <Palette cmds={cmds} onClose={() => setPalette(false)} />}
     </div>
+  )
+}
+
+function DashHero({ name, src, total, access, onData, onNew, onSearch, onAccess }: { name: string; src: SourceConfig; total: number; access: Access; onData: () => void; onNew: () => void; onSearch: () => void; onAccess: () => void }) {
+  const h = new Date().getHours()
+  const hi = h < 5 ? 'Working late' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'
+  return (
+    <section className="hero2" aria-label="Welcome">
+      <div>
+        <div className="hero2-k">{src.isLibrary ? 'Document library' : 'List'} · {roleLabel(access.role)}</div>
+        <h2>{hi}{name ? `, ${name.split(' ')[0]}` : ''} 👋</h2>
+        <p>{fmt(total)} items in <b>{src.label}</b>. Search, filter, edit and share — everything updates live.</p>
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn big hero-btn" onClick={onData}><Icon n="table" />Open {src.isLibrary ? 'files' : 'items'}</button>
+          {access.canAdd && <button className="btn big hero-btn ghosty" onClick={onNew}><Icon n="plus" />{src.isLibrary ? 'Upload' : 'New item'}</button>}
+          <button className="btn big hero-btn ghosty" onClick={onSearch}><Icon n="search" />Search all</button>
+          {(access.canManage || access.role === 'admin') && <button className="btn big hero-btn ghosty" onClick={onAccess}><Icon n="lock" />Access</button>}
+        </div>
+      </div>
+      <svg className="hero2-art" viewBox="0 0 200 120" aria-hidden="true"><rect x="10" y="20" width="110" height="80" rx="12" fill="#fff" opacity=".18" /><rect x="40" y="8" width="110" height="80" rx="12" fill="#fff" opacity=".28" /><rect x="72" y="34" width="110" height="80" rx="12" fill="#fff" opacity=".9" /><rect x="86" y="50" width="60" height="8" rx="4" fill="#0b3f78" /><rect x="86" y="68" width="82" height="6" rx="3" fill="#f58025" /><rect x="86" y="82" width="70" height="6" rx="3" fill="#0b3f78" opacity=".35" /></svg>
+    </section>
   )
 }
 

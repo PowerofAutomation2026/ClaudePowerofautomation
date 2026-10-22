@@ -37,6 +37,9 @@ const P: Record<string, string> = {
   scan: 'M3 7V3h4v2H5v2H3Zm14-4h4v4h-2V5h-2V3ZM3 17h2v2h2v2H3v-4Zm16 0h2v4h-4v-2h2v-2ZM6 11h12v2H6v-2Z',
   sparkle: 'M12 2l1.8 5.2L19 9l-5.2 1.8L12 16l-1.8-5.2L5 9l5.2-1.8L12 2Zm7 11 .9 2.6 2.6.9-2.6.9L19 20l-.9-2.6-2.6-.9 2.6-.9.9-2.6Z',
   text: 'M5 4h14v4h-2V6h-4v12h2v2H9v-2h2V6H7v2H5V4Z',
+  share: 'M18 16.1c-.8 0-1.5.3-2 .8l-7.1-4.2a3 3 0 0 0 0-1.4L16 7.2A3 3 0 1 0 15 5c0 .2 0 .4.1.7L8 9.9a3 3 0 1 0 0 4.2l7.2 4.2a3 3 0 1 0 2.8-2.2Z',
+  board: 'M3 4h5v16H3V4Zm6.5 0h5v10h-5V4Zm6.5 0h5v13h-5V4Z',
+  heart: 'M12 21s-7.5-4.6-9.5-9.2C1 8 3.4 5 6.5 5c1.9 0 3.5 1 4.5 2.5C12 6 13.600 5 15.500 5 18.600 5 21 8 19.500 11.800 17.500 16.400 12 21 12 21Z',
 }
 export type IconName = keyof typeof P
 export const Icon = ({ n, size = 18 }: { n: IconName; size?: number }) => (

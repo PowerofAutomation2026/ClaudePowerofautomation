@@ -67,6 +67,15 @@ A view changes what is *shown*; it is not a security boundary: SharePoint permis
 ## Search everywhere
 `Ctrl+Shift+F` or **Search all**: searches every connected list/library at once, and offers one-click searches of the **Power Platform Community, Power Apps community, Microsoft Learn, Microsoft Q&A and Tech Community** (opened in a new tab; the app cannot call those sites itself).
 
+## Board, favorites, share and record page
+* **Board (Kanban)** for any list with a choice column (Status, Priority…): drag cards between columns to change the value (contributors/admins; keyboard users get a “Move to…” menu on each card). Group by any choice column.
+* **Favorites**: star items (kept per user on this device) and filter to them in one click.
+* **Share…** (row menu, details panel): opens SharePoint’s own Share dialog for that file/folder/item in a pop-up window. SharePoint does not allow its dialogs inside other pages, so it cannot be embedded; if your browser blocks the pop-up the app says so. *Not verified against a live tenant: if it does not open, use “Open in SharePoint” and press Share there.*
+* **Record page** for list items: status pills, progress ring, people and due date at a glance, and **click-to-change** status/Yes-No fields right in the details panel.
+* **Links**: “Open in SharePoint” now encodes paths per segment and uses DispForm / `?web=1` for Office files / the library view for folders (the old links returned 404).
+* **Personal views for everyone**: any user (including read-only) can save their own views; they are kept on the device and also in the cloud when the user may write to the settings list. Sharing a view with a group or admins still needs a data admin or owner.
+* **Look and feel**: animated welcome banner, KPI sparklines and a health gauge, accent colour picker (PNC, teal, violet, rose, emerald) in Display.
+
 ## Features
 | | |
 |---|---|
