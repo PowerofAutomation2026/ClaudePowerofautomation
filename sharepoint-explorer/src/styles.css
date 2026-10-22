@@ -226,7 +226,7 @@ table.data { border-collapse: collapse; width: 100%; font-size: .85rem; } table.
 .skel { background: linear-gradient(90deg, var(--bg2), var(--surface2), var(--bg2)); background-size: 200% 100%; animation: sk 1.2s infinite; border-radius: 8px; min-height: 18px; } @keyframes sk { to { background-position: -200% 0; } }
 .banner { padding: 10px 14px; border-radius: 12px; margin-bottom: 12px; display: flex; gap: 10px; align-items: flex-start; background: var(--warn-soft); border: 1px solid var(--warn); }
 .banner.bad { background: var(--bad-soft); border-color: var(--bad); } .banner.info { background: var(--accent-soft); border-color: var(--accent); }
-@media (max-width: 720px) { main { padding: 10px; } .top { padding: 8px 10px; } .grid { height: calc(100vh - 380px); } .btn .lbl-t { display: none; } }
+@media (max-width: 720px) { main { padding: 10px; } .top { padding: 8px 10px; } .grid { height: calc(100vh - 380px); } .btn .lbl-t { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; } }
 
 .sugg { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 50; margin: 0; padding: 6px; list-style: none; background: var(--surface); border: 1px solid var(--line2); border-radius: 12px; box-shadow: var(--shadow-lg); max-height: 320px; overflow: auto; }
 .sugg li { padding: 7px 10px; border-radius: 8px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -337,4 +337,4 @@ main > section, main > div { animation: rise .35s cubic-bezier(.2,.8,.2,1); } @k
 .cal-ev:hover { background: color-mix(in srgb, var(--tc) 28%, var(--surface)); }
 .cal-more { border: 0; background: none; color: var(--accent); font-size: .78rem; font-weight: 700; cursor: pointer; text-align: left; }
 .cal-pop { position: absolute; z-index: 40; left: 4px; top: 30px; width: 220px; max-height: 240px; overflow: auto; background: var(--surface); border: 1px solid var(--line2); border-radius: 12px; box-shadow: var(--shadow-lg); padding: 6px; display: grid; gap: 4px; }
-@media (max-width: 1560px) { .top .lbl-t { display: none; } }
+@media (max-width: 1560px) { .top .lbl-t { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; } }   /* hidden visually, still the button's accessible name */
