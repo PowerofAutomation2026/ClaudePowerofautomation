@@ -21,6 +21,8 @@
                              script says an app with this name already exists and it cannot work out which one.
 .PARAMETER BootstrapList     Name of an existing list/library on the config site used to register the connector. Default: tries
                              'Documents', 'Shared Documents', 'Site Pages'.
+.PARAMETER AddCopilotStudio  Also wire the Microsoft Copilot Studio connector (agent chat in the app).
+.PARAMETER NoCopilotStudio   Skip the Copilot Studio question entirely.
 .PARAMETER NonInteractive    Never prompt; fail instead.
 .PARAMETER SkipPrereqInstall Do not try to install Node.js / Power Platform CLI.
 
@@ -37,6 +39,8 @@ param(
   [string]$ConfigSiteUrl,
   [string]$BootstrapList,
   [string]$AppId,
+  [switch]$AddCopilotStudio,
+  [switch]$NoCopilotStudio,
   [switch]$NonInteractive,
   [switch]$SkipPrereqInstall
 )
@@ -205,6 +209,35 @@ try {
   }
   if (-not $added) { throw "Could not add the SharePoint connector. Run manually:  pac code add-data-source -a $api -c $($conn.Id) -d <site url> -t <existing list name>   then re-run this script." }
   Ok "SharePoint connector added ($($conn.Id))"
+
+  # ---------- 6b. Copilot Studio agent chat (optional; failures here never stop the deployment) ----------
+  if (-not $NoCopilotStudio) {
+    try {
+      $csApi = 'shared_microsoftcopilotstudio'
+      $csConn = @(Get-Connections) | Where-Object { $_.Api -eq $csApi } | Select-Object -First 1
+      $want = [bool]$AddCopilotStudio -or [bool]$csConn
+      if (-not $want -and -not $NonInteractive) {
+        $a = (Read-Host 'Add AI assistant support (chat with a Copilot Studio agent inside the app)? [y/N]').Trim()
+        $want = $a -match '^(y|yes)$'
+      }
+      if ($want) {
+        Step 'Wiring the Copilot Studio connector (agent chat)'
+        if (-not $csConn -and -not $NonInteractive) {
+          Warn 'Create the "Microsoft Copilot Studio" connection once (sign-in cannot be scripted). Opening your browser...'
+          Start-Process "https://make.powerapps.com/environments/$EnvironmentId/connections/available?apiName=$csApi"
+          $null = Read-Host 'Press Enter when the connection is created'
+          $csConn = @(Get-Connections) | Where-Object { $_.Api -eq $csApi } | Select-Object -First 1
+        }
+        if ($csConn) {
+          $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+          $o = (& pac code add-data-source -a $csApi -c $csConn.Id 2>&1) | Out-String; $code = $LASTEXITCODE
+          $ErrorActionPreference = $prev
+          if ($code -eq 0 -or $o -match '(?i)already') { Ok 'Copilot Studio connector added. Add agents later in the app: Assistant -> Setup.' }
+          else { Warn "Could not add the Copilot Studio connector (pac said: $(($o -replace '\s+',' ').Trim())). The app works without it; agents can still be added as links." }
+        } else { Warn 'No Copilot Studio connection found - skipped. Re-run later with -AddCopilotStudio, or add agents as links in the app.' }
+      }
+    } catch { Warn "Copilot Studio step skipped: $($_.Exception.Message)" }
+  }
 
   # The app compiles the data-source description pac generates into itself. If it is missing, the app cannot reach SharePoint.
   $schema = @('.power\schemas\appschemas\dataSourcesInfo.ts', '.power\appschemas\dataSourcesInfo.ts') | Where-Object { Test-Path (Join-Path $root $_) } | Select-Object -First 1

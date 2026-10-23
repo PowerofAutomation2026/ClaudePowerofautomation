@@ -186,6 +186,11 @@ export interface Backend {
   listRoleDefs(src: SourceConfig): Promise<RoleDef[]>
   /** organisation-wide sharing link (view or edit) created through SharePoint's own sharing service */
   createShareLink(src: SourceConfig, id: number, edit: boolean): Promise<string>
+  loadAssistants(): Promise<AssistantConfig | null>
+  saveAssistants(cfg: AssistantConfig): Promise<void>
+  /** true when the Copilot Studio connector is attached to the app */
+  agentConnector(): boolean
+  askAgent(agent: string, message: string, conversationId?: string): Promise<AgentReply>
   loadApprovalFlow(sourceId: string): Promise<ApprovalFlow | null>
   saveApprovalFlow(sourceId: string, flow: ApprovalFlow): Promise<void>
   listApprovals(sourceId: string): Promise<ApprovalReq[]>
@@ -272,3 +277,24 @@ export interface ApprovalReq {
   rev?: number
   decisions: ApprovalDecision[]; history: ApprovalEvent[]
 }
+
+/* ---- AI assistants (Copilot Studio agents, Agent Builder / M365 Copilot agents) ---- */
+export interface Assistant {
+  id: string
+  name: string
+  /** studio = called through the Copilot Studio connector (chat inside the app); link = opens a chat link (Agent Builder, M365 Copilot, Copilot Studio web chat) */
+  kind: 'studio' | 'link'
+  /** Copilot Studio agent schema name (case-sensitive, with publisher prefix, e.g. cr123_pncHelper) */
+  agent?: string
+  url?: string
+  description?: string
+  /** extra instructions added to the context block of every question */
+  instructions?: string
+  prompts: string[]
+  scope: 'all' | string[]
+  /** include selected / visible items in the context sent to the agent */
+  sendRows: boolean
+  enabled: boolean
+}
+export interface AssistantConfig { v: 1; assistants: Assistant[]; updated: string; updatedBy: string }
+export interface AgentReply { text: string; conversationId?: string; all: string[] }

@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Engine, LOCAL_MAX } from './engine'
 import { chooseBackend } from './services'
-import type { Access, AppConfig, Backend, Clause, Query, Role, Row, SourceConfig, SpField, ViewDef } from './types'
+import type { AssistantConfig, Access, AppConfig, Backend, Clause, Query, Role, Row, SourceConfig, SpField, ViewDef } from './types'
 import { roleLabel } from './access'
 import { ItemPanel } from './components/ItemPanel'
 import { ActionMenu, Breadcrumb, FolderPicker, NameDialog, UploadDialog, collectDropped, fromPicker, type MenuItem, type UploadItem } from './components/Library'
 import { PermissionsDialog } from './components/Permissions'
 import { BulkDialog, SearchEverywhere } from './components/Tools'
+import { AssistantPanel, AssistantSetup, inScope } from './components/Assistant'
 import { ApprovalsDialog } from './components/Approvals'
 import { useApproval } from './useApproval'
 import { EmailDialog } from './components/EmailDialog'
@@ -128,6 +129,10 @@ function Shell() {
   const me = useMemo(() => ({ name: boot?.who.name ?? '', upn: boot?.who.upn ?? '' }), [boot?.who.name, boot?.who.upn])
   const approval = useApproval(engine, me, access, isOwner || access.role === 'admin', (r) => (engine ? itemUrl(engine, r) : ''), ver)
   const [apprOpen, setApprOpen] = useState(false)
+  const [assist, setAssist] = useState<AssistantConfig | null>(null)
+  const [assistOpen, setAssistOpen] = useState(false)
+  const [assistSetup, setAssistSetup] = useState(false)
+  useEffect(() => { if (boot) boot.backend.loadAssistants().then(setAssist).catch(() => setAssist(null)) }, [boot])
   const [openTab, setOpenTab] = useState<'approval' | undefined>(undefined)
 
   /* ------------------------------------------------ theme + text size */
@@ -406,6 +411,7 @@ function Shell() {
         <button className="btn" aria-pressed={live} onClick={() => setLive(!live)} title="Live pulse: check for new and changed items every 20 seconds" disabled={!engine}>
           <span className={`live-dot${live ? '' : ' off'}`} aria-hidden="true" /><span className="lbl-t">Pulse</span>{live && engine && engine.pendingNew > 0 && <span className="pill accent">{engine.pendingNew}</span>}
         </button>
+        {engine && (isOwner || access.role === 'admin' || (assist?.assistants ?? []).some((a) => inScope(a, engine.src.id))) && <button className="btn" onClick={() => setAssistOpen(true)} title="Ask the AI assistant about this list or library"><Icon n="sparkle" /><span className="lbl-t">Assistant</span></button>}
         <button className="btn" onClick={() => setEverywhere('')} title="Search every connected list and the Power Platform community (Ctrl+Shift+F)"><Icon n="search" /><span className="lbl-t">Search all</span></button>
         <button className="btn icon" onClick={() => setPalette(true)} aria-label="Command palette (Ctrl+K)" title="Command palette (Ctrl+K)"><Icon n="cmd" /></button>
         <Menu icon={theme === 'dark' ? 'moon' : theme === 'contrast' ? 'contrast' : 'sun'} label={<span className="sr-only">Display settings</span>}>
@@ -532,6 +538,8 @@ function Shell() {
             </div>
           </section>
         )}
+      {assistOpen && engine && <AssistantPanel engine={engine} cfg={assist} who={me} selected={engine.rows.filter((r) => selected.has(r.__id))} canSetup={isOwner || access.role === 'admin'} onSetup={() => { setAssistOpen(false); setAssistSetup(true) }} onClose={() => setAssistOpen(false)} />}
+      {assistSetup && engine && <AssistantSetup engine={engine} cfg={assist} who={boot.who.name} onSave={async (c) => { await boot.backend.saveAssistants(c); setAssist(c) }} onClose={() => { setAssistSetup(false); setAssistOpen(true) }} />}
       {apprOpen && engine && <ApprovalsDialog engine={engine} api={approval} onOpen={(id) => { const r = engine.rows.find((x) => x.__id === id); if (r) { setOpenTab('approval'); setOpen(r) } else toast('info', 'That item is not in the loaded rows — search for it, then open it.') }} onClose={() => setApprOpen(false)} />}
       {mailRows && engine && <EmailDialog engine={engine} rows={mailRows} onClose={() => setMailRows(null)} />}
       {menu && engine && <ActionMenu at={menu.at} title={rowName(menu.row)} items={actionsFor(menu.row)} onClose={() => setMenu(null)} />}

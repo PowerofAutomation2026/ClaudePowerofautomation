@@ -4,6 +4,15 @@ Connect **any SharePoint list or document library** with one button and get a gr
 instant search and PDF / CSV / JSON export. Built for lists with **millions of rows**: the browser never holds more than a
 capped window of rows; everything else is paged, streamed or aggregated.
 
+## AI assistant: Copilot Studio and Microsoft 365 Copilot agents
+
+Admins open **Assistant → Setup** (the Assistant button in the header) and add agents; everyone then sees them for the lists/libraries in scope.
+- **Copilot Studio agent (chat inside the app):** uses the *Microsoft Copilot Studio* connector (`ExecuteCopilotAsyncV2`), so it needs no extra app registration or CSP changes and runs with each user's own connection. Enter the agent's **schema name** (Copilot Studio → Settings → Advanced → Metadata, case-sensitive) and press **Test connection**. The agent must be **published**, shared with your users, and a *classic* (Standard) agent — agents built in the new agentic experience can't be called through the connector yet.
+- **Agent Builder / Microsoft 365 Copilot / Copilot Lite agent (link):** these agents can't be called from an app by Microsoft's design, so paste the agent's **Share link**; the app opens it and can **copy a prompt with context** (what list you're in, filters, selected items) to paste into the chat.
+- **Context:** every question can carry a `[CONTEXT]{…}[/CONTEXT]` block (source, search/filters, selected items with key columns and approval status). Setup gives you ready-to-paste **agent instructions** and the **knowledge-source URL** of the current list/library so the agent answers from the same data.
+- Chat UX: suggested prompts (yours + built-ins), selection-aware shortcuts, typing indicator, copy answer, New chat, multi-turn (conversation id, with a short-history fallback), safe markdown (bold, lists, links).
+- To enable in-app chat the connector must be attached: `Deploy.cmd` now asks "Add AI assistant support?" (or run `Deploy.cmd -AddCopilotStudio`; `-NoCopilotStudio` skips the question), or run `pac code add-data-source -a shared_microsoftcopilotstudio -c <connection id>` and republish. Users need the licences Power Apps code apps and Copilot Studio require; Copilot Studio message capacity applies.
+
 ## Approvals (lists and libraries, multi-layer)
 
 Admins (data admins / app owners) open **Approvals → Design workflow** and build the process for that list or library:

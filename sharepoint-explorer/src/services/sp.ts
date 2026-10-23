@@ -6,7 +6,7 @@
 import { getClient } from '@microsoft/power-apps/data'
 import { getContext } from '@microsoft/power-apps/app'
 import baked from '../appconfig.json'
-import type { Access, AppConfig, ApprovalFlow, ApprovalReq, Attachment, DashConfig, FormatRule, Backend, PermInfo, PermTarget, Principal, RoleAssign, RoleDef, VersionInfo, ViewDef, FieldKind, Page, Query, Row, SourceConfig, SpField, SpList, SpSite } from '../types'
+import type { Access, AgentReply, AppConfig, ApprovalFlow, AssistantConfig, ApprovalReq, Attachment, DashConfig, FormatRule, Backend, PermInfo, PermTarget, Principal, RoleAssign, RoleDef, VersionInfo, ViewDef, FieldKind, Page, Query, Row, SourceConfig, SpField, SpList, SpSite } from '../types'
 import { buildFilter, parseSearch, propOf, restName, titleField, noExpand } from '../query'
 import { accessFrom } from '../access'
 import { isEditable } from '../editable'
@@ -42,9 +42,10 @@ const ds = { name: 'dataset', in: 'path', required: true, type: 'string' }
 const FILE_API = { path: '/{connectionId}/datasets/{dataset}/files', method: 'POST', parameters: [conn, ds, { name: 'folderPath', in: 'query', required: true, type: 'string' }, { name: 'name', in: 'query', required: true, type: 'string' }, { name: 'queryParametersSingleEncoded', in: 'query', required: false, type: 'boolean' }, { name: 'body', in: 'body', required: true, type: 'string', format: 'binary' }] }
 /** connector "Add attachment" */
 const ATT_API = { path: '/{connectionId}/datasets/{dataset}/tables/{tableName}/items/{itemId}/attachments', method: 'POST', parameters: [conn, ds, { name: 'tableName', in: 'path', required: true, type: 'string' }, { name: 'itemId', in: 'path', required: true, type: 'string' }, { name: 'displayName', in: 'query', required: true, type: 'string' }, { name: 'body', in: 'body', required: true, type: 'string', format: 'binary' }] }
+const isStudio = (k: string, v: any) => /copilotstudio|microsoftcopilot/i.test(`${k} ${v?.apiId ?? ''}`)
 const isConnectorSource = (v: any) => v && typeof v === 'object' && !/dataverse|cds/i.test(String(v.dataSourceType ?? ''))
-for (const v of Object.values<any>(dataSourcesInfo)) {
-  if (!isConnectorSource(v)) continue
+for (const [k, v] of Object.entries<any>(dataSourcesInfo)) {
+  if (!isConnectorSource(v) || isStudio(k, v)) continue
   v.apis = v.apis ?? {}
   const keys = Object.keys(v.apis).map(norm)
   if (!keys.includes('httprequest')) v.apis.HttpRequest = HTTP_API
@@ -53,7 +54,7 @@ for (const v of Object.values<any>(dataSourcesInfo)) {
   if (!keys.includes('addattachment')) v.apis.AddAttachment = ATT_API
 }
 const candidates = (): string[] => {
-  const all = Object.entries<any>(dataSourcesInfo).filter(([, v]) => isConnectorSource(v)).map(([k]) => k)
+  const all = Object.entries<any>(dataSourcesInfo).filter(([k, v]) => isConnectorSource(v) && !isStudio(k, v)).map(([k]) => k)
   return [...all.filter((k) => /sharepoint/i.test(k)), ...all.filter((k) => !/sharepoint/i.test(k) && dataSourcesInfo[k]?.tableId), ...all.filter((k) => !/sharepoint/i.test(k) && !dataSourcesInfo[k]?.tableId)]
 }
 export const hasSharePointConnector = () => candidates().length > 0
@@ -304,6 +305,10 @@ export const sp: Backend = {
   },
   async loadDashboard(sourceId) { return (await kvGet<DashConfig>(`dashboard:${sourceId}`)) ?? lsGet<DashConfig | null>(`spx.dash.${sourceId}`, null) },
   async saveDashboard(sourceId, cfg) { lsSet(`spx.dash.${sourceId}`, cfg); await kvSet(`dashboard:${sourceId}`, cfg) },
+  async loadAssistants() { return (await kvGet<AssistantConfig>('assistants')) ?? lsGet<AssistantConfig | null>('spx.assistants', null) },
+  async saveAssistants(cfg) { lsSet('spx.assistants', cfg); await kvSet('assistants', cfg) },
+  agentConnector: () => !!studioKey(),
+  askAgent: (agent, message, conv) => askStudio(agent, message, conv),
   async loadApprovalFlow(sourceId) { return (await kvGet<ApprovalFlow>(`approvalflow:${sourceId}`)) ?? lsGet<ApprovalFlow | null>(`spx.aflow.${sourceId}`, null) },
   async saveApprovalFlow(sourceId, flow) { lsSet(`spx.aflow.${sourceId}`, flow); await kvSet(`approvalflow:${sourceId}`, flow) },
   async listApprovals(sourceId) { return (await kvList<ApprovalReq>(`approval:${sourceId}:`)).filter((r) => r && r.itemId != null) },
@@ -663,4 +668,40 @@ export async function diagnose(testSite?: string): Promise<Check[]> {
   }
   out.push({ label: 'Config site for shared settings', ok: !!baked.configSiteUrl, detail: baked.configSiteUrl || 'not set at deploy time: other users cannot see what the owner connected' })
   return out
+}
+
+
+/* ------------------------------------------------------------------ Copilot Studio agent (connector "Execute Agent and wait") */
+const studioKey = () => Object.entries<any>(dataSourcesInfo).find(([k, v]) => isConnectorSource(v) && isStudio(k, v))?.[0]
+const pickText = (o: any, ...names: string[]) => { for (const n of names) for (const k of Object.keys(o ?? {})) if (k.toLowerCase() === n.toLowerCase() && o[k] != null) return o[k]; return undefined }
+
+async function askStudio(agent: string, message: string, conv?: string): Promise<AgentReply> {
+  const key = studioKey()
+  if (!key) throw new Error('The Copilot Studio connector is not attached to this app. Re-run Deploy.cmd and choose to add the Copilot Studio connection (or run: pac code add-data-source -a shared_microsoftcopilotstudio -c <connection id>), then republish.')
+  const apis = dataSourcesInfo[key]?.apis ?? {}
+  const opName = Object.keys(apis).find((n) => norm(n) === 'executecopilotasyncv2') ?? Object.keys(apis).find((n) => norm(n) === 'executecopilotasync') ?? Object.keys(apis).find((n) => norm(n) === 'executecopilot')
+  if (!opName) throw new Error(`The Copilot Studio connector in this app does not list the "ExecuteCopilotAsyncV2" operation (found: ${Object.keys(apis).join(', ') || 'none'}). Re-add the connector with the latest pac CLI.`)
+  const params: Record<string, unknown> = {}
+  const body: Record<string, unknown> = { message, notificationUrl: 'https://notificationurlplaceholder' }
+  if (conv) body.conversationId = conv
+  for (const p of (apis[opName].parameters ?? []) as any[]) {
+    if (p.name === 'connectionId') continue
+    if (p.in === 'path') params[p.name] = agent
+    else if (p.in === 'body') params[p.name] = body
+    else if (p.in === 'header' && /conversation/i.test(p.name) && conv) params[p.name] = conv
+  }
+  const res: any = await sdk().executeAsync({ connectorOperation: { tableName: key, operationName: opName, parameters: params } } as any)
+  if (!res?.success) {
+    const e = res?.error, t = String(e?.message ?? (typeof e === 'string' ? e : JSON.stringify(e ?? 'The agent call failed')))
+    if (/not found|404|BotNotFound/i.test(t)) throw new Error(`Agent “${agent}” was not found. Use the agent's schema name (Copilot Studio → Settings → Advanced → Metadata), spelled exactly, and make sure the agent is published. ${t}`)
+    if (/401|403|forbidden|unauthor/i.test(t)) throw new Error(`The agent refused access (${t}). The agent must be published and shared with your users, and your Copilot Studio connection must be valid.`)
+    throw new Error(t)
+  }
+  let d: any = res.data
+  if (typeof d === 'string') { try { d = JSON.parse(d) } catch { d = { lastResponse: d } } }
+  const all = ([] as unknown[]).concat(pickText(d, 'responses') ?? []).map((x) => String(x))
+  const last = pickText(d, 'lastResponse') ?? all[all.length - 1] ?? ''
+  const text = String(last)
+  if (/preview has ended|enhanced task completion/i.test(text)) throw new Error('This agent was built with the new agentic (“GitHub Copilot harness”) experience, which the Copilot Studio connector cannot call yet. Use a classic Copilot Studio agent, or add it here as a link.')
+  return { text, conversationId: (pickText(d, 'conversationId') ?? pickText(d, 'conversationID')) as string | undefined, all }
 }

@@ -1,5 +1,5 @@
 /** Demo backend: a fake tenant with a 2,000,000-row list so the whole UI can be tried (and stress-tested) in a browser. */
-import type { Access, AppConfig, ApprovalFlow, ApprovalReq, Attachment, DashConfig, FormatRule, Backend, PermInfo, PermTarget, Principal, RoleAssign, RoleDef, VersionInfo, Page, Query, Role, Row, SourceConfig, SpField, SpList, ViewDef } from '../types'
+import type { Access, AppConfig, ApprovalFlow, AssistantConfig, ApprovalReq, Attachment, DashConfig, FormatRule, Backend, PermInfo, PermTarget, Principal, RoleAssign, RoleDef, VersionInfo, Page, Query, Role, Row, SourceConfig, SpField, SpList, ViewDef } from '../types'
 import { accessFrom, PERM } from '../access'
 import { emptyQuery, isFolderMode, matchRow, searchTokens } from '../query'
 import { lsGet, lsSet, sleep } from '../util'
@@ -192,6 +192,17 @@ export const demo: Backend = {
   async loadViews(upn) { return { shared: lsGet<ViewDef[]>('spx.demo.views.shared', []), mine: lsGet<ViewDef[]>('spx.demo.views.' + upn, []) } },
   async loadDashboard(id) { return lsGet<DashConfig | null>('spx.demo.dash.' + id, null) },
   async saveDashboard(id, cfg) { lsSet('spx.demo.dash.' + id, cfg) },
+  async loadAssistants() { return lsGet<AssistantConfig | null>('spx.demo.assistants', null) },
+  async saveAssistants(cfg) { lsSet('spx.demo.assistants', cfg) },
+  agentConnector: () => true,
+  async askAgent(agent, message, conv) {
+    await sleep(900)
+    const ctx = /\[CONTEXT\]([\s\S]*?)\[\/CONTEXT\]/.exec(message), q = message.replace(/\[CONTEXT\][\s\S]*?\[\/CONTEXT\]/, '').trim()
+    let c: any = {}; try { c = JSON.parse(ctx?.[1] ?? '{}') } catch { /* demo */ }
+    const sel = (c.selectedItems ?? []) as { title?: string }[]
+    const text = /^ping$/i.test(q) ? 'pong' : `**Demo agent “${agent}”** (sample reply — connect a real Copilot Studio agent in Assistant setup).\n\nYou asked: “${q.slice(0, 140)}”\n\n- Source: ${c.source?.title ?? 'n/a'} (${c.source?.type ?? ''}, ${c.source?.itemCount ?? '?'} items)\n- Selected: ${sel.length ? sel.map((x) => x.title).join(', ') : 'nothing'}\n- Your filters: ${c.view?.search || (c.view?.filters?.length ? c.view.filters.join('; ') : 'none')}\n\nA real agent would now answer using its knowledge sources and tools.`
+    return { text, conversationId: conv ?? 'demo-' + Math.random().toString(36).slice(2), all: [text] }
+  },
   async loadApprovalFlow(id) { return lsGet<ApprovalFlow | null>('spx.demo.aflow.' + id, null) },
   async saveApprovalFlow(id, flow) { lsSet('spx.demo.aflow.' + id, flow) },
   async listApprovals(id) { return lsGet<ApprovalReq[]>('spx.demo.appr.' + id, []) },
