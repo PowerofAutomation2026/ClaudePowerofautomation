@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Zero-touch deploy of "SharePoint Explorer" (Power Apps code app) to a Power Platform environment.
 
@@ -62,6 +62,7 @@ function Run {
   & $Exe @Arguments
   if ($LASTEXITCODE -ne 0) { throw "'$Exe $($Arguments -join ' ')' failed (exit $LASTEXITCODE)" }
 }
+function Invoke-PacText([string[]]$PacArgs) { $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'; $t = ((& pac @PacArgs 2>&1) | ForEach-Object { "$_" }) -join "`n"; $ErrorActionPreference = $prev; return $t }   # native stderr must never terminate the script (Windows PowerShell 5.1)
 function Refresh-Path { $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User') + ";$HOME\.dotnet\tools" }
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)   # pac (Node) cannot parse a BOM
 
@@ -87,8 +88,8 @@ try {
 
   # ---------- 2. sign in ----------
   Step 'Signing in (a browser window opens)'
-  $who = (& pac auth who 2>&1) | Out-String
-  if ($who -notmatch '(?i)Tenant|User') { Run pac @('auth','create'); $who = (& pac auth who 2>&1) | Out-String } else { Ok 'Existing pac profile found' }
+  $who = Invoke-PacText @('auth','who')
+  if ($who -notmatch '(?i)Tenant|User') { Run pac @('auth','create'); $who = Invoke-PacText @('auth','who') } else { Ok 'Existing pac profile found' }
   $signedIn = $null
   if ($who -match '(?i)(?:User|Name)\s*:?\s*([^\s@]+@[^\s]+)') { $signedIn = $Matches[1].Trim() }
   elseif ($who -match '([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})') { $signedIn = $Matches[1] }
@@ -96,7 +97,7 @@ try {
   # ---------- 3. environment ----------
   Step 'Choosing target environment'
   if (-not $EnvironmentId) {
-    Write-Host ((& pac env list 2>&1) | Out-String)
+    Write-Host (Invoke-PacText @('env','list'))
     $EnvironmentId = Ask 'Enter the Environment ID (GUID) to deploy to'
   }
   $EnvironmentId = $EnvironmentId.Trim()
@@ -143,7 +144,7 @@ try {
   # ---------- 6. SharePoint connection ----------
   Step 'Wiring the SharePoint connector (uses each user''s own connection - no app registration)'
   function Get-Connections {
-    $out = (& pac connection list 2>&1) | Out-String
+    $out = Invoke-PacText @('connection','list')
     foreach ($line in ($out -split "`n")) {
       if ($line -match '(?i)\b([0-9a-f]{32}|[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})\b.*?(shared_[a-z0-9_\-]+)') { [pscustomobject]@{ Id = $Matches[1]; Api = $Matches[2].ToLower() } }
       elseif ($line -match '(?i)(shared_[a-z0-9_\-]+).*?\b([0-9a-f]{32}|[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})\b') { [pscustomobject]@{ Id = $Matches[2]; Api = $Matches[1].ToLower() } }
@@ -159,13 +160,17 @@ try {
     $null = Read-Host 'Press Enter when the connection is created'
     if (++$attempt -ge 10) { throw 'SharePoint connection still missing after 10 checks.' }
   }
-  $conn = @(Get-Connections) | Where-Object { $_.Api -eq $api } | Select-Object -First 1
-  # A restored power.config.json may point at a connection/app that no longer exists: start clean when it names a different connection
+  $spConns = @(@(Get-Connections) | Where-Object { $_.Api -eq $api })
+  $conn = $spConns | Select-Object -First 1
+  $normId = { param($x) ($x -replace '-', '').ToLower() }
+  # A restored power.config.json may point at a connection that no longer exists: start clean then (the app link - appId - is kept)
   if (Test-Path $cfgPath) {
     $rawCfg = [System.IO.File]::ReadAllText($cfgPath)
-    $ids = [regex]::Matches($rawCfg, '[0-9a-fA-F]{32}|[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}') | ForEach-Object { $_.Value.ToLower() }
-    if ($rawCfg -match 'connectionReferences' -and $rawCfg -match 'shared_sharepointonline' -and ($ids -notcontains $conn.Id.ToLower())) {
-      Warn 'power.config.json refers to a different SharePoint connection than the one that exists now - clearing the old binding.'
+    $ids = @([regex]::Matches($rawCfg, '[0-9a-fA-F]{32}|[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}') | ForEach-Object { & $normId $_.Value })
+    $known = $spConns | Where-Object { $ids -contains (& $normId $_.Id) } | Select-Object -First 1
+    if ($known) { $conn = $known; Ok "Keeping the SharePoint connection already bound to this app ($($conn.Id))" }
+    elseif ($rawCfg -match 'connectionReferences' -and $rawCfg -match 'shared_sharepointonline') {
+      Warn 'power.config.json refers to a SharePoint connection that no longer exists - clearing the old binding.'
       try { $j = $rawCfg.TrimStart([char]0xFEFF) | ConvertFrom-Json; foreach ($k in 'connectionReferences','databaseReferences','dataSources') { if ($j.PSObject.Properties[$k]) { $j.$k = [pscustomobject]@{} } }; [System.IO.File]::WriteAllText($cfgPath, ($j | ConvertTo-Json -Depth 20), $utf8NoBom) } catch { }
       $dp = Join-Path $root '.power'; if (Test-Path $dp) { Remove-Item $dp -Recurse -Force }
     }
@@ -196,14 +201,22 @@ try {
   }
   function Sp-Count {   # how many SharePoint data sources power.config.json lists
     if (-not (Test-Path $cfgPath)) { return 0 }
-    try { $j = ([System.IO.File]::ReadAllText($cfgPath).TrimStart([char]0xFEFF)) | ConvertFrom-Json; $r = $j.connectionReferences.PSObject.Properties | Where-Object { $_.Name -match '(?i)sharepointonline' } | Select-Object -First 1; if ($r) { return @($r.Value.dataSources).Count } } catch { }
-    return 0
+    try {
+      $j = ([System.IO.File]::ReadAllText($cfgPath).TrimStart([char]0xFEFF)) | ConvertFrom-Json
+      $n = 0
+      foreach ($p in @($j.connectionReferences.PSObject.Properties)) {
+        if (($p.Name + ($p.Value | ConvertTo-Json -Depth 10 -Compress)) -notmatch '(?i)sharepointonline') { continue }
+        $ds = $p.Value.dataSources
+        if ($ds -is [System.Array]) { $n += $ds.Count } elseif ($ds -is [pscustomobject]) { $n += @($ds.PSObject.Properties).Count } else { $n += 1 }
+      }
+      return $n
+    } catch { return 0 }
   }
   function Has-Sp {   # SharePoint can be registered two ways: tabular (entry keyed by LIST name, real tableId, no connector name) or action-style (entry keyed "sharepointonline"). Either is fine for the app.
     $sp = Get-SchemaPath
     if ($sp) {
       $txt = [System.IO.File]::ReadAllText((Join-Path $root $sp))
-      if ($txt -match '(?i)sharepointonline') { return $true }
+      if ($txt -match '(?im)^\s*["'']?[A-Za-z0-9_\-]*sharepointonline[A-Za-z0-9_\-]*["'']?\s*:\s*\{') { return $true }
       if ($txt -match '["'']?tableId["'']?\s*:\s*["''][^"'']+["'']') { return $true }   # a real list entry: the only tabular connector this app registers is SharePoint
     }
     return $false
@@ -229,20 +242,23 @@ try {
   }
   # SharePoint is a *tabular* connector: pac wants one site (dataset) and one existing list (table) to register it. The app itself
   # reaches any site/list at run time, so which list is used here does not matter.
-  function Invoke-PacText([string[]]$PacArgs) { $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'; $t = (& pac @PacArgs 2>&1) | Out-String; $ErrorActionPreference = $prev; return $t }
   function Get-TableCandidates([string]$site) {   # lists/libraries pac can see on that site (no question to the user: the app lets the ADMIN pick the real list in its Connect screen)
     $out = ''
     foreach ($a in @(@('code','list-tables','-a',$api,'-c',$conn.Id,'-d',$site), @('code','list-tables','--apiId',$api,'--connectionId',$conn.Id,'--dataset',$site))) { $out = Invoke-PacText $a; if ($LASTEXITCODE -eq 0 -and $out.Trim()) { break } }
     $names = @()
     foreach ($line in ($out -split "`r?`n")) {
-      $l = $line.Trim(); if (-not $l -or $l -match '^(?i)(name|id|table|display|-{3,}|=+|error|warning|usage|connected|retrieving|listing)') { continue }
-      $col = ($l -split '\s{2,}|\|' | Where-Object { $_ } | Select-Object -First 1).Trim(' ', '"', "'", '*')
+      $l = $line.Trim(); if (-not $l -or $l -match '^(?i)(name|id\b|table|display|-{3,}|=+|error|warning|usage|connected|retrieving|listing|tip\b|microsoft|power platform|pac\b|version|\[)') { continue }
+      $cols = @($l -split '\s{2,}|\|' | Where-Object { $_ } | ForEach-Object { $_.Trim(' ', '"', "'", '*') })
+      $col = if ($cols.Count -ge 2 -and $cols[0] -match '^\{?[0-9a-fA-F-]{36}\}?$') { $cols[1] } else { $cols[0] }
       if ($col -and $col.Length -lt 120) { $names += $col }
     }
-    return @($names | Select-Object -Unique -First 12)
+    return @($names | Select-Object -Unique -First 5)
   }
   function Add-SharePoint {
-    # (a bare add without a list is NOT used: pac answers 'success' but writes nothing for SharePoint)
+    # 1) action-style registration: what v1.4-1.8 shipped with and what the app really uses (HttpRequest / GetDataSets actions; any site or list is chosen at run time)
+    if (Add-Src $api $conn.Id 'sharepointonline' @()) { Ok 'Registered the SharePoint connector (the admin picks the list or library in the app)'; return $true }
+    Warn "Plain registration did not land in the schema (pac said: $(($script:lastPacOutput -replace '\s+',' ').Trim())) - trying a list-bound registration."
+    # 2) fallback: register against one existing list (only used to register the connector)
     $sites = @($ConfigSiteUrl)
     $dsOut = Invoke-PacText @('code','list-datasets','-a',$api,'-c',$conn.Id)
     $sites += @([regex]::Matches($dsOut, 'https://[A-Za-z0-9.\-]+\.sharepoint\.[a-z]+/[^\s"''|,;]*') | ForEach-Object { $_.Value.TrimEnd('/') } | Select-Object -Unique -First 5)
@@ -262,7 +278,7 @@ try {
     $i = $m.Index + $m.Length - 1; $depth = 0; $q = [char]0
     for ($k = $i; $k -lt $text.Length; $k++) {
       $c = $text[$k]
-      if ($q -ne [char]0) { if ($c -eq '\\') { $k++ } elseif ($c -eq $q) { $q = [char]0 }; continue }
+      if ($q -ne [char]0) { if ($c -eq [char]92) { $k++ } elseif ($c -eq $q) { $q = [char]0 }; continue }
       if ($c -eq '"' -or $c -eq "'" -or $c -eq '`') { $q = $c; continue }
       if ($c -eq '{') { $depth++ } elseif ($c -eq '}') { $depth--; if ($depth -eq 0) { return $text.Substring($m.Index, $k - $m.Index + 1) } }
     }
@@ -282,6 +298,8 @@ try {
     if (-not $okParse -or -not (Has-Sp) -or -not (Schema-Has 'copilotstudio')) { [System.IO.File]::WriteAllText($file, $cur, $utf8NoBom); return $false }
     return $true
   }
+  # bindings without a generated schema (config restored from a backup / fresh checkout): pac would answer "already exists" and write nothing
+  if ((Test-Path $cfgPath) -and -not (Get-SchemaPath) -and ([System.IO.File]::ReadAllText($cfgPath) -match '"connectionReferences"\s*:\s*\{\s*"')) { Warn 'power.config.json has connector bindings but no generated schema - re-registering from a clean state.'; Reset-Pac }
   # optional Copilot Studio agent chat: decide first (connection / question), add it before SharePoint
   $csApi = 'shared_microsoftcopilotstudio'; $csConn = $null; $wantCs = $false; $csSchemaText = $null
   if (-not $NoCopilotStudio) {
@@ -304,9 +322,11 @@ try {
   if ((Schema-Has 'copilotstudio') -and -not (Has-Sp)) { Warn 'The generated schema from an earlier run has no SharePoint source - starting clean.'; Reset-Pac }
   if ($wantCs) {
     Step 'Wiring the Copilot Studio connector (agent chat)'
-    try { if (Add-Src $csApi $csConn.Id 'copilotstudio' @()) { Ok 'Copilot Studio connector added'; $csSchemaText = [System.IO.File]::ReadAllText((Join-Path $root (Get-SchemaPath))) } else { Warn 'Could not add the Copilot Studio connector - continuing with SharePoint only.'; $wantCs = $false } } catch { Warn "Copilot Studio step skipped: $($_.Exception.Message)"; $wantCs = $false }
+    try { if (Add-Src $csApi $csConn.Id 'copilotstudio' @()) { Ok 'Copilot Studio connector added'; $spf = Get-SchemaPath; $csSchemaText = if ($spf) { [System.IO.File]::ReadAllText((Join-Path $root $spf)) } else { $null } } else { Warn 'Could not add the Copilot Studio connector - continuing with SharePoint only.'; $wantCs = $false } } catch { Warn "Copilot Studio step skipped: $($_.Exception.Message)"; $wantCs = $false }
   }
-  $added = Add-SharePoint   # LAST: the connector the app cannot live without
+  $added = $false
+  if ((Has-Sp) -and (Sp-Count) -ge 1 -and -not $wantCs) { Ok 'SharePoint connector already registered for this connection - keeping it'; $added = $true }
+  else { $added = Add-SharePoint }   # LAST: the connector the app cannot live without
   if (-not $added) {
     Warn 'SharePoint did not end up in the generated schema. Re-registering from a clean state...'
     Reset-Pac
@@ -321,7 +341,7 @@ try {
   }
   $schema = Get-SchemaPath
   if (-not $schema -or -not (Has-Sp)) { throw 'The generated data-source schema (.power\schemas\appschemas\dataSourcesInfo.ts) has no SharePoint source (looked for a list entry plus .power\schemas\sharepointonline or power.config.json): the app would show no SharePoint data. Delete power.config.json and the .power folder, then run this script again.' }
-  Write-Host "    data sources in schema: $((([regex]::Matches([System.IO.File]::ReadAllText((Join-Path $root $schema)), '(?m)^\s*["'']?([A-Za-z0-9_\-]+)["'']?\s*:\s*\{') | ForEach-Object { $_.Groups[1].Value } | Where-Object { $_ -notin 'dataSourcesInfo','apis' }) -join ', '))" -ForegroundColor DarkGray
+  Write-Host "    data sources in schema: $((([regex]::Matches([System.IO.File]::ReadAllText((Join-Path $root $schema)), '(?m)^  ["'']?([^"''\r\n:]+?)["'']?\s*:\s*\{') | ForEach-Object { $_.Groups[1].Value } | Where-Object { $_ -notin 'dataSourcesInfo','apis' }) -join ', '))" -ForegroundColor DarkGray
   Ok "Data-source schema present ($schema)"
 
   # ---------- 7. build ----------
@@ -336,7 +356,7 @@ try {
   # the SharePoint data source key pac generated (the entry with a real tableId) must be inside the built app
   $dsKey = $null
   $sf = Get-SchemaPath
-  if ($sf) { $txt = [System.IO.File]::ReadAllText((Join-Path $root $sf)); $m = [regex]::Match($txt, '["'']?([A-Za-z0-9_\-]+)["'']?\s*:\s*\{\s*["'']?tableId["'']?\s*:\s*["''][^"'']+["'']'); if ($m.Success) { $dsKey = $m.Groups[1].Value } elseif ($txt -match '(?i)["'']?(sharepointonline)["'']?\s*:') { $dsKey = $Matches[1] } }
+  if ($sf) { $txt = [System.IO.File]::ReadAllText((Join-Path $root $sf)); $m = [regex]::Match($txt, '(?m)^  ["'']?([^"''\r\n:]+?)["'']?\s*:\s*\{[^{}]*?["'']?tableId["'']?\s*:\s*["''][^"'']+["'']'); if ($m.Success) { $dsKey = $m.Groups[1].Value } elseif ($txt -match '(?im)^\s*["'']?([A-Za-z0-9_\-]*sharepointonline[A-Za-z0-9_\-]*)["'']?\s*:') { $dsKey = $Matches[1] } }
   if ($dsKey) {
     if (-not (Select-String -Path (Join-Path $root 'dist\assets\*.js') -Pattern ([regex]::Escape($dsKey)) -Quiet)) { throw "The built app does not contain the SharePoint data source '$dsKey': it would run without live data. Check the pac output above and run again." }
     Ok "Bundle contains the SharePoint data source '$dsKey'"
@@ -385,7 +405,7 @@ try {
   if ($playUrl) { Write-Host "Open it: $playUrl" -ForegroundColor Green }
   $finalId = try { ([System.IO.File]::ReadAllText($cfgPath).TrimStart([char]0xFEFF) | ConvertFrom-Json).appId } catch { $null }
   Write-Host "Or: https://make.powerapps.com/environments/$EnvironmentId/apps  (look for '$DisplayName'; app id: $finalId)." -ForegroundColor Green
-  Write-Host "IMPORTANT: close any open tab of the app, reopen it from that Apps list in environment $EnvironmentId and press Ctrl+F5. The footer must say 'Build v$pkgVer · live SharePoint data'. If it still shows an older build or a SAMPLE DATA bar, you are opening a different/older copy of the app." -ForegroundColor Yellow
+  Write-Host "IMPORTANT: close any open tab of the app, reopen it from that Apps list in environment $EnvironmentId and press Ctrl+F5. The footer must say 'Build v$pkgVer - live SharePoint data'. If it still shows an older build or a SAMPLE DATA bar, you are opening a different/older copy of the app." -ForegroundColor Yellow
   Write-Host ''
   Write-Host 'Next steps' -ForegroundColor Cyan
   Write-Host "  1. Open the app -> approve the SharePoint consent prompt -> Connect tab -> pick the site, list or library -> press Connect." -ForegroundColor Gray
