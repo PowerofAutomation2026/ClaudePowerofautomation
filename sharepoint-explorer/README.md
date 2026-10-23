@@ -185,3 +185,7 @@ adds that operation to the generated data-source description (`src/services/sp.t
 
 ---
 Created by **Kirolos** — Power of Automation
+
+## Deploy never asks which list to connect
+
+`pac` can only register the SharePoint connector against *some* existing list, so the deploy script finds one itself (it lists the tables on your config site and tries them, then other sites you can reach). That list is only used to register the connector — **which list or library the app shows is chosen by the admin in the app's Connect screen.** The script registers SharePoint last (pac keeps only the connector it registers last), verifies the generated schema and the built bundle, and stops with a clear error instead of publishing a broken build. After deploying, the app footer must show the new build number; if it still shows an older one you are opening an older copy of the app.

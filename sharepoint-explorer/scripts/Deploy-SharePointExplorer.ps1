@@ -207,14 +207,27 @@ try {
   }
   # SharePoint is a *tabular* connector: pac wants one site (dataset) and one existing list (table) to register it. The app itself
   # reaches any site/list at run time, so which list is used here does not matter.
+  function Invoke-PacText([string[]]$PacArgs) { $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'; $t = (& pac @PacArgs 2>&1) | Out-String; $ErrorActionPreference = $prev; return $t }
+  function Get-TableCandidates([string]$site) {   # lists/libraries pac can see on that site (no question to the user: the app lets the ADMIN pick the real list in its Connect screen)
+    $out = ''
+    foreach ($a in @(@('code','list-tables','-a',$api,'-c',$conn.Id,'-d',$site), @('code','list-tables','--apiId',$api,'--connectionId',$conn.Id,'--dataset',$site))) { $out = Invoke-PacText $a; if ($LASTEXITCODE -eq 0 -and $out.Trim()) { break } }
+    $names = @()
+    foreach ($line in ($out -split "`r?`n")) {
+      $l = $line.Trim(); if (-not $l -or $l -match '^(?i)(name|id|table|display|-{3,}|=+|error|warning|usage|connected|retrieving|listing)') { continue }
+      $col = ($l -split '\s{2,}|\|' | Where-Object { $_ } | Select-Object -First 1).Trim(' ', '"', "'", '*')
+      if ($col -and $col.Length -lt 120) { $names += $col }
+    }
+    return @($names | Select-Object -Unique -First 12)
+  }
   function Add-SharePoint {
     if (Add-Src $api $conn.Id 'sharepointonline' @()) { return $true }
-    if ($ConfigSiteUrl) {
-      $tables = @($BootstrapList, 'Documents', 'Shared Documents', 'Site Pages') | Where-Object { $_ } | Select-Object -Unique
-      foreach ($t in $tables) { if (Add-Src $api $conn.Id 'sharepointonline' @('-d', $ConfigSiteUrl, '-t', $t)) { Ok "Registered with $ConfigSiteUrl / $t"; return $true } }
-      if (-not $NonInteractive) {
-        $t = (Read-Host "Name of any existing list or library on $ConfigSiteUrl").Trim()
-        if ($t -and (Add-Src $api $conn.Id 'sharepointonline' @('-d', $ConfigSiteUrl, '-t', $t))) { return $true }
+    $sites = @($ConfigSiteUrl)
+    $dsOut = Invoke-PacText @('code','list-datasets','-a',$api,'-c',$conn.Id)
+    $sites += @([regex]::Matches($dsOut, 'https://[A-Za-z0-9.\-]+\.sharepoint\.[a-z]+/[^\s"''|,;]*') | ForEach-Object { $_.Value.TrimEnd('/') } | Select-Object -Unique -First 5)
+    foreach ($site in ($sites | Where-Object { $_ } | Select-Object -Unique)) {
+      $tables = @($BootstrapList) + @(Get-TableCandidates $site) + @('Documents', 'Shared Documents', 'Site Pages')
+      foreach ($t in ($tables | Where-Object { $_ } | Select-Object -Unique)) {
+        if (Add-Src $api $conn.Id 'sharepointonline' @('-d', $site, '-t', $t)) { Ok "Registered the SharePoint connector (using $site / $t just to register it - you choose the real list in the app's Connect screen)"; return $true }
       }
     }
     return $false
