@@ -243,10 +243,19 @@ export const sp: Backend = {
     }
     let d: any
     try { d = await http(src.siteUrl, 'GET', uri, undefined, {}, signal) }
-    catch (e) {   // too many people/lookup columns: retry once without them (the rest of the row is still useful)
-      if (!/lookup column/i.test((e as Error).message)) throw e
-      const plainSel = select.filter((n) => { const f = fields.find((x) => x.internal === n); return !(f && (f.kind === 'user' || f.kind === 'lookup')) })
-      d = await http(src.siteUrl, 'GET', uri.replace(selectExpand(fields, select, src.isLibrary), selectExpand(fields, plainSel, src.isLibrary)), undefined, {}, signal)
+    catch (e) {
+      const msg = (e as Error).message
+      if ((e as Error).name === 'AbortError') throw e
+      const cur = selectExpand(fields, select, src.isLibrary)
+      const learn = /field or property '([^']+)' does not exist|(?:\$expand query is not valid for field|query to field) '([^']+)'/i.exec(msg)
+      const bad = learn?.[1] ?? learn?.[2]
+      if (bad && !unusable.has(bad) && !noExpand.has(bad)) throw e   // first sighting: recover() drops that column for good and calls query() again
+      if (/lookup column/i.test(msg)) {   // too many people/lookup columns: retry once without them (the rest of the row is still useful)
+        const plainSel = select.filter((n) => { const f = fields.find((x) => x.internal === n); return !(f && (f.kind === 'user' || f.kind === 'lookup')) })
+        d = await http(src.siteUrl, 'GET', uri.replace(cur, selectExpand(fields, plainSel, src.isLibrary)), undefined, {}, signal)
+      } else if (src.isLibrary && !cursor?.startsWith('next:') && uri.includes(cur) && /HTTP 400|does not exist|not valid/i.test(msg) && !/threshold/i.test(msg)) {
+        d = await http(src.siteUrl, 'GET', uri.replace(cur, MIN_LIB_SELECT), undefined, {}, signal)   // last resort: name, path, kind and dates are still a usable sample
+      } else throw e
     }
     const items = rows(d)
     const out = items.filter((i) => !(src.isLibrary && src.itemCount > 5000 && !q.folders && Number(i.FSObjType) === 1)).map((i) => toRow(i, fields))
@@ -473,6 +482,12 @@ const enc = (s: string) => encodeURIComponent(s).replace(/%24/g, '$').replace(/%
 /** columns SharePoint told us do not exist as item properties for this list (learned at run time, see recover()) */
 const unusable = new Set<string>()
 
+/** document columns a library row always carries; each is skipped once SharePoint has said (recover) it is not an item property */
+const LIB_COLS = ['FileRef', 'FileDirRef', 'FileLeafRef', 'FSObjType', 'File_x0020_Type']
+/** smallest select that still gives a usable library row (last resort when even the learned-down select is refused) */
+const MIN_LIB_SELECT = '$select=Id,FileLeafRef,FileRef,FSObjType,Created,Modified'
+const fileExpandOk = () => !unusable.has('File') && !unusable.has('Length') && !unusable.has('File/Length') && !noExpand.has('File')
+
 export function selectExpand(fields: SpField[], select: string[], isLibrary: boolean): string {
   const sel = new Set<string>(['Id'])
   const exp = new Set<string>()
@@ -485,10 +500,11 @@ export function selectExpand(fields: SpField[], select: string[], isLibrary: boo
     else if (f.kind === 'user' || (f.kind === 'lookup' && f.typeAsString.startsWith('Lookup'))) { sel.add(`${rn}/${f.kind === 'lookup' ? f.lookupField || 'Title' : 'Title'}`); if (f.kind === 'user') sel.add(`${rn}/Id`); exp.add(rn) }
     else sel.add(rn)
   }
-  if (isLibrary) ['FileRef', 'FileDirRef', 'FileLeafRef', 'FSObjType', 'File_x0020_Type', 'File_x0020_Size'].forEach((x) => sel.add(x))
-  const budget = 12 - (isLibrary ? 5 : 0) - (viaText ? 1 : 0)   // libraries always add 5 hidden lookup-typed columns (FileRef, FileDirRef, FSObjType, File_x0020_Size, FileLeafRef)
+  if (isLibrary) for (const x of LIB_COLS) if (!unusable.has(x)) sel.add(x)   // File_x0020_Size is NOT an item property: the size comes from File/Length below
+  const budget = 12 - (isLibrary ? 4 : 0) - (viaText ? 1 : 0)   // libraries always add 4 hidden lookup-typed columns; $expand=File is a navigation property and does not count
   const e = [...exp].slice(0, Math.max(0, budget))
   if (viaText) e.push('FieldValuesAsText')
+  if (isLibrary && fileExpandOk()) { sel.add('File/Length'); e.push('File') }   // added after the slice: the size is never budgeted away
   return `$select=${[...sel].filter((s) => !s.includes('/') || e.includes(s.split('/')[0])).join(',')}${e.length ? `&$expand=${e.join(',')}` : ''}`
 }
 
@@ -510,7 +526,10 @@ function toRow(item: any, fields: SpField[]): Row {
   const row: Row = { __id: Number(item.Id ?? item.ID), ID: Number(item.Id ?? item.ID) }
   for (const k of ['FileRef', 'FileDirRef', 'FileLeafRef', 'File_x0020_Type']) if (item[k] != null) row[k] = item[k]
   if (item.FSObjType != null) row.FSObjType = Number(item.FSObjType)
-  if (item.File_x0020_Size != null) row.File_x0020_Size = Number(item.File_x0020_Size)
+  // size: File/Length (a string; folders return File as null) -> legacy File_x0020_Size -> FieldValuesAsText
+  const len = item.File && typeof item.File === 'object' ? item.File.Length : undefined
+  const size = len ?? item.File_x0020_Size ?? item.FieldValuesAsText?.File_x0020_Size
+  if (size != null && size !== '' && !isNaN(Number(size))) row.File_x0020_Size = Number(size)
   for (const f of fields) {
     if (FILE_COLS.has(f.internal) && f.internal in row) continue   // already set above as plain values (the generic loop would turn File Size into '')
     const key = propOf(f) in item ? propOf(f) : f.internal
