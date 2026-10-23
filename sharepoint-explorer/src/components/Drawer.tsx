@@ -1,3 +1,6 @@
+import { ApprovalBadge, ApprovalPanel } from './Approvals'
+import { approvalFor } from '../approvalStore'
+import type { ApprovalApi } from '../useApproval'
 import { useEffect, useState } from 'react'
 import { titleField } from '../query'
 import type { Engine } from '../engine'
@@ -35,14 +38,14 @@ export function openShareDialog(engine: Engine, row: Row): boolean {
 /** _layouts handlers are web-scoped: they must be called on the site that holds the library, not the tenant root */
 export const downloadUrl = (engine: Engine, row: Row) => `${engine.src.siteUrl.replace(/\/$/, '')}/_layouts/15/download.aspx?SourceUrl=${encodeURIComponent(String(row.FileRef))}`   // server-relative path, encoded once (what SharePoint's own UI sends)
 
-export function Drawer({ engine, row, index, actions, access, fav, onFav, onInline, onClose, onNav }: { engine: Engine; row: Row; index: number; actions: MenuItem[]; access: Access; fav: boolean; onFav: () => void; onInline: (row: Row, field: SpField, value: unknown) => Promise<void>; onClose: () => void; onNav: (d: number) => void }) {
+export function Drawer({ approval, startTab, engine, row, index, actions, access, fav, onFav, onInline, onClose, onNav }: { approval?: ApprovalApi; startTab?: 'approval'; engine: Engine; row: Row; index: number; actions: MenuItem[]; access: Access; fav: boolean; onFav: () => void; onInline: (row: Row, field: SpField, value: unknown) => Promise<void>; onClose: () => void; onNav: (d: number) => void }) {
   const toast = useToast()
   const [full, setFull] = useState<Row>(row)
-  const [tab, setTab] = useState<'details' | 'history'>('details')
+  const [tab, setTab] = useState<'details' | 'history' | 'approval'>(startTab ?? 'details')
   const [versions, setVersions] = useState<VersionInfo[] | null>(null)
   const [atts, setAtts] = useState<Attachment[]>([])
   const lib = engine.src.isLibrary
-  useEffect(() => { setTab('details'); setVersions(null); setAtts([]) }, [row.__id])
+  useEffect(() => { setTab(startTab === 'approval' && approval?.active ? 'approval' : 'details'); setVersions(null); setAtts([]) }, [row.__id])
   useEffect(() => {
     setFull(row)
     let live = true
@@ -99,12 +102,14 @@ export function Drawer({ engine, row, index, actions, access, fav, onFav, onInli
         <div role="tablist" className="tabs" style={{ marginBottom: 10, width: 'fit-content' }}>
           <button role="tab" className="tab" aria-selected={tab === 'details'} onClick={() => setTab('details')}>Details</button>
           <button role="tab" className="tab" aria-selected={tab === 'history'} onClick={() => setTab('history')}>Version history</button>
+          {approval?.active && <button role="tab" className="tab" aria-selected={tab === 'approval'} onClick={() => setTab('approval')}>Approval <ApprovalBadge id={row.__id} /></button>}
         </div>
 
         {tab === 'details' && <>
           <dl style={{ margin: 0 }}>{shown.map((f) => <div className="kv" key={f.internal}><dt>{f.title}</dt><dd>{inlineEditable(f, access) ? <InlineEdit f={f} row={full} onSet={async (v) => { await onInline(full, f, v); setFull((c) => ({ ...c, [f.internal]: v === true ? true : v })) }} /> : <CellView f={f.kind === 'note' ? { ...f, kind: 'text' } : f} row={full} tokens={[]} />}</dd></div>)}</dl>
           {!lib && atts.length > 0 && <><h3 style={{ margin: '14px 0 6px' }}>Attachments</h3><ul className="upl">{atts.map((a) => <li key={a.name}><FileGlyph name={a.name} size={22} /><a className="nm" href={a.url} target="_blank" rel="noreferrer noopener">{a.name}</a><span /><span /></li>)}</ul></>}
         </>}
+        {tab === 'approval' && approval && <ApprovalPanel api={approval} req={approvalFor(row.__id)} onSubmit={async (c) => { await approval.submit([full], c) }} />}
         {tab === 'history' && (
           versions === null ? <div className="skel" style={{ height: 100 }} aria-busy="true" /> :
           !versions.length ? <p className="muted">No earlier versions (version history may be turned off for this {lib ? 'library' : 'list'}).</p> :

@@ -1,5 +1,5 @@
 /** Demo backend: a fake tenant with a 2,000,000-row list so the whole UI can be tried (and stress-tested) in a browser. */
-import type { Access, AppConfig, Attachment, DashConfig, FormatRule, Backend, PermInfo, PermTarget, Principal, RoleAssign, RoleDef, VersionInfo, Page, Query, Role, Row, SourceConfig, SpField, SpList, ViewDef } from '../types'
+import type { Access, AppConfig, ApprovalFlow, ApprovalReq, Attachment, DashConfig, FormatRule, Backend, PermInfo, PermTarget, Principal, RoleAssign, RoleDef, VersionInfo, Page, Query, Role, Row, SourceConfig, SpField, SpList, ViewDef } from '../types'
 import { accessFrom, PERM } from '../access'
 import { emptyQuery, isFolderMode, matchRow, searchTokens } from '../query'
 import { lsGet, lsSet, sleep } from '../util'
@@ -192,6 +192,10 @@ export const demo: Backend = {
   async loadViews(upn) { return { shared: lsGet<ViewDef[]>('spx.demo.views.shared', []), mine: lsGet<ViewDef[]>('spx.demo.views.' + upn, []) } },
   async loadDashboard(id) { return lsGet<DashConfig | null>('spx.demo.dash.' + id, null) },
   async saveDashboard(id, cfg) { lsSet('spx.demo.dash.' + id, cfg) },
+  async loadApprovalFlow(id) { return lsGet<ApprovalFlow | null>('spx.demo.aflow.' + id, null) },
+  async saveApprovalFlow(id, flow) { lsSet('spx.demo.aflow.' + id, flow) },
+  async listApprovals(id) { return lsGet<ApprovalReq[]>('spx.demo.appr.' + id, []) },
+  async saveApproval(id, req) { const all = lsGet<ApprovalReq[]>('spx.demo.appr.' + id, []).filter((r) => r.itemId !== req.itemId); lsSet('spx.demo.appr.' + id, [...all, req]) },
   async loadFormat(id, upn) { return { shared: lsGet<FormatRule[]>('spx.demo.format.' + id, []), mine: lsGet<FormatRule[]>('spx.demo.format.' + id + '.' + upn, []) } },
   async saveFormat(id, rules, aud, upn) { lsSet(aud === 'everyone' ? 'spx.demo.format.' + id : 'spx.demo.format.' + id + '.' + upn, rules); return 'device' as const },
   async saveShared(v) { lsSet('spx.demo.views.shared', v) },
@@ -261,7 +265,6 @@ export const demo: Backend = {
   },
   async removePermission(src, t, ra) { await sleep(100); const k = pkey(src, t); perms.set(k, (perms.get(k) ?? []).filter((a) => a.principal.id !== ra.principal.id)) },
   async listRoleDefs(): Promise<RoleDef[]> { return ROLE_DEFS },
-  async sendMail() { await sleep(400) },
   async createShareLink(src, id, edit) { await sleep(200); return `https://contoso.sharepoint.com/:${edit ? 'w' : 'b'}:/s/demo/${src.listId}-${id}` },
   async searchPrincipals(_s, text) { await sleep(120); const t = text.toLowerCase(); return DIRECTORY.filter((p) => p.title.toLowerCase().includes(t) || p.email?.includes(t)).slice(0, 8).map((p) => ({ ...p })) },
   async resolvePrincipal(_s, p) { return p.id > 0 ? p.id : DIRECTORY.find((d) => d.login === p.login)?.id ?? 9999 },

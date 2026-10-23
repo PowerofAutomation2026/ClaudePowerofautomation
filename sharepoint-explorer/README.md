@@ -4,12 +4,22 @@ Connect **any SharePoint list or document library** with one button and get a gr
 instant search and PDF / CSV / JSON export. Built for lists with **millions of rows**: the browser never holds more than a
 capped window of rows; everything else is paged, streamed or aggregated.
 
+## Approvals (lists and libraries, multi-layer)
+
+Admins (data admins / app owners) open **Approvals → Design workflow** and build the process for that list or library:
+- Any number of **approval layers (steps)**, reorderable; each has a name, its own **approvers** (people or SharePoint groups, searched from the directory), a rule (**any one** approver or **everyone** must approve) and optional **due days**.
+- Options: comment required to reject, whether submitters may approve their own request, and who may submit (editors / everyone / admins). The workflow can be turned off at any time; running requests keep a snapshot of their steps.
+- Users select files/items and press **Submit for approval** (or use the row menu → *Approval…*). Each approver sees **Approvals → Waiting for me** and can **Approve**, **Reject** or **Request changes** with a comment; the request moves to the next layer automatically. Rejected / changes-requested items can be **resubmitted**.
+- Every file/item shows an **approval tag** in the grid (Pending 1/2, Approved, Rejected…), and the details panel has an **Approval** tab with the step tracker, who is being waited on, due dates and the complete **history** (who, what, when, comment). Admins also get *Everything* with status filters.
+- **Notify approvers / submitter** opens a prefilled Outlook-on-the-web message.
+- Requests and history are stored in the `SPX_Config` list, so everyone who approves needs to be able to add/edit items there (the same list that already stores personal views). Approvals do not change SharePoint's own permissions or Content Approval setting.
+
 ## Email files and folders (libraries)
 
-Select one or more files/folders (or use a row's menu → **Email…**) and press **Email**. Folders and files go in as links; optionally create "people in my organization can view" sharing links. Then choose:
-- **Open as draft** – downloads a ready-to-send message (.eml) that opens in Outlook/Mail with the links, your message and any **files you attach from your computer** (up to 20 MB).
-- **Send from SharePoint** – SharePoint's own mail service sends the links (no attachments; your tenant must allow it).
-- **Links in my mail app** – plain `mailto:`.
+Select files/folders (or row menu → **Email…**) and press **Email**. They go in as links (optionally "people in my organization can view" sharing links). Then:
+- **Open in Outlook (web)** – a prefilled compose window.
+- **Default mail app** – `mailto:`; **Copy message** – rich text on the clipboard (always works); **Download .eml** – a draft file, with files from your computer attached (classic Outlook opens it as an editable draft; downloads can be blocked inside Power Apps).
+SharePoint's old built-in mail API was retired by Microsoft in 2025, so the app no longer sends mail itself — nothing is sent until you press Send in your mail client.
 
 ## Customizable live dashboard (admins)
 

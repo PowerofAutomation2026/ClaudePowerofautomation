@@ -7,6 +7,8 @@ import { ItemPanel } from './components/ItemPanel'
 import { ActionMenu, Breadcrumb, FolderPicker, NameDialog, UploadDialog, collectDropped, fromPicker, type MenuItem, type UploadItem } from './components/Library'
 import { PermissionsDialog } from './components/Permissions'
 import { BulkDialog, SearchEverywhere } from './components/Tools'
+import { ApprovalsDialog } from './components/Approvals'
+import { useApproval } from './useApproval'
 import { EmailDialog } from './components/EmailDialog'
 import { downloadUrl, itemUrl, openShareDialog } from './components/Drawer'
 import { FolderIcon } from './components/FileGlyph'
@@ -122,6 +124,10 @@ function Shell() {
   }, [])
 
   const isOwner = !!boot && (boot.backend.mode === 'demo' || config?.owners.some((o) => sameUser(o, boot.who.upn)) === true)
+  const me = useMemo(() => ({ name: boot?.who.name ?? '', upn: boot?.who.upn ?? '' }), [boot?.who.name, boot?.who.upn])
+  const approval = useApproval(engine, me, access, isOwner || access.role === 'admin', (r) => (engine ? itemUrl(engine, r) : ''))
+  const [apprOpen, setApprOpen] = useState(false)
+  const [openTab, setOpenTab] = useState<'approval' | undefined>(undefined)
 
   /* ------------------------------------------------ theme + text size */
   useEffect(() => {
@@ -292,6 +298,7 @@ function Shell() {
       { label: 'Copy link (organization can view)', icon: 'share', run: () => boot?.backend.createShareLink(engine.src, r.__id, false).then((u) => navigator.clipboard?.writeText(u)).then(() => toast('good', 'Sharing link copied')).catch((e) => toast('bad', (e as Error).message)) },
       { label: favs.has(r.__id) ? 'Remove favorite' : 'Add to favorites', icon: 'star', run: () => toggleFav(r.__id) },
       { label: 'Share…', icon: 'share', run: () => { if (!openShareDialog(engine, r)) toast('warn', 'Pop-up blocked: allow pop-ups for this site to open SharePoint’s Share dialog.') } },
+      { label: 'Approval…', icon: 'check', hidden: !approval.active, run: () => { setOpenTab('approval'); setOpen(r) } },
       { label: 'Email…', icon: 'share', hidden: !lib, run: () => setMailRows([r]) },
       { label: 'Copy link', icon: 'copy', run: () => navigator.clipboard?.writeText(itemUrl(engine, r)).then(() => toast('good', 'Link copied')) },
       { label: access.canManage ? 'Manage access' : 'Who has access', icon: 'lock', sep: true, run: () => setPerm({ target: { kind: 'item', id: r.__id, name: rowName(r) }, title: rowName(r) }) },
@@ -471,6 +478,8 @@ function Shell() {
               )}
               {favs.size > 0 && <button className="btn sm" aria-pressed={favActive} onClick={toggleFavFilter}><Icon n="star" size={14} />Favorites <span className="pill">{favs.size}</span></button>}
               {src.isLibrary && selected.size > 0 && <button className="btn sm" onClick={() => setMailRows(engine.rows.filter((r) => selected.has(r.__id)))}><Icon n="share" size={14} />Email {selected.size}</button>}
+              {approval.maySubmit && selected.size > 0 && <button className="btn sm" onClick={async () => { try { const n = await approval.submit(engine.rows.filter((r) => selected.has(r.__id)), ''); toast(n ? 'good' : 'warn', n ? `${n} submitted for approval.` : 'Those items are already waiting for approval.') } catch (e) { toast('bad', (e as Error).message) } }}><Icon n="check" size={14} />Submit {selected.size} for approval</button>}
+              {(approval.active || approval.mayDesign) && <button className="btn sm" onClick={() => setApprOpen(true)}><Icon n="check" size={14} />Approvals{approval.waitingForMe.length > 0 && <span className="pill warn" aria-label={`${approval.waitingForMe.length} waiting for you`}>{approval.waitingForMe.length}</span>}</button>}
               {access.canEdit && selected.size > 1 && <button className="btn sm" onClick={() => setBulk(engine.rows.filter((r) => selected.has(r.__id)))}>✎ Edit {selected.size}</button>}
               {(access.canManage || access.role === 'admin') && <button className="btn sm" onClick={() => setPerm({ target: { kind: 'list' }, title: src.label })}><Icon n="lock" size={14} />Access</button>}
               {access.canDelete && selected.size > 0 && <button className="btn sm danger" onClick={() => setConfirmDel(engine.rows.filter((r) => selected.has(r.__id)))}><Icon n="trash" size={14} />Delete {selected.size}</button>}
@@ -523,13 +532,14 @@ function Shell() {
             </div>
           </section>
         )}
-      {mailRows && engine && <EmailDialog engine={engine} rows={mailRows} mine={boot.who.upn} onClose={() => setMailRows(null)} />}
+      {apprOpen && engine && <ApprovalsDialog engine={engine} api={approval} onOpen={(id) => { const r = engine.rows.find((x) => x.__id === id); if (r) { setOpenTab('approval'); setOpen(r) } else toast('info', 'That item is not in the loaded rows — search for it, then open it.') }} onClose={() => setApprOpen(false)} />}
+      {mailRows && engine && <EmailDialog engine={engine} rows={mailRows} onClose={() => setMailRows(null)} />}
       {menu && engine && <ActionMenu at={menu.at} title={rowName(menu.row)} items={actionsFor(menu.row)} onClose={() => setMenu(null)} />}
       </main>
 
       {open && engine && (() => {
         const i = engine.rows.findIndex((r) => r.__id === open.__id)
-        return <Drawer engine={engine} row={open} index={Math.max(0, i)} access={access} fav={favs.has(open.__id)} onFav={() => toggleFav(open.__id)} onInline={inlineSave} actions={actionsFor(open).filter((a) => a.label !== 'Details' && a.label !== 'Copy link' && a.label !== 'Download')} onClose={() => setOpen(null)} onNav={(d) => { const n = engine.rows[i + d]; if (n) setOpen(n) }} />
+        return <Drawer approval={approval} startTab={openTab} engine={engine} row={open} index={Math.max(0, i)} access={access} fav={favs.has(open.__id)} onFav={() => toggleFav(open.__id)} onInline={inlineSave} actions={actionsFor(open).filter((a) => a.label !== 'Details' && a.label !== 'Copy link' && a.label !== 'Download')} onClose={() => { setOpen(null); setOpenTab(undefined) }} onNav={(d) => { const n = engine.rows[i + d]; if (n) setOpen(n) }} />
       })()}
       {exp && engine && src && <ExportDialog engine={engine} cols={cols} selected={selected} title={src.label} initial={exp} onClose={() => setExp(null)} />}
       {panel && engine && <ItemPanel key={panel.row?.__id ?? `new-${panel.prefill?.__id ?? ''}-${JSON.stringify(panel.preset ?? {})}`} engine={engine} row={panel.row} prefill={panel.prefill} preset={panel.preset} onClose={() => setPanel(null)} onSave={(v, f, again) => saveItem(panel.row ? panel.row.__id : null, v, f, again)} />}

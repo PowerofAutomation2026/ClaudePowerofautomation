@@ -3,6 +3,7 @@ import type { Engine } from '../engine'
 import type { Row, SpField } from '../types'
 import { cellText, fmt } from '../util'
 import { Icon, hashColor, initials } from './ui'
+import { ApprovalBadge } from './Approvals'
 import { FileGlyph, extOf } from './FileGlyph'
 import { CellEditor, canInline, type Move } from './CellEditor'
 import type { Painter } from '../format'
@@ -60,7 +61,7 @@ const GridRow = memo(function GridRow({ row, idx, cols, tpl, width, selected, ac
             title={cellText(f, row)} onClick={(e) => { onCell(row, ci, false); if (inl && ci !== 0) e.stopPropagation() }}   /* title column or read-only cell: open details; other editable cells: just select (double-click / Enter / F2 edits) */
             onDoubleClick={(e) => { e.stopPropagation(); onCell(row, ci, true) }}>
             {editing ? <CellEditor f={f} row={row} label={`${f.title}, row ${idx + 1}`} onCommit={(v, m) => onCommit(row, f, v, m)} onCancel={onCancelEdit} />
-              : <>{ci === 0 && fmt?.row && <span className="fmk" aria-hidden="true">{fmt.row.marker ?? '●'}</span>}{ci === 0 && fmt?.row && <span className="sr-only">Rule: {fmt.row.name ?? fmt.row.color}. </span>}<CellView f={f} row={row} tokens={tokens} /></>}
+              : <>{ci === 0 && fmt?.row && <span className="fmk" aria-hidden="true">{fmt.row.marker ?? '●'}</span>}{ci === 0 && fmt?.row && <span className="sr-only">Rule: {fmt.row.name ?? fmt.row.color}. </span>}<CellView f={f} row={row} tokens={tokens} />{ci === 0 && <ApprovalBadge id={row.__id} />}</>}
           </div>
         )
       })}

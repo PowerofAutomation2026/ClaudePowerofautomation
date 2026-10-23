@@ -186,8 +186,10 @@ export interface Backend {
   listRoleDefs(src: SourceConfig): Promise<RoleDef[]>
   /** organisation-wide sharing link (view or edit) created through SharePoint's own sharing service */
   createShareLink(src: SourceConfig, id: number, edit: boolean): Promise<string>
-  /** SharePoint's own mail service (links only, no attachments) */
-  sendMail(src: SourceConfig, to: string[], subject: string, html: string): Promise<void>
+  loadApprovalFlow(sourceId: string): Promise<ApprovalFlow | null>
+  saveApprovalFlow(sourceId: string, flow: ApprovalFlow): Promise<void>
+  listApprovals(sourceId: string): Promise<ApprovalReq[]>
+  saveApproval(sourceId: string, req: ApprovalReq): Promise<void>
 }
 
 /* ---- conditional formatting (colour rules) ---- */
@@ -225,3 +227,22 @@ export interface Widget {
   sortDir?: 'asc' | 'desc'
 }
 export interface DashConfig { v: 1; widgets: Widget[]; refreshSec: number; updated: string; updatedBy: string }
+
+/* ---- approvals (multi-layer, admin-designed, per list / library) ---- */
+export interface Approver { kind: 'user' | 'group'; name: string; login: string; email?: string }
+export interface ApprovalStep { id: string; name: string; approvers: Approver[]; mode: 'any' | 'all'; dueDays?: number }
+export interface ApprovalFlow {
+  v: 1; enabled: boolean; name: string; steps: ApprovalStep[]
+  requireCommentOnReject: boolean; allowSelfApprove: boolean; notify?: boolean
+  submitters: 'editors' | 'everyone' | 'admins'
+  updated: string; updatedBy: string
+}
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'changes' | 'cancelled'
+export interface ApprovalEvent { at: string; by: string; upn: string; action: 'submit' | 'resubmit' | 'approve' | 'reject' | 'changes' | 'advance' | 'cancel'; step?: number; stepName?: string; comment?: string }
+export interface ApprovalDecision { step: number; round: number; upn: string; name: string; decision: 'approve' | 'reject' | 'changes'; at: string; comment?: string }
+export interface ApprovalReq {
+  v: 1; itemId: number; title: string; link: string; flowName: string; steps: ApprovalStep[]
+  step: number; status: ApprovalStatus; round: number
+  by: { name: string; upn: string }; at: string; dueAt?: string
+  decisions: ApprovalDecision[]; history: ApprovalEvent[]
+}

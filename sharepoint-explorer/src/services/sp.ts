@@ -6,7 +6,7 @@
 import { getClient } from '@microsoft/power-apps/data'
 import { getContext } from '@microsoft/power-apps/app'
 import baked from '../appconfig.json'
-import type { Access, AppConfig, Attachment, DashConfig, FormatRule, Backend, PermInfo, PermTarget, Principal, RoleAssign, RoleDef, VersionInfo, ViewDef, FieldKind, Page, Query, Row, SourceConfig, SpField, SpList, SpSite } from '../types'
+import type { Access, AppConfig, ApprovalFlow, ApprovalReq, Attachment, DashConfig, FormatRule, Backend, PermInfo, PermTarget, Principal, RoleAssign, RoleDef, VersionInfo, ViewDef, FieldKind, Page, Query, Row, SourceConfig, SpField, SpList, SpSite } from '../types'
 import { buildFilter, parseSearch, propOf, restName, titleField, noExpand } from '../query'
 import { accessFrom } from '../access'
 import { isEditable } from '../editable'
@@ -304,6 +304,10 @@ export const sp: Backend = {
   },
   async loadDashboard(sourceId) { return (await kvGet<DashConfig>(`dashboard:${sourceId}`)) ?? lsGet<DashConfig | null>(`spx.dash.${sourceId}`, null) },
   async saveDashboard(sourceId, cfg) { lsSet(`spx.dash.${sourceId}`, cfg); await kvSet(`dashboard:${sourceId}`, cfg) },
+  async loadApprovalFlow(sourceId) { return (await kvGet<ApprovalFlow>(`approvalflow:${sourceId}`)) ?? lsGet<ApprovalFlow | null>(`spx.aflow.${sourceId}`, null) },
+  async saveApprovalFlow(sourceId, flow) { lsSet(`spx.aflow.${sourceId}`, flow); await kvSet(`approvalflow:${sourceId}`, flow) },
+  async listApprovals(sourceId) { return (await kvList<ApprovalReq>(`approval:${sourceId}:`)).filter((r) => r && r.itemId != null) },
+  async saveApproval(sourceId, req) { await kvSet(`approval:${sourceId}:${req.itemId}`, req) },
   async loadFormat(sourceId, upn) {
     const [shared, mine] = await Promise.all([kvGet<FormatRule[]>(`format:${sourceId}`), kvGet<FormatRule[]>(`format:${sourceId}:${upn.toLowerCase()}`)])
     return { shared: shared ?? [], mine: mine ?? lsGet<FormatRule[]>(`spx.format.${sourceId}.${upn}`, []) }
@@ -376,11 +380,6 @@ export const sp: Backend = {
     const url = d?.sharingLinkInfo?.Url ?? d?.d?.ShareLink?.sharingLinkInfo?.Url ?? d?.ShareLink?.sharingLinkInfo?.Url
     if (!url) throw new Error('SharePoint did not return a sharing link. Sharing may be turned off for this site.')
     return String(url)
-  },
-
-  async sendMail(src, to, subject, html) {
-    await http(src.siteUrl, 'POST', '_api/SP.Utilities.Utility.SendEmail',
-      { properties: { __metadata: { type: 'SP.Utilities.EmailProperties' }, To: { results: to }, Subject: subject, Body: html, AdditionalHeaders: { __metadata: { type: 'Collection(SP.KeyValue)' }, results: [{ __metadata: { type: 'SP.KeyValue' }, Key: 'content-type', Value: 'text/html', ValueType: 'Edm.String' }] } } }, VERBOSE)
   },
 
   /* ---------------------------------------------------------------- security */
@@ -530,6 +529,22 @@ async function kvGet<T>(key: string, strict = false): Promise<T | null> {
     if (strict && !/HTTP 404|List '[^']*' does not exist|does not exist at site|not found/i.test((e as Error).message) ) throw new Error(`Could not read the app settings list on ${site}: ${(e as Error).message}`)
     return null
   }
+}
+
+async function kvList<T>(prefix: string): Promise<T[]> {
+  const site = cfgSite(); if (!site) return []
+  const out: T[] = []
+  let uri: string | undefined = `${cfgUri()}/items?$select=Id,Title,ConfigJson&$filter=${enc(`startswith(Title,${odataQuote(prefix)})`)}&$top=2000`
+  try {
+    for (let i = 0; uri && i < 25; i++) {
+      const d = await http(site, 'GET', uri)
+      for (const it of rows(d)) { try { if (it.ConfigJson) out.push(JSON.parse(it.ConfigJson) as T) } catch { /* skip a damaged entry */ } }
+      const link: string | undefined = d?.['odata.nextLink'] ?? d?.['@odata.nextLink']
+      const k = link ? link.indexOf('_api/') : -1
+      uri = k >= 0 ? link!.slice(k) : undefined
+    }
+  } catch (e) { if (!/HTTP 404|does not exist|not found/i.test((e as Error).message)) throw e }
+  return out
 }
 
 async function kvSet(key: string, value: unknown, siteArg?: string): Promise<void> {
