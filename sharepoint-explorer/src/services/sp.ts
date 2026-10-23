@@ -310,6 +310,7 @@ export const sp: Backend = {
   async saveAssistants(cfg) { lsSet('spx.assistants', cfg); await kvSet('assistants', cfg) },
   agentConnector: () => !!studioKey(),
   askAgent: (agent, message, conv) => askStudio(agent, message, conv),
+  listAgents: () => listStudioAgents(),
   async loadApprovalFlow(sourceId) { return (await kvGet<ApprovalFlow>(`approvalflow:${sourceId}`)) ?? lsGet<ApprovalFlow | null>(`spx.aflow.${sourceId}`, null) },
   async saveApprovalFlow(sourceId, flow) { lsSet(`spx.aflow.${sourceId}`, flow); await kvSet(`approvalflow:${sourceId}`, flow) },
   async listApprovals(sourceId) { return (await kvList<ApprovalReq>(`approval:${sourceId}:`)).filter((r) => r && r.itemId != null) },
@@ -675,34 +676,61 @@ export async function diagnose(testSite?: string): Promise<Check[]> {
 /* ------------------------------------------------------------------ Copilot Studio agent (connector "Execute Agent and wait") */
 const studioKey = () => Object.entries<any>(dataSourcesInfo).find(([k, v]) => isConnectorSource(v) && isStudio(k, v))?.[0]
 const pickText = (o: any, ...names: string[]) => { for (const n of names) for (const k of Object.keys(o ?? {})) if (k.toLowerCase() === n.toLowerCase() && o[k] != null) return o[k]; return undefined }
+const opOf = (apis: Record<string, any>, ...wanted: string[]) => { for (const w of wanted) { const n = Object.keys(apis).find((k) => norm(k) === norm(w)); if (n) return n } return undefined }
+
+/** raw error details for the UI: the host gives no status / request id when the request never got an HTTP answer */
+function studioError(res: any, operation: string, t0: number): Error & { status?: number; requestId?: string; elapsedMs: number; operation: string } {
+  const e = res?.error
+  const msg = String(e?.message ?? (typeof e === 'string' ? e : JSON.stringify(e ?? 'The agent call failed')))
+  const status = Number(e?.status ?? e?.statusCode ?? 0) || undefined
+  const elapsedMs = Date.now() - t0
+  let text = msg
+  if (/not sent or there was no response/i.test(msg) && !status) text = `${msg} (no HTTP status and no request id: the Power Apps host got no reply after ${(elapsedMs / 1000).toFixed(0)} s. Usually the "Execute Agent and wait" call outlived the player's timeout, or the browser / network blocked the call to the connector gateway.)`
+  return Object.assign(new Error(text), { status, requestId: e?.requestId as string | undefined, elapsedMs, operation })
+}
+
+/** Fast GET: proves the connection, consent and gateway work, and returns the agent schema names this connection can see. */
+async function listStudioAgents(): Promise<{ name: string; schema: string }[]> {
+  const key = studioKey(); if (!key) throw new Error('The Copilot Studio connector is not attached to this app.')
+  const op = opOf(dataSourcesInfo[key]?.apis ?? {}, 'ListCopilots'); if (!op) return []
+  const t0 = Date.now()
+  const res: any = await sdk().executeAsync({ connectorOperation: { tableName: key, operationName: op } } as any)
+  if (!res?.success) throw studioError(res, op, t0)
+  const d = typeof res.data === 'string' ? JSON.parse(res.data) : res.data
+  const list: any[] = d?.copilotsList ?? d?.entities ?? d?.value ?? (Array.isArray(d) ? d : [])
+  return list.map((x) => {
+    const attrs: Record<string, string> = {}
+    for (const a of x?.attributes ?? []) if (a?.key) attrs[String(a.key).toLowerCase()] = String(a.value ?? '')
+    return { name: String(x?.name ?? attrs.name ?? ''), schema: String(x?.schemaname ?? x?.schemaName ?? attrs.schemaname ?? '') }
+  }).filter((x) => x.schema)
+}
 
 async function askStudio(agent: string, message: string, conv?: string): Promise<AgentReply> {
   const key = studioKey()
   if (!key) throw new Error('The Copilot Studio connector is not attached to this app. Re-run Deploy.cmd and choose to add the Copilot Studio connection (or run: pac code add-data-source -a shared_microsoftcopilotstudio -c <connection id>), then republish.')
   const apis = dataSourcesInfo[key]?.apis ?? {}
-  const opName = Object.keys(apis).find((n) => norm(n) === 'executecopilotasyncv2') ?? Object.keys(apis).find((n) => norm(n) === 'executecopilotasync') ?? Object.keys(apis).find((n) => norm(n) === 'executecopilot')
+  const opName = opOf(apis, 'ExecuteCopilotAsyncV2')   // the only operation that returns the answer synchronously (executeAsync 502s, execute is fire-and-forget)
   if (!opName) throw new Error(`The Copilot Studio connector in this app does not list the "ExecuteCopilotAsyncV2" operation (found: ${Object.keys(apis).join(', ') || 'none'}). Re-add the connector with the latest pac CLI.`)
+  // keyed by swagger parameter NAME, exactly what pac's generated MicrosoftCopilotStudioService sends: Copilot (path) = agent schema name, body = { notificationUrl, message }, x-ms-conversation-id (header)
   const params: Record<string, unknown> = {}
-  const body: Record<string, unknown> = { message, notificationUrl: 'https://notificationurlplaceholder' }
-  if (conv) body.conversationId = conv
   for (const p of (apis[opName].parameters ?? []) as any[]) {
-    if (p.name === 'connectionId') continue
-    if (p.in === 'path') params[p.name] = agent
-    else if (p.in === 'body') params[p.name] = body
+    if (p.in === 'path' && p.name !== 'connectionId') params[p.name] = agent.trim()
+    else if (p.in === 'body') params[p.name] = { notificationUrl: 'https://notificationurlplaceholder', message }
     else if (p.in === 'header' && /conversation/i.test(p.name) && conv) params[p.name] = conv
   }
+  const t0 = Date.now()
   const res: any = await sdk().executeAsync({ connectorOperation: { tableName: key, operationName: opName, parameters: params } } as any)
   if (!res?.success) {
-    const e = res?.error, t = String(e?.message ?? (typeof e === 'string' ? e : JSON.stringify(e ?? 'The agent call failed')))
-    if (/not found|404|BotNotFound/i.test(t)) throw new Error(`Agent “${agent}” was not found. Use the agent's schema name (Copilot Studio → Settings → Advanced → Metadata), spelled exactly, and make sure the agent is published. ${t}`)
-    if (/401|403|forbidden|unauthor/i.test(t)) throw new Error(`The agent refused access (${t}). The agent must be published and shared with your users, and your Copilot Studio connection must be valid.`)
-    throw new Error(t)
+    const err = studioError(res, opName, t0), t = err.message
+    if (/not found|404|BotNotFound/i.test(t)) throw new Error(`Agent “${agent}” was not found. Use the agent's schema name exactly (the “Find my agents” button lists them), and make sure the agent is published. ${t}`)
+    if (/401|403|forbidden|unauthor/i.test(t)) throw new Error(`The agent refused access (${t}). The agent must be published, use “Authenticate with Microsoft”, and your Copilot Studio connection must be valid.`)
+    throw err
   }
   let d: any = res.data
   if (typeof d === 'string') { try { d = JSON.parse(d) } catch { d = { lastResponse: d } } }
+  if (d == null) throw new Error(`The agent call returned no content after ${((Date.now() - t0) / 1000).toFixed(1)} s. The connector accepted the request but produced no answer - check that the agent is published and completes a turn.`)
   const all = ([] as unknown[]).concat(pickText(d, 'responses') ?? []).map((x) => String(x))
-  const last = pickText(d, 'lastResponse') ?? all[all.length - 1] ?? ''
-  const text = String(last)
+  const text = String(pickText(d, 'lastResponse') ?? all[all.length - 1] ?? '')
   if (/preview has ended|enhanced task completion/i.test(text)) throw new Error('This agent was built with the new agentic (“GitHub Copilot harness”) experience, which the Copilot Studio connector cannot call yet. Use a classic Copilot Studio agent, or add it here as a link.')
   return { text, conversationId: (pickText(d, 'conversationId') ?? pickText(d, 'conversationID')) as string | undefined, all }
 }

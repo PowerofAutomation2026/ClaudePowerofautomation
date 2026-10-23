@@ -190,6 +190,8 @@ export interface Backend {
   saveAssistants(cfg: AssistantConfig): Promise<void>
   /** true when the Copilot Studio connector is attached to the app */
   agentConnector(): boolean
+  /** agents the user's Copilot Studio connection can see (schema names) */
+  listAgents(): Promise<{ name: string; schema: string }[]>
   askAgent(agent: string, message: string, conversationId?: string): Promise<AgentReply>
   loadApprovalFlow(sourceId: string): Promise<ApprovalFlow | null>
   saveApprovalFlow(sourceId: string, flow: ApprovalFlow): Promise<void>

@@ -195,6 +195,7 @@ export const demo: Backend = {
   async loadAssistants() { return lsGet<AssistantConfig | null>('spx.demo.assistants', null) },
   async saveAssistants(cfg) { lsSet('spx.demo.assistants', cfg) },
   agentConnector: () => true,
+  async listAgents() { await sleep(300); return [{ name: 'Customer Helper', schema: 'cr123_custHelper' }, { name: 'HR Policy Bot', schema: 'cr123_hrBot' }] },
   async askAgent(agent, message, conv) {
     await sleep(900)
     const ctx = /\[CONTEXT\]([\s\S]*?)\[\/CONTEXT\]/.exec(message), q = message.replace(/\[CONTEXT\][\s\S]*?\[\/CONTEXT\]/, '').trim()

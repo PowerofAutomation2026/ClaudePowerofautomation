@@ -182,10 +182,35 @@ function AssistantEditor({ engine, a, onSave, onClose }: { engine: Engine; a: As
   const url = goodUrl(d.url)
   const hostOk = !!url && LINK_HOSTS.test(url.hostname)
   const valid = !!d.name.trim() && (d.kind === 'studio' ? !!d.agent?.trim() : !!url)
+  const [steps, setSteps] = useState<{ ok: boolean | null; text: string }[]>([])
+  const [found, setFound] = useState<{ name: string; schema: string }[] | null>(null)
+  const [finding, setFinding] = useState(false)
+  const [clock, setClock] = useState(0)
+  useEffect(() => { if (!testing) return; const t0 = Date.now(), t = setInterval(() => setClock(Math.round((Date.now() - t0) / 1000)), 1000); return () => clearInterval(t) }, [testing])
+  const findAgents = async () => {
+    setFinding(true); setFound(null)
+    try { setFound(await engine.backend.listAgents()); setTest(null) }
+    catch (e) { setTest({ ok: false, text: `Could not list agents: ${(e as Error).message}` }) } finally { setFinding(false) }
+  }
   const runTest = async () => {
-    setTesting(true); const t0 = Date.now()
-    try { const r = await engine.backend.askAgent(d.agent!.trim(), 'ping'); setTest({ ok: true, text: `Connected in ${((Date.now() - t0) / 1000).toFixed(1)} s. Agent answered: “${r.text.slice(0, 160)}”${r.conversationId ? ' · conversation id returned (multi-turn chat works)' : ' · no conversation id returned (the app will carry short history itself)'}` }) }
-    catch (e) { setTest({ ok: false, text: (e as Error).message }) } finally { setTesting(false) }
+    const name = d.agent!.trim(); setTesting(true); setClock(0); setTest(null)
+    const out: { ok: boolean | null; text: string }[] = []; const push = (ok: boolean | null, text: string) => { out.push({ ok, text }); setSteps([...out]) }
+    setSteps([])
+    try {
+      push(engine.backend.agentConnector(), engine.backend.agentConnector() ? 'Copilot Studio connector is attached to this app.' : 'The Copilot Studio connector is not attached to this app.')
+      if (!engine.backend.agentConnector()) return
+      try {   // fast check first: proves connection, consent and gateway work, and shows the exact agent names
+        const list = await engine.backend.listAgents()
+        setFound(list)
+        const hit = list.find((x) => x.schema === name)
+        push(list.length ? !!hit : null, list.length ? (hit ? `Your Copilot Studio connection sees “${hit.name || hit.schema}”.` : `Your connection sees ${list.length} agent(s) but none named “${name}”. Pick one from the list below (names are case-sensitive).`) : 'Connection works (the agent list was empty — the agent may not be published or shared with this connection).')
+        if (list.length && !hit) return
+      } catch (e) { push(false, `Could not reach Copilot Studio through the connector: ${(e as Error).message}`); return }
+      const t0 = Date.now()
+      const r = await Promise.race([engine.backend.askAgent(name, 'ping'), new Promise<never>((_, rej) => setTimeout(() => rej(new Error('No answer after 150 s. The agent may be waiting for sign-in or input (set it to “Authenticate with Microsoft”), or the player timed out.')), 150_000))])
+      push(true, `Agent answered in ${((Date.now() - t0) / 1000).toFixed(1)} s: “${r.text.slice(0, 120)}”${r.conversationId ? ' · multi-turn chat works' : ' · no conversation id returned (the app will carry short history itself)'}`)
+      setTest({ ok: true, text: 'Connection works.' })
+    } catch (e) { const x = e as Error & { status?: number; requestId?: string }; push(false, `${x.message}${x.status ? ` [HTTP ${x.status}${x.requestId ? `, request ${x.requestId}` : ''}]` : ''}`) } finally { setTesting(false) }
   }
   return (
     <Modal title={a.name ? 'Edit assistant' : d.kind === 'studio' ? 'Add Copilot Studio agent' : 'Add agent link'} onClose={onClose}>
@@ -194,9 +219,12 @@ function AssistantEditor({ engine, a, onSave, onClose }: { engine: Engine; a: As
         {d.kind === 'studio' ? <>
           <label className="small">Agent schema name <span className="muted">(Copilot Studio → Settings → Advanced → Metadata; case-sensitive)</span><input className="input" value={d.agent ?? ''} onChange={(e) => set({ agent: e.target.value })} placeholder="cr123_hrHelper" autoComplete="off" /></label>
           <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-            <button type="button" className="btn" disabled={testing || !d.agent?.trim()} onClick={() => void runTest()}><Icon n="bolt" size={14} />{testing ? 'Testing…' : 'Test connection'}</button>
-            {test && <span className={`small ${test.ok ? '' : ''}`} role="status" style={{ color: test.ok ? 'var(--good)' : 'var(--bad)', flex: 1 }}>{test.ok ? '✔ ' : '✖ '}{test.text}</span>}
+            <button type="button" className="btn" disabled={finding} onClick={() => void findAgents()}><Icon n="search" size={14} />{finding ? 'Looking…' : 'Find my agents'}</button>
+            <button type="button" className="btn" disabled={testing || !d.agent?.trim()} onClick={() => void runTest()}><Icon n="bolt" size={14} />{testing ? `Testing… ${clock}s` : 'Test connection'}</button>
           </div>
+          {found && <ul className="feed" style={{ margin: 0, padding: 0, listStyle: 'none', maxHeight: 150, overflow: 'auto' }} aria-label="Agents your connection can see">{found.length === 0 ? <li className="muted">No agents found for this connection.</li> : found.map((f) => <li key={f.schema}><button type="button" className="btn ghost" style={{ width: '100%', textAlign: 'left' }} onClick={() => set({ agent: f.schema, name: d.name || f.name })}>{f.name || f.schema} <span className="muted small">· {f.schema}</span></button></li>)}</ul>}
+          {steps.length > 0 && <div role="status" aria-live="polite" style={{ display: 'grid', gap: 4 }}>{steps.map((x, i) => <div key={i} className="small" style={{ color: x.ok === false ? 'var(--bad)' : x.ok ? 'var(--good)' : 'var(--muted)' }}>{x.ok === false ? '✖ ' : x.ok ? '✔ ' : '• '}{x.text}</div>)}</div>}
+          {test && !test.ok && <div className="small" style={{ color: 'var(--bad)' }} role="alert">{test.text}</div>}
         </> : <>
           <label className="small">Agent chat link <span className="muted">(Agent Builder: hover the agent → More → Share → copy the link; or a Copilot Studio web-chat / Teams link)</span><input className="input" type="url" value={d.url ?? ''} onChange={(e) => set({ url: e.target.value })} placeholder="https://m365.cloud.microsoft/chat/…" /></label>
           {d.url && !url && <div className="small" style={{ color: 'var(--bad)' }}>Enter a full https:// link.</div>}
