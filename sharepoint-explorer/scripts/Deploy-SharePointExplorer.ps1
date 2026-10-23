@@ -199,11 +199,14 @@ try {
     try { $j = ([System.IO.File]::ReadAllText($cfgPath).TrimStart([char]0xFEFF)) | ConvertFrom-Json; $r = $j.connectionReferences.PSObject.Properties | Where-Object { $_.Name -match '(?i)sharepointonline' } | Select-Object -First 1; if ($r) { return @($r.Value.dataSources).Count } } catch { }
     return 0
   }
-  function Has-Sp {   # a tabular SharePoint registration is keyed by the LIST name in dataSourcesInfo.ts (no connector name inside), so look for its other traces
-    $sp = Get-SchemaPath; if (-not $sp) { return $false }
-    $hasEntry = ([System.IO.File]::ReadAllText((Join-Path $root $sp)) -match '["'']?tableId["'']?\s*:\s*["''][^"'']+["'']')
-    $trace = (Test-Path (Join-Path $root '.power\schemas\sharepointonline')) -or ((Sp-Count) -gt 0)
-    return ($hasEntry -and $trace)
+  function Has-Sp {   # SharePoint can be registered two ways: tabular (entry keyed by LIST name, real tableId, no connector name) or action-style (entry keyed "sharepointonline"). Either is fine for the app.
+    $sp = Get-SchemaPath
+    if ($sp) {
+      $txt = [System.IO.File]::ReadAllText((Join-Path $root $sp))
+      if ($txt -match '(?i)sharepointonline') { return $true }
+      if ($txt -match '["'']?tableId["'']?\s*:\s*["''][^"'']+["'']') { return $true }   # a real list entry: the only tabular connector this app registers is SharePoint
+    }
+    return $false
   }
   function Reset-Pac {   # forget what pac believes is registered so the next add writes everything again
     $raw = if (Test-Path $cfgPath) { [System.IO.File]::ReadAllText($cfgPath).TrimStart([char]0xFEFF) } else { $null }
@@ -219,7 +222,7 @@ try {
     $said = $o -match '(?i)added successfully|already (exists|added|registered)'
     if ($said -or ($code -eq 0 -and $o -notmatch '(?i)(^|\n)\s*error|failed')) {
       $ok = if ($Needle -eq 'sharepointonline') { Has-Sp } else { Schema-Has $Needle }
-      if (-not $ok) { Warn "pac reported success for $ApiName but its generated files do not show it yet - continuing (checked again after all connectors are added)." }
+      if (-not $ok) { if ($Needle -eq 'sharepointonline') { return $false }; Warn "pac reported success for $ApiName but its generated files do not show it yet - continuing (checked again after all connectors are added)." }
       return $true
     }
     return $false
@@ -239,7 +242,7 @@ try {
     return @($names | Select-Object -Unique -First 12)
   }
   function Add-SharePoint {
-    if (Add-Src $api $conn.Id 'sharepointonline' @()) { return $true }
+    # (a bare add without a list is NOT used: pac answers 'success' but writes nothing for SharePoint)
     $sites = @($ConfigSiteUrl)
     $dsOut = Invoke-PacText @('code','list-datasets','-a',$api,'-c',$conn.Id)
     $sites += @([regex]::Matches($dsOut, 'https://[A-Za-z0-9.\-]+\.sharepoint\.[a-z]+/[^\s"''|,;]*') | ForEach-Object { $_.Value.TrimEnd('/') } | Select-Object -Unique -First 5)
@@ -333,7 +336,7 @@ try {
   # the SharePoint data source key pac generated (the entry with a real tableId) must be inside the built app
   $dsKey = $null
   $sf = Get-SchemaPath
-  if ($sf) { $m = [regex]::Match([System.IO.File]::ReadAllText((Join-Path $root $sf)), '["'']?([A-Za-z0-9_\-]+)["'']?\s*:\s*\{\s*["'']?tableId["'']?\s*:\s*["''][^"'']+["'']'); if ($m.Success) { $dsKey = $m.Groups[1].Value } }
+  if ($sf) { $txt = [System.IO.File]::ReadAllText((Join-Path $root $sf)); $m = [regex]::Match($txt, '["'']?([A-Za-z0-9_\-]+)["'']?\s*:\s*\{\s*["'']?tableId["'']?\s*:\s*["''][^"'']+["'']'); if ($m.Success) { $dsKey = $m.Groups[1].Value } elseif ($txt -match '(?i)["'']?(sharepointonline)["'']?\s*:') { $dsKey = $Matches[1] } }
   if ($dsKey) {
     if (-not (Select-String -Path (Join-Path $root 'dist\assets\*.js') -Pattern ([regex]::Escape($dsKey)) -Quiet)) { throw "The built app does not contain the SharePoint data source '$dsKey': it would run without live data. Check the pac output above and run again." }
     Ok "Bundle contains the SharePoint data source '$dsKey'"
