@@ -190,19 +190,38 @@ try {
   # pac REGENERATES .power\...\dataSourcesInfo.ts on every `add-data-source` (it does not merge) and writes nothing when it answers "already exists".
   # So: add the optional Copilot Studio connector FIRST, SharePoint LAST, then check the generated file really holds each one.
   function Get-SchemaPath { @('.power\schemas\appschemas\dataSourcesInfo.ts', '.power\appschemas\dataSourcesInfo.ts') | Where-Object { Test-Path (Join-Path $root $_) } | Select-Object -First 1 }
-  function Schema-Has([string]$needle) { $sp = Get-SchemaPath; if (-not $sp) { return $false }; return ([System.IO.File]::ReadAllText((Join-Path $root $sp)) -match "(?i)$needle") }
+  function Schema-Has([string]$needle) {   # text inside the generated dataSourcesInfo.ts (action-style sources such as Copilot Studio are keyed by connector name there)
+    $sp = Get-SchemaPath; if (-not $sp) { return $false }
+    return ([System.IO.File]::ReadAllText((Join-Path $root $sp)) -match "(?i)$needle")
+  }
+  function Sp-Count {   # how many SharePoint data sources power.config.json lists
+    if (-not (Test-Path $cfgPath)) { return 0 }
+    try { $j = ([System.IO.File]::ReadAllText($cfgPath).TrimStart([char]0xFEFF)) | ConvertFrom-Json; $r = $j.connectionReferences.PSObject.Properties | Where-Object { $_.Name -match '(?i)sharepointonline' } | Select-Object -First 1; if ($r) { return @($r.Value.dataSources).Count } } catch { }
+    return 0
+  }
+  function Has-Sp {   # a tabular SharePoint registration is keyed by the LIST name in dataSourcesInfo.ts (no connector name inside), so look for its other traces
+    $sp = Get-SchemaPath; if (-not $sp) { return $false }
+    $hasEntry = ([System.IO.File]::ReadAllText((Join-Path $root $sp)) -match '["'']?tableId["'']?\s*:\s*["''][^"'']+["'']')
+    $trace = (Test-Path (Join-Path $root '.power\schemas\sharepointonline')) -or ((Sp-Count) -gt 0)
+    return ($hasEntry -and $trace)
+  }
   function Reset-Pac {   # forget what pac believes is registered so the next add writes everything again
     $raw = if (Test-Path $cfgPath) { [System.IO.File]::ReadAllText($cfgPath).TrimStart([char]0xFEFF) } else { $null }
     if ($raw) { try { $j = $raw | ConvertFrom-Json; foreach ($k in 'connectionReferences','databaseReferences','dataSources') { if ($j.PSObject.Properties[$k]) { $j.$k = [pscustomobject]@{} } }; [System.IO.File]::WriteAllText($cfgPath, ($j | ConvertTo-Json -Depth 20), $utf8NoBom) } catch { } }
     $dp = Join-Path $root '.power'; if (Test-Path $dp) { Remove-Item $dp -Recurse -Force }
   }
-  function Add-Src([string]$ApiName, [string]$ConnId, [string]$Needle, [string[]]$Extra) {   # true only when the generated schema afterwards contains $Needle
+  function Add-Src([string]$ApiName, [string]$ConnId, [string]$Needle, [string[]]$Extra) {   # true when pac said it worked (words + exit code), then verified
     $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-    $o = (& pac code add-data-source -a $ApiName -c $ConnId @Extra 2>&1) | Out-String
+    $o = ((& pac code add-data-source -a $ApiName -c $ConnId @Extra 2>&1) | ForEach-Object { "$_" }) -join "`n"
     $code = $LASTEXITCODE
     $ErrorActionPreference = $prev
-    if ($code -eq 0 -or $o -match '(?i)already') { if (Schema-Has $Needle) { return $true } }
-    Write-Host "    (pac said: $(($o -replace '\s+',' ').Trim()))" -ForegroundColor DarkGray
+    $script:lastPacOutput = $o
+    $said = $o -match '(?i)added successfully|already (exists|added|registered)'
+    if ($said -or ($code -eq 0 -and $o -notmatch '(?i)(^|\n)\s*error|failed')) {
+      $ok = if ($Needle -eq 'sharepointonline') { Has-Sp } else { Schema-Has $Needle }
+      if (-not $ok) { Warn "pac reported success for $ApiName but its generated files do not show it yet - continuing (checked again after all connectors are added)." }
+      return $true
+    }
     return $false
   }
   # SharePoint is a *tabular* connector: pac wants one site (dataset) and one existing list (table) to register it. The app itself
@@ -230,6 +249,7 @@ try {
         if (Add-Src $api $conn.Id 'sharepointonline' @('-d', $site, '-t', $t)) { Ok "Registered the SharePoint connector (using $site / $t just to register it - you choose the real list in the app's Connect screen)"; return $true }
       }
     }
+    Write-Host "    (last pac output: $(($script:lastPacOutput -replace '\s+',' ').Trim()))" -ForegroundColor DarkGray
     return $false
   }
 
@@ -256,7 +276,7 @@ try {
     $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     $null = (& node -e "const fs=require('fs');require('esbuild').transformSync(fs.readFileSync(process.argv[1],'utf8'),{loader:'ts'})" $file 2>&1)
     $okParse = ($LASTEXITCODE -eq 0); $ErrorActionPreference = $prev
-    if (-not $okParse -or -not (Schema-Has 'sharepointonline') -or -not (Schema-Has 'copilotstudio')) { [System.IO.File]::WriteAllText($file, $cur, $utf8NoBom); return $false }
+    if (-not $okParse -or -not (Has-Sp) -or -not (Schema-Has 'copilotstudio')) { [System.IO.File]::WriteAllText($file, $cur, $utf8NoBom); return $false }
     return $true
   }
   # optional Copilot Studio agent chat: decide first (connection / question), add it before SharePoint
@@ -275,8 +295,10 @@ try {
       if ($wantCs -and -not $csConn) { Warn 'No Copilot Studio connection found - skipping agent chat (agents can still be added as links in the app).'; $wantCs = $false }
     } catch { Warn "Copilot Studio step skipped: $($_.Exception.Message)"; $wantCs = $false }
   }
+  # an earlier broken run may have registered SharePoint many times: start clean so exactly one registration remains
+  if ((Sp-Count) -gt 1) { Warn "power.config.json lists $(Sp-Count) SharePoint registrations from earlier runs - cleaning up."; Reset-Pac }
   # a stale schema from an earlier deploy must not satisfy the checks below
-  if ((Schema-Has 'copilotstudio') -and -not (Schema-Has 'sharepointonline')) { Warn 'The generated schema from an earlier run has no SharePoint source - starting clean.'; Reset-Pac }
+  if ((Schema-Has 'copilotstudio') -and -not (Has-Sp)) { Warn 'The generated schema from an earlier run has no SharePoint source - starting clean.'; Reset-Pac }
   if ($wantCs) {
     Step 'Wiring the Copilot Studio connector (agent chat)'
     try { if (Add-Src $csApi $csConn.Id 'copilotstudio' @()) { Ok 'Copilot Studio connector added'; $csSchemaText = [System.IO.File]::ReadAllText((Join-Path $root (Get-SchemaPath))) } else { Warn 'Could not add the Copilot Studio connector - continuing with SharePoint only.'; $wantCs = $false } } catch { Warn "Copilot Studio step skipped: $($_.Exception.Message)"; $wantCs = $false }
@@ -295,8 +317,8 @@ try {
     else { Warn "Your pac version keeps only the last connector it registers (PowerAppsCodeApps issue 366), so agent chat is not included in this build. Update pac ('pac install latest' or 'dotnet tool update --global Microsoft.PowerApps.CLI.Tool') and run again with -AddCopilotStudio. Agents can still be added as links in the app." }
   }
   $schema = Get-SchemaPath
-  if (-not $schema -or -not (Schema-Has 'sharepointonline')) { throw 'The generated data-source schema (.power\schemas\appschemas\dataSourcesInfo.ts) has no SharePoint source: the app would show no SharePoint data. Delete power.config.json and the .power folder, then run this script again.' }
-  Write-Host "    data sources in schema: $((([regex]::Matches([System.IO.File]::ReadAllText((Join-Path $root $schema)), '(?i)shared_[a-z0-9_]+') | ForEach-Object { $_.Value.ToLower() } | Select-Object -Unique) -join ', '))" -ForegroundColor DarkGray
+  if (-not $schema -or -not (Has-Sp)) { throw 'The generated data-source schema (.power\schemas\appschemas\dataSourcesInfo.ts) has no SharePoint source (looked for a list entry plus .power\schemas\sharepointonline or power.config.json): the app would show no SharePoint data. Delete power.config.json and the .power folder, then run this script again.' }
+  Write-Host "    data sources in schema: $((([regex]::Matches([System.IO.File]::ReadAllText((Join-Path $root $schema)), '(?m)^\s*["'']?([A-Za-z0-9_\-]+)["'']?\s*:\s*\{') | ForEach-Object { $_.Groups[1].Value } | Where-Object { $_ -notin 'dataSourcesInfo','apis' }) -join ', '))" -ForegroundColor DarkGray
   Ok "Data-source schema present ($schema)"
 
   # ---------- 7. build ----------
@@ -308,9 +330,14 @@ try {
   }
   if (-not (Test-Path (Join-Path $root 'dist\index.html'))) { throw 'Build produced no dist\index.html' }
   Ok 'Build OK'
-  # the SharePoint data source must be inside the built app (a generic word like dataSourceType would also be in our own code)
-  if (-not (Select-String -Path (Join-Path $root 'dist\assets\*.js') -Pattern 'shared_sharepointonline' -Quiet)) { throw "The built app does not contain the SharePoint data source: it would run without live data. Check the pac output above and run again." }
-  Ok 'Bundle contains the SharePoint data source'
+  # the SharePoint data source key pac generated (the entry with a real tableId) must be inside the built app
+  $dsKey = $null
+  $sf = Get-SchemaPath
+  if ($sf) { $m = [regex]::Match([System.IO.File]::ReadAllText((Join-Path $root $sf)), '["'']?([A-Za-z0-9_\-]+)["'']?\s*:\s*\{\s*["'']?tableId["'']?\s*:\s*["''][^"'']+["'']'); if ($m.Success) { $dsKey = $m.Groups[1].Value } }
+  if ($dsKey) {
+    if (-not (Select-String -Path (Join-Path $root 'dist\assets\*.js') -Pattern ([regex]::Escape($dsKey)) -Quiet)) { throw "The built app does not contain the SharePoint data source '$dsKey': it would run without live data. Check the pac output above and run again." }
+    Ok "Bundle contains the SharePoint data source '$dsKey'"
+  } else { Warn 'Could not read the SharePoint data-source key from the generated schema; skipping the bundle check.' }
   $pkgVer = (Get-Content (Join-Path $root 'package.json') -Raw | ConvertFrom-Json).version
   Ok "Build stamp: v$pkgVer (shown in the app footer)"
 
