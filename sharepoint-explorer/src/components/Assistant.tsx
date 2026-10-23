@@ -203,14 +203,14 @@ function AssistantEditor({ engine, a, onSave, onClose }: { engine: Engine; a: As
         const list = await engine.backend.listAgents()
         setFound(list)
         const hit = list.find((x) => x.schema === name)
-        push(list.length ? !!hit : null, list.length ? (hit ? `Your Copilot Studio connection sees “${hit.name || hit.schema}”.` : `Your connection sees ${list.length} agent(s) but none named “${name}”. Pick one from the list below (names are case-sensitive).`) : 'Connection works. (The agent list is empty: Microsoft’s list only shows agents you can edit, so this is normal for agents that were shared with you. Continuing with the agent name you typed.)')
+        push(list.length ? !!hit : null, list.length ? (hit ? `Your Copilot Studio connection sees “${hit.name || hit.schema}”.` : `Your connection sees ${list.length} agent(s) but none named “${name}”. Pick one from the list below (names are case-sensitive).`) : 'Connection works, but it sees NO classic agents. If your agent was built in the new Copilot Studio experience (left menu shows Skills / Connected agents / Authoring canvas, no Topics) the Copilot Studio connector cannot call it — Microsoft confirms this limitation. Trying the name you typed anyway…')
         if (list.length && !hit) return
       } catch (e) { push(false, `Could not reach Copilot Studio through the connector: ${(e as Error).message}`); return }
       const t0 = Date.now()
       const r = await Promise.race([engine.backend.askAgent(name, 'ping'), new Promise<never>((_, rej) => setTimeout(() => rej(new Error('No answer after 150 s. The agent may be waiting for sign-in or input (set it to “Authenticate with Microsoft”), or the player timed out.')), 150_000))])
       push(true, `Agent answered in ${((Date.now() - t0) / 1000).toFixed(1)} s: “${r.text.slice(0, 120)}”${r.conversationId ? ' · multi-turn chat works' : ' · no conversation id returned (the app will carry short history itself)'}`)
       setTest({ ok: true, text: 'Connection works.' })
-    } catch (e) { const x = e as Error & { status?: number; requestId?: string }; push(false, `${x.message}${x.status ? ` [HTTP ${x.status}${x.requestId ? `, request ${x.requestId}` : ''}]` : ''}`) } finally { setTesting(false) }
+    } catch (e) { const x = e as Error & { status?: number; requestId?: string }; if (/not found|404/i.test(x.message)) push(null, 'Most likely cause: this is a new-experience (GitHub Copilot harness) agent. Fix: create a classic (standard) agent in Copilot Studio, publish it, set Authentication to “Authenticate with Microsoft”, then press Find my agents. Or add this agent as a link instead.'); push(false, `${x.message}${x.status ? ` [HTTP ${x.status}${x.requestId ? `, request ${x.requestId}` : ''}]` : ''}`) } finally { setTesting(false) }
   }
   return (
     <Modal title={a.name ? 'Edit assistant' : d.kind === 'studio' ? 'Add Copilot Studio agent' : 'Add agent link'} onClose={onClose}>
@@ -218,6 +218,7 @@ function AssistantEditor({ engine, a, onSave, onClose }: { engine: Engine; a: As
         <label className="small">Display name<input className="input" value={d.name} onChange={(e) => set({ name: e.target.value })} maxLength={60} placeholder="e.g. HR Policy Helper" /></label>
         {d.kind === 'studio' ? <>
           <label className="small">Agent schema name <span className="muted">(Copilot Studio → Settings → Advanced → Metadata; case-sensitive)</span><input className="input" value={d.agent ?? ''} onChange={(e) => set({ agent: e.target.value })} placeholder="cr123_hrHelper" autoComplete="off" /></label>
+          <div className="banner info small" role="note"><Icon n="info" /><div style={{ flex: 1 }}>Works with <b>classic (standard) Copilot Studio agents</b> that are published. Agents from the newer experience (Skills / Connected agents / Authoring canvas, no Topics) can’t be called by Microsoft’s connector yet — add those as a <b>link</b> instead. <a href="https://github.com/microsoft/PowerAppsCodeApps/discussions/434" target="_blank" rel="noreferrer noopener">Details</a></div></div>
           <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
             <button type="button" className="btn" disabled={finding} onClick={() => void findAgents()}><Icon n="search" size={14} />{finding ? 'Looking…' : 'Find my agents'}</button>
             <button type="button" className="btn" disabled={testing || !d.agent?.trim()} onClick={() => void runTest()}><Icon n="bolt" size={14} />{testing ? `Testing… ${clock}s` : 'Test connection'}</button>

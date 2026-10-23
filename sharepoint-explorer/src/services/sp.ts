@@ -754,7 +754,7 @@ async function askStudio(agent: string, message: string, conv?: string): Promise
   const res: any = await sdk().executeAsync({ connectorOperation: { tableName: key, operationName: opName, parameters: params } } as any)
   if (!res?.success) {
     const err = studioError(res, opName, t0), t = err.message
-    if (/not found|404|BotNotFound/i.test(t)) throw new Error(`Agent “${agent}” was not found. Use the agent's schema name exactly (the “Find my agents” button lists them), and make sure the agent is published. ${t}`)
+    if (/not found|404|BotNotFound/i.test(t)) throw new Error(`Agent “${agent}” was not found. Use the agent's schema name exactly (the “Find my agents” button lists them), and make sure the agent is published. Agents built in the newer Copilot Studio experience (Skills / Connected agents, no Topics) are not reachable through this connector - use a classic agent or add it as a link. ${t}`)
     if (/401|403|forbidden|unauthor/i.test(t)) throw new Error(`The agent refused access (${t}). The agent must be published, use “Authenticate with Microsoft”, and your Copilot Studio connection must be valid.`)
     throw err
   }
