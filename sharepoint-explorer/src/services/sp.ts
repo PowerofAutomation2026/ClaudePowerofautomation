@@ -88,6 +88,7 @@ async function slot<T>(fn: () => Promise<T>): Promise<T> {
 function friendly(raw: string): string {
   const fm = /field or property '([^']+)' does not exist|query to field '([^']+)' is not valid/i.exec(raw)
   if (fm) return `A column in this list cannot be read through SharePoint REST (${fm[1] ?? fm[2]}). The app skips it automatically — reopen the list if it still shows this. ${raw}`
+  if (/lookup column/i.test(raw)) return `SharePoint refused the query because it selects more than 12 people/lookup columns (lookup column threshold). The app retries with fewer columns automatically. ${raw}`
   if (/threshold/i.test(raw)) return 'SharePoint refused the query because it would scan more than 5,000 items without an index (list view threshold). Index the column you are filtering/sorting on (owner: Connect → Index column), or narrow the filter.'
   if (/does not exist|404/i.test(raw) && /list|site|web/i.test(raw)) return `Not found: ${raw}`
   if (/(401|403)|access denied|forbidden/i.test(raw)) return `Access denied by SharePoint - you may not have permission to this list. ${raw}`
@@ -240,7 +241,13 @@ export const sp: Backend = {
       const order = byId ? `Id ${asc ? 'asc' : 'desc'}` : `${propOf(fields.find((f) => f.internal === q.sort.field) ?? { internal: q.sort.field })} ${asc ? 'asc' : 'desc'}`
       uri = `_api/web/lists(${guid(src.listId)})/items?${selectExpand(fields, select, src.isLibrary)}&$orderby=${enc(order)}&$top=${Math.min(top, 5000)}${filter ? `&$filter=${enc(filter)}` : ''}`
     }
-    const d = await http(src.siteUrl, 'GET', uri, undefined, {}, signal)
+    let d: any
+    try { d = await http(src.siteUrl, 'GET', uri, undefined, {}, signal) }
+    catch (e) {   // too many people/lookup columns: retry once without them (the rest of the row is still useful)
+      if (!/lookup column/i.test((e as Error).message)) throw e
+      const plainSel = select.filter((n) => { const f = fields.find((x) => x.internal === n); return !(f && (f.kind === 'user' || f.kind === 'lookup')) })
+      d = await http(src.siteUrl, 'GET', uri.replace(selectExpand(fields, select, src.isLibrary), selectExpand(fields, plainSel, src.isLibrary)), undefined, {}, signal)
+    }
     const items = rows(d)
     const out = items.filter((i) => !(src.isLibrary && src.itemCount > 5000 && !q.folders && Number(i.FSObjType) === 1)).map((i) => toRow(i, fields))
     let next: string | undefined
@@ -472,14 +479,15 @@ export function selectExpand(fields: SpField[], select: string[], isLibrary: boo
   let viaText = false
   for (const n of select) {
     const f = fields.find((x) => x.internal === n)
-    if (!f || n === 'ID' || unusable.has(n) || unusable.has(propOf(f))) continue
+    if (!f || n === 'ID' || unusable.has(n) || unusable.has(propOf(f)) || (isLibrary && FILE_COLS.has(n))) continue
     const rn = propOf(f)
     if ((f.kind === 'user' || f.kind === 'lookup') && noExpand.has(rn)) { sel.add(`FieldValuesAsText/${f.internal}`); if (f.kind === 'user') sel.add(`${rn}Id`); viaText = true }
     else if (f.kind === 'user' || (f.kind === 'lookup' && f.typeAsString.startsWith('Lookup'))) { sel.add(`${rn}/${f.kind === 'lookup' ? f.lookupField || 'Title' : 'Title'}`); if (f.kind === 'user') sel.add(`${rn}/Id`); exp.add(rn) }
     else sel.add(rn)
   }
   if (isLibrary) ['FileRef', 'FileDirRef', 'FileLeafRef', 'FSObjType', 'File_x0020_Type', 'File_x0020_Size'].forEach((x) => sel.add(x))
-  const e = [...exp].slice(0, viaText ? 11 : 12)
+  const budget = 12 - (isLibrary ? 5 : 0) - (viaText ? 1 : 0)   // libraries always add 5 hidden lookup-typed columns (FileRef, FileDirRef, FSObjType, File_x0020_Size, FileLeafRef)
+  const e = [...exp].slice(0, Math.max(0, budget))
   if (viaText) e.push('FieldValuesAsText')
   return `$select=${[...sel].filter((s) => !s.includes('/') || e.includes(s.split('/')[0])).join(',')}${e.length ? `&$expand=${e.join(',')}` : ''}`
 }
@@ -497,12 +505,14 @@ async function recover<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+const FILE_COLS = new Set(['FileRef', 'FileDirRef', 'FileLeafRef', 'FSObjType', 'File_x0020_Type', 'File_x0020_Size'])
 function toRow(item: any, fields: SpField[]): Row {
   const row: Row = { __id: Number(item.Id ?? item.ID), ID: Number(item.Id ?? item.ID) }
   for (const k of ['FileRef', 'FileDirRef', 'FileLeafRef', 'File_x0020_Type']) if (item[k] != null) row[k] = item[k]
   if (item.FSObjType != null) row.FSObjType = Number(item.FSObjType)
   if (item.File_x0020_Size != null) row.File_x0020_Size = Number(item.File_x0020_Size)
   for (const f of fields) {
+    if (FILE_COLS.has(f.internal) && f.internal in row) continue   // already set above as plain values (the generic loop would turn File Size into '')
     const key = propOf(f) in item ? propOf(f) : f.internal
     const fv = item.FieldValuesAsText
     const tk = fv && (f.internal in fv ? f.internal : propOf(f) in fv ? propOf(f) : null)
@@ -685,7 +695,9 @@ function studioError(res: any, operation: string, t0: number): Error & { status?
   const status = Number(e?.status ?? e?.statusCode ?? 0) || undefined
   const elapsedMs = Date.now() - t0
   let text = msg
-  if (/not sent or there was no response/i.test(msg) && !status) text = `${msg} (no HTTP status and no request id: the Power Apps host got no reply after ${(elapsedMs / 1000).toFixed(0)} s. Usually the "Execute Agent and wait" call outlived the player's timeout, or the browser / network blocked the call to the connector gateway.)`
+  if (/not sent or there was no response/i.test(msg) && !status) text = elapsedMs < 8000
+      ? `${msg} (no HTTP status and no request id, after ${(elapsedMs / 1000).toFixed(1)} s: the Power Apps player refused or could not send the request, so it is not a slow agent. Check DevTools > Network for a blocked or CORS-failed request to the connector gateway, extensions/proxy/VPN, and that the Copilot Studio connection is Connected.)`
+      : `${msg} (no HTTP status and no request id: the player got no reply after ${(elapsedMs / 1000).toFixed(0)} s - usually the "Execute Agent and wait" call outlived the player's timeout.)`
   return Object.assign(new Error(text), { status, requestId: e?.requestId as string | undefined, elapsedMs, operation })
 }
 
@@ -717,6 +729,7 @@ async function askStudio(agent: string, message: string, conv?: string): Promise
     if (p.in === 'path' && p.name !== 'connectionId') params[p.name] = agent.trim()
     else if (p.in === 'body') params[p.name] = { notificationUrl: 'https://notificationurlplaceholder', message }
     else if (p.in === 'header' && /conversation/i.test(p.name) && conv) params[p.name] = conv
+    else if (p.in === 'query' && /^environmentid$/i.test(p.name)) { try { params[p.name] = (await getContext()).app.environmentId } catch { /* optional */ } }   // the agent lives in THIS environment, which may not be the connection's default
   }
   const t0 = Date.now()
   const res: any = await sdk().executeAsync({ connectorOperation: { tableName: key, operationName: opName, parameters: params } } as any)

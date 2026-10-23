@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Aggregator, insights } from '../aggregate'
 import { BULK, type Engine } from '../engine'
-import { emptyQuery } from '../query'
+import { emptyQuery, titleField } from '../query'
 import { exportDashboardPdf } from '../export'
-import type { Clause, SpField } from '../types'
+import type { Clause, Page, SpField } from '../types'
 import { bytes, fmt, relTime, yieldToUi } from '../util'
 import { BarList, Donut, Gauge, Spark, Timeline, type Datum } from './Charts'
 import { Counter, Icon, useToast } from './ui'
@@ -21,6 +21,7 @@ export function Dashboard({ engine, version, onFilter, onGoData, title }: Props)
   const [scope, setScope] = useState<'sample' | 'full'>('sample')
   const [snap, setSnap] = useState<Snapshot | null>(cache.get(engine.src.id)?.sample ?? null)
   const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
   const [deep, setDeep] = useState<{ done: number; running: boolean; t0: number } | null>(null)
   const abort = useRef<AbortController | null>(null)
 
@@ -32,13 +33,20 @@ export function Dashboard({ engine, version, onFilter, onGoData, title }: Props)
 
   const loadSample = useCallback(async () => {
     if (local) return
-    setBusy(true)
+    setBusy(true); setErr(null)
+    const q = { ...emptyQuery(), folders: false }
+    const minimal = [...new Set([titleField(engine.fields, engine.src.isLibrary), 'Created', 'Modified'])].filter((n) => engine.fields.some((f) => f.internal === n))
     try {
-      const page = await engine.backend.query(engine.src, engine.fields, engine.select, { ...emptyQuery(), folders: false }, SAMPLE, undefined)
+      let page: Page
+      try { page = await engine.backend.query(engine.src, engine.fields, engine.select, q, SAMPLE, undefined) }
+      catch (e) {   // fall back to the smallest useful set of columns (no people / lookup expands) before giving up
+        if ((e as Error).name === 'AbortError') throw e
+        page = await engine.backend.query(engine.src, engine.fields, minimal, q, Math.min(SAMPLE, 500), undefined)
+      }
       const agg = new Aggregator(fields, engine.src.isLibrary); agg.add(page.rows)
       const s: Snapshot = { agg, at: Date.now(), kind: 'sample' }
       cache.set(engine.src.id, { ...cache.get(engine.src.id), sample: s }); setSnap(s)
-    } catch (e) { toast('bad', (e as Error).message) } finally { setBusy(false) }
+    } catch (e) { setErr((e as Error).message) } finally { setBusy(false) }
   }, [engine, local]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!local && !cache.get(engine.src.id)?.sample) void loadSample() }, [engine.src.id]) // eslint-disable-line react-hooks/exhaustive-deps
   // keep the sample fresh when the live pulse sees the list grow
@@ -97,6 +105,16 @@ export function Dashboard({ engine, version, onFilter, onGoData, title }: Props)
     onFilter(c); onGoData()
   }
 
+  if (err && !agg) return (
+    <div className="banner bad" role="alert"><Icon n="info" />
+      <div style={{ flex: 1 }}><b>The dashboard could not load a sample of this {engine.src.isLibrary ? 'library' : 'list'}.</b><div className="small" style={{ overflowWrap: 'anywhere' }}>{err}</div></div>
+      <button className="btn sm" onClick={() => void loadSample()} disabled={busy}>{busy ? 'Retrying…' : 'Retry'}</button>
+      <button className="btn sm ghost" onClick={onGoData}>Open data</button>
+    </div>
+  )
+  if (agg && !agg.rows && !busy) return (
+    <div className="card empty"><p className="muted">No {engine.src.isLibrary ? 'files' : 'items'} to analyse yet — the dashboard fills in as soon as there is data.</p>{!local && <button className="btn sm" onClick={() => void loadSample()}>Refresh</button>}</div>
+  )
   if (!agg || !model) return (
     <div className="dgrid" aria-busy="true"><div className="card skel" style={{ height: 140 }} /><div className="card skel" style={{ height: 140 }} /><div className="card skel" style={{ height: 140 }} /></div>
   )

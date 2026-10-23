@@ -34,7 +34,7 @@ export function DashboardHost(p: HostProps) {
   const [auto, setAuto] = useState(false)
   useEffect(() => {
     let live = true; setCfg(undefined); setEditing(false); setAuto(false)
-    engine.backend.loadDashboard(engine.src.id).then((c) => live && setCfg(c && c.widgets?.length ? c : null)).catch(() => live && setCfg(null))
+    Promise.race([engine.backend.loadDashboard(engine.src.id), new Promise<null>((r) => setTimeout(() => r(null), 10_000))]).then((c) => live && setCfg(c && c.widgets?.length ? c : null)).catch(() => live && setCfg(null))
     return () => { live = false }
   }, [engine.src.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -64,7 +64,7 @@ export function DashboardHost(p: HostProps) {
 function useWidgetResults(engine: Engine, widgets: Widget[], version: number, refreshSec: number) {
   const local = engine.mode === 'local'
   const [res, setRes] = useState<Record<string, WidgetRes>>({})
-  const [info, setInfo] = useState<{ n: number; full: boolean; busy: boolean; at: number }>({ n: 0, full: false, busy: false, at: 0 })
+  const [info, setInfo] = useState<{ n: number; full: boolean; busy: boolean; at: number; err?: string }>({ n: 0, full: false, busy: false, at: 0 })
   const abort = useRef<AbortController | null>(null)
   const titleField = engine.fields.find((f) => f.internal === 'Title') ? 'Title' : engine.fields.find((f) => f.internal === 'FileLeafRef') ? 'FileLeafRef' : 'ID'
   const sig = JSON.stringify(widgets)
@@ -81,9 +81,10 @@ function useWidgetResults(engine: Engine, widgets: Widget[], version: number, re
     if (local) return
     abort.current?.abort(); const ctl = (abort.current = new AbortController())
     const a = accs(); let n = 0, cursor: string | undefined
-    const need = new Set(engine.select)
-    const sel = [...need]
-    setInfo((i) => ({ ...i, busy: true, full }))
+    const wanted = new Set<string>([titleField, 'Created', 'Modified'])   // only what the widgets need: fewer columns = faster and safer on big libraries
+    for (const w of widgets) { for (const f of [w.field, w.valueField, w.clause?.field]) if (f) wanted.add(f) }
+    const sel = [...wanted].filter((n) => engine.fields.some((f) => f.internal === n))
+    setInfo((i) => ({ ...i, busy: true, full, err: undefined }))
     try {
       for (;;) {
         const page = await engine.backend.query(engine.src, engine.fields, sel, { ...emptyQuery(), folders: false, sort: { field: 'ID', dir: full ? 'asc' : 'desc' } }, full ? BULK : SAMPLE, cursor, ctl.signal)
@@ -92,7 +93,7 @@ function useWidgetResults(engine: Engine, widgets: Widget[], version: number, re
         if (!full || !cursor) break
         await yieldToUi()
       }
-    } catch (e) { if ((e as Error).name !== 'AbortError') setInfo((i) => ({ ...i, busy: false })) }
+    } catch (e) { if ((e as Error).name !== 'AbortError') setInfo((i) => ({ ...i, busy: false, err: (e as Error).message })) }
   }, [local, sig, engine]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { if (!local) void run(false); return () => abort.current?.abort() }, [local, sig, engine.src.id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -161,6 +162,7 @@ function CustomDashboard(p: HostProps & { cfg: DashConfig | null | undefined; ed
         </div>
       )}
 
+      {info.err && !Object.keys(res).length && <div className="banner bad" role="alert" style={{ marginBottom: 12 }}><Icon n="info" /><div style={{ flex: 1 }}><b>The dashboard could not load its data.</b><div className="small" style={{ overflowWrap: 'anywhere' }}>{info.err}</div></div><button className="btn sm" onClick={() => void run(false)} disabled={info.busy}>Retry</button><button className="btn sm ghost" onClick={p.onGoData}>Open data</button></div>}
       <div className="dgrid cdash">
         {live.map((w, i) => (
           <section key={w.id} className="card cwidget" style={{ gridColumn: `span ${Math.min(w.size, 3)}` }} aria-label={w.title || 'Widget'}>

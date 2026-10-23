@@ -203,7 +203,7 @@ function AssistantEditor({ engine, a, onSave, onClose }: { engine: Engine; a: As
         const list = await engine.backend.listAgents()
         setFound(list)
         const hit = list.find((x) => x.schema === name)
-        push(list.length ? !!hit : null, list.length ? (hit ? `Your Copilot Studio connection sees “${hit.name || hit.schema}”.` : `Your connection sees ${list.length} agent(s) but none named “${name}”. Pick one from the list below (names are case-sensitive).`) : 'Connection works (the agent list was empty — the agent may not be published or shared with this connection).')
+        push(list.length ? !!hit : null, list.length ? (hit ? `Your Copilot Studio connection sees “${hit.name || hit.schema}”.` : `Your connection sees ${list.length} agent(s) but none named “${name}”. Pick one from the list below (names are case-sensitive).`) : 'Connection works. (The agent list is empty: Microsoft’s list only shows agents you can edit, so this is normal for agents that were shared with you. Continuing with the agent name you typed.)')
         if (list.length && !hit) return
       } catch (e) { push(false, `Could not reach Copilot Studio through the connector: ${(e as Error).message}`); return }
       const t0 = Date.now()

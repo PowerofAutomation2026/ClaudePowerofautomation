@@ -46,7 +46,7 @@ function pickColumns(fields: SpField[], isLibrary: boolean): string[] {
   let expands = 0
   const add = (f?: SpField) => {
     if (!f || out.includes(f.internal) || f.internal === 'ID' || f.kind === 'other' || f.kind === 'note' || out.length >= 24) return
-    if (f.kind === 'user' || f.kind === 'lookup') { if (expands >= 8) return; expands++ }
+    if (f.kind === 'user' || f.kind === 'lookup') { if (expands >= (isLibrary ? 4 : 8)) return; expands++ }
     out.push(f.internal)
   }
   const by = (n: string) => fields.find((f) => f.internal === n)
