@@ -195,6 +195,7 @@ export const demo: Backend = {
   async loadApprovalFlow(id) { return lsGet<ApprovalFlow | null>('spx.demo.aflow.' + id, null) },
   async saveApprovalFlow(id, flow) { lsSet('spx.demo.aflow.' + id, flow) },
   async listApprovals(id) { return lsGet<ApprovalReq[]>('spx.demo.appr.' + id, []) },
+  async loadApproval(id, itemId) { return lsGet<ApprovalReq[]>('spx.demo.appr.' + id, []).find((r) => r.itemId === itemId) ?? null },
   async saveApproval(id, req) { const all = lsGet<ApprovalReq[]>('spx.demo.appr.' + id, []).filter((r) => r.itemId !== req.itemId); lsSet('spx.demo.appr.' + id, [...all, req]) },
   async loadFormat(id, upn) { return { shared: lsGet<FormatRule[]>('spx.demo.format.' + id, []), mine: lsGet<FormatRule[]>('spx.demo.format.' + id + '.' + upn, []) } },
   async saveFormat(id, rules, aud, upn) { lsSet(aud === 'everyone' ? 'spx.demo.format.' + id : 'spx.demo.format.' + id + '.' + upn, rules); return 'device' as const },

@@ -16,3 +16,7 @@ export function useApprovalOf(id: number): ApprovalReq | undefined {
   useSyncExternalStore((cb) => { subs.add(cb); return () => { subs.delete(cb) } }, () => ver, () => ver)
   return map.get(id)
 }
+export function useApprovalList(): ApprovalReq[] {
+  useSyncExternalStore((cb) => { subs.add(cb); return () => { subs.delete(cb) } }, () => ver, () => ver)
+  return [...map.values()]
+}

@@ -124,8 +124,9 @@ function Shell() {
   }, [])
 
   const isOwner = !!boot && (boot.backend.mode === 'demo' || config?.owners.some((o) => sameUser(o, boot.who.upn)) === true)
+  const ver = useSyncExternalStore(engine?.subscribe ?? noopSub, engine?.getVersion ?? zero)
   const me = useMemo(() => ({ name: boot?.who.name ?? '', upn: boot?.who.upn ?? '' }), [boot?.who.name, boot?.who.upn])
-  const approval = useApproval(engine, me, access, isOwner || access.role === 'admin', (r) => (engine ? itemUrl(engine, r) : ''))
+  const approval = useApproval(engine, me, access, isOwner || access.role === 'admin', (r) => (engine ? itemUrl(engine, r) : ''), ver)
   const [apprOpen, setApprOpen] = useState(false)
   const [openTab, setOpenTab] = useState<'approval' | undefined>(undefined)
 
@@ -172,7 +173,6 @@ function Shell() {
     else setTab(isOwner ? 'connect' : 'data')
   }, [boot, config]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const ver = useSyncExternalStore(engine?.subscribe ?? noopSub, engine?.getVersion ?? zero)
 
   /* ------------------------------------------------ live pulse */
   useEffect(() => {

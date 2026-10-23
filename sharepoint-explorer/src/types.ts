@@ -189,6 +189,7 @@ export interface Backend {
   loadApprovalFlow(sourceId: string): Promise<ApprovalFlow | null>
   saveApprovalFlow(sourceId: string, flow: ApprovalFlow): Promise<void>
   listApprovals(sourceId: string): Promise<ApprovalReq[]>
+  loadApproval(sourceId: string, itemId: number): Promise<ApprovalReq | null>
   saveApproval(sourceId: string, req: ApprovalReq): Promise<void>
 }
 
@@ -206,7 +207,7 @@ export interface FormatRule {
 }
 
 /* ---- admin-customisable dashboard ---- */
-export type WidgetType = 'kpi' | 'bar' | 'donut' | 'timeline' | 'top' | 'goal' | 'text'
+export type WidgetType = 'approvals' | 'kpi' | 'bar' | 'donut' | 'timeline' | 'top' | 'goal' | 'text'
 export interface Widget {
   id: string
   type: WidgetType
@@ -230,19 +231,44 @@ export interface DashConfig { v: 1; widgets: Widget[]; refreshSec: number; updat
 
 /* ---- approvals (multi-layer, admin-designed, per list / library) ---- */
 export interface Approver { kind: 'user' | 'group'; name: string; login: string; email?: string }
-export interface ApprovalStep { id: string; name: string; approvers: Approver[]; mode: 'any' | 'all'; dueDays?: number }
+export interface ApprovalStep {
+  id: string; name: string; approvers: Approver[]; mode: 'any' | 'all'; dueDays?: number
+  /** conditional layer: only used when the item matches ALL of these (e.g. Amount > 10000) */
+  when?: Clause[]
+  /** when the step is overdue, these people are added as approvers (and told in the history) */
+  escalateTo?: Approver[]
+}
+/** automatic approval: the app submits items itself when they are created / changed and match the criteria */
+export interface ApprovalAuto {
+  on: ('created' | 'modified')[]
+  match: 'all' | 'any'
+  criteria: Clause[]
+  /** modified trigger fires only when one of these columns changed (empty = any change) */
+  watch: string[]
+  /** an item edited while it is still waiting starts a fresh round */
+  restartPending: boolean
+  /** admin kill-switch: keep the workflow but stop automatic submissions */
+  paused?: boolean
+  /** items created/modified before this moment are never auto-submitted (so turning it on never floods old data) */
+  since: string
+}
 export interface ApprovalFlow {
   v: 1; enabled: boolean; name: string; steps: ApprovalStep[]
   requireCommentOnReject: boolean; allowSelfApprove: boolean; notify?: boolean
   submitters: 'editors' | 'everyone' | 'admins'
+  auto?: ApprovalAuto
   updated: string; updatedBy: string
 }
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'changes' | 'cancelled'
-export interface ApprovalEvent { at: string; by: string; upn: string; action: 'submit' | 'resubmit' | 'approve' | 'reject' | 'changes' | 'advance' | 'cancel'; step?: number; stepName?: string; comment?: string }
+export interface ApprovalEvent { at: string; by: string; upn: string; action: 'submit' | 'resubmit' | 'approve' | 'reject' | 'changes' | 'advance' | 'cancel' | 'delegate' | 'escalate'; step?: number; stepName?: string; comment?: string }
 export interface ApprovalDecision { step: number; round: number; upn: string; name: string; decision: 'approve' | 'reject' | 'changes'; at: string; comment?: string }
 export interface ApprovalReq {
   v: 1; itemId: number; title: string; link: string; flowName: string; steps: ApprovalStep[]
   step: number; status: ApprovalStatus; round: number
   by: { name: string; upn: string }; at: string; dueAt?: string
+  /** how it started, and the item's Modified value + watched-column snapshot at that moment (server clock, so no client time skew) */
+  auto?: 'created' | 'modified'; itemModified?: string; snap?: string
+  /** bumped on every write; a write based on an older copy is refused (two people acting at once) */
+  rev?: number
   decisions: ApprovalDecision[]; history: ApprovalEvent[]
 }

@@ -3,6 +3,8 @@ import { BULK, type Engine } from '../engine'
 import { describeClause, emptyQuery, opsFor } from '../query'
 import type { Clause, DashConfig, Op, SpField, Widget, WidgetType } from '../types'
 import { fmt, uid, yieldToUi } from '../util'
+import { stats as apprStats } from '../approval'
+import { useApprovalList } from '../approvalStore'
 import { makeAcc, starterWidgets, type WidgetRes } from '../widgets'
 import { Dashboard } from './Dashboard'
 import { BarList, Donut, Gauge, Timeline } from './Charts'
@@ -10,6 +12,7 @@ import { Counter, Icon, Modal, useToast } from './ui'
 
 const SAMPLE = 3000
 const TYPES: { t: WidgetType; label: string; hint: string }[] = [
+  { t: 'approvals', label: 'Approvals', hint: 'Pending, overdue, approved and average turnaround of approval requests' },
   { t: 'kpi', label: 'Number (KPI)', hint: 'One big figure: a count, sum, average, min or max' },
   { t: 'goal', label: 'Goal gauge', hint: 'Progress towards a target number' },
   { t: 'bar', label: 'Bar chart', hint: 'Compare groups of a column' },
@@ -182,6 +185,7 @@ function CustomDashboard(p: HostProps & { cfg: DashConfig | null | undefined; ed
 
 function WidgetView({ w, r: r0, fields, total, sampled, onOpen }: { w: Widget; r?: WidgetRes; fields: SpField[]; total: number; sampled: boolean; onOpen: (label?: string) => void }) {
   const h = <h2 style={{ marginBottom: 8 }}>{w.title}</h2>
+  if (w.type === 'approvals') return <ApprovalTiles title={w.title} />
   if (w.type === 'text') return <div>{h}<p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{w.text}</p></div>
   let r = r0
   if (!r || r.kind === 'none') return <div aria-busy="true">{h}<div className="skel" style={{ height: 60 }} /></div>
@@ -225,6 +229,7 @@ function WidgetEditor({ w, fields, onSave, onClose }: { w: Widget; fields: SpFie
   const filterable = fields.filter((f) => ['text', 'choice', 'multichoice', 'number', 'currency', 'date', 'boolean', 'user', 'lookup', 'counter'].includes(f.kind))
   const cf = d.clause && fields.find((f) => f.internal === d.clause!.field)
   const ops = cf ? opsFor(cf) : []
+  const isAppr = d.type === 'approvals'
   const needsField = d.type === 'bar' || d.type === 'donut' || d.type === 'timeline'
   const needsAgg = d.type === 'kpi' || d.type === 'goal' || d.type === 'bar' || d.type === 'donut' || d.type === 'timeline'
   const needsNum = (needsAgg && (d.agg ?? 'count') !== 'count') || d.type === 'top'
@@ -259,7 +264,7 @@ function WidgetEditor({ w, fields, onSave, onClose }: { w: Widget; fields: SpFie
         {(d.type === 'timeline' || (d.type === 'bar' || d.type === 'donut') && fields.find((f) => f.internal === d.field)?.kind === 'date') && <label className="small">Group dates by
           <select className="input" value={d.bucket ?? 'auto'} onChange={(e) => set({ bucket: e.target.value as Widget['bucket'] })}>{['auto', 'day', 'week', 'month', 'year'].map((b) => <option key={b}>{b}</option>)}</select></label>}
         {d.type === 'goal' && <label className="small">Goal (target number)<input className="input" type="number" min={1} value={d.goal ?? ''} onChange={(e) => set({ goal: Number(e.target.value) })} required /></label>}
-        {d.type !== 'text' && (
+        {d.type !== 'text' && !isAppr && (
           <fieldset style={{ border: '1px dashed var(--line)', borderRadius: 10, padding: 10 }}>
             <legend className="small muted">Only count items where… (optional)</legend>
             <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
@@ -281,4 +286,10 @@ function WidgetEditor({ w, fields, onSave, onClose }: { w: Widget; fields: SpFie
       </form>
     </Modal>
   )
+}
+
+function ApprovalTiles({ title }: { title: string }) {
+  const st = apprStats(useApprovalList())
+  const t = (l: string, v: string | number, bad?: boolean) => <div><div className="v" style={{ fontSize: '1.5rem', fontWeight: 800, color: bad && Number(v) > 0 ? 'var(--bad)' : undefined }}>{v}</div><div className="muted small">{l}</div></div>
+  return <div><h2 style={{ marginBottom: 8 }}>{title}</h2><div className="row" style={{ gap: 18, flexWrap: 'wrap' }}>{t('Pending', st.pending)}{t('Overdue', st.overdue, true)}{t('Approved', st.approved)}{t('Rejected', st.rejected)}{t('Avg. days to approve', st.avgDays ? st.avgDays.toFixed(1) : '—')}</div></div>
 }

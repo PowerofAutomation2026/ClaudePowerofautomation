@@ -307,6 +307,7 @@ export const sp: Backend = {
   async loadApprovalFlow(sourceId) { return (await kvGet<ApprovalFlow>(`approvalflow:${sourceId}`)) ?? lsGet<ApprovalFlow | null>(`spx.aflow.${sourceId}`, null) },
   async saveApprovalFlow(sourceId, flow) { lsSet(`spx.aflow.${sourceId}`, flow); await kvSet(`approvalflow:${sourceId}`, flow) },
   async listApprovals(sourceId) { return (await kvList<ApprovalReq>(`approval:${sourceId}:`)).filter((r) => r && r.itemId != null) },
+  async loadApproval(sourceId, itemId) { return kvGet<ApprovalReq>(`approval:${sourceId}:${itemId}`) },
   async saveApproval(sourceId, req) { await kvSet(`approval:${sourceId}:${req.itemId}`, req) },
   async loadFormat(sourceId, upn) {
     const [shared, mine] = await Promise.all([kvGet<FormatRule[]>(`format:${sourceId}`), kvGet<FormatRule[]>(`format:${sourceId}:${upn.toLowerCase()}`)])

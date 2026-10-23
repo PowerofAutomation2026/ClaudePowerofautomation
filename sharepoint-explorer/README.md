@@ -14,6 +14,16 @@ Admins (data admins / app owners) open **Approvals → Design workflow** and bui
 - **Notify approvers / submitter** opens a prefilled Outlook-on-the-web message.
 - Requests and history are stored in the `SPX_Config` list, so everyone who approves needs to be able to add/edit items there (the same list that already stores personal views). Approvals do not change SharePoint's own permissions or Content Approval setting.
 
+### Automatic approvals, conditions and more (v1.8)
+
+In the workflow designer, **When does approval start? → Automatically**:
+- Start approval **when a new file/item is created** and/or **when it is modified**, only when **ALL/ANY** of your **criteria** match (e.g. *Department is Legal*, *Amount ≥ 5000*). For modifications you can choose **watched columns** (re-approve only when those change) and whether an edit while still waiting **restarts** the approval. A **Pause** switch stops automatic submissions without touching anything else.
+- Items created/changed before you save are never submitted, so enabling it does not flood old data. Files still being saved/checked in (changed in the last 90 s) wait for the next check; one check submits at most 25 items.
+- The check runs while **anyone has the app open** (after each save and about every 45 s) and works for changes made in SharePoint too. It cannot run when nobody has the app open — for guaranteed always-on triggering pair it with a Power Automate flow.
+- **Conditional layers:** any step can be limited with conditions (e.g. a CFO layer only when *Amount ≥ 10000*); if no layer applies the item is recorded as automatically approved.
+- **Escalation:** a step with *Due in N days* can add escalation approvers when it becomes overdue.
+- **Delegate…** hands your part of a step to someone else; **bulk Approve / Reject** from *Waiting for me*; **Export history (CSV)** audit trail; an **Approvals** dashboard widget (pending / overdue / approved / average days). Two people acting on the same request at once are detected and the second is asked to refresh.
+
 ## Email files and folders (libraries)
 
 Select files/folders (or row menu → **Email…**) and press **Email**. They go in as links (optionally "people in my organization can view" sharing links). Then:
