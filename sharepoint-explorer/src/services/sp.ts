@@ -15,13 +15,13 @@ import { isFolderMode } from '../query'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const infoModules = import.meta.glob('../../.power/**/dataSourcesInfo.ts', { eager: true }) as Record<string, any>
-function loadInfo(): Record<string, any> {
-  const mod = Object.values(infoModules)[0]
-  if (!mod) return {}
+function unwrap(mod: any): Record<string, any> {
   if (mod.dataSourcesInfo) return mod.dataSourcesInfo
   if (mod.default && typeof mod.default === 'object') return mod.default.dataSourcesInfo ?? mod.default
   return (Object.values(mod).find((v) => v && typeof v === 'object') as any) ?? {}
 }
+// every generated file counts (old and new .power folder layouts can both exist)
+const loadInfo = (): Record<string, any> => Object.assign({}, ...Object.values(infoModules).map(unwrap))
 export const dataSourcesInfo = loadInfo()
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
 
@@ -58,6 +58,7 @@ const candidates = (): string[] => {
   return [...all.filter((k) => /sharepoint/i.test(k)), ...all.filter((k) => !/sharepoint/i.test(k) && dataSourcesInfo[k]?.tableId), ...all.filter((k) => !/sharepoint/i.test(k) && !dataSourcesInfo[k]?.tableId)]
 }
 export const hasSharePointConnector = () => candidates().length > 0
+export const compiledSources = () => Object.keys(dataSourcesInfo)
 
 let client: ReturnType<typeof getClient> | null = null
 const sdk = () => (client ??= getClient(dataSourcesInfo as any))

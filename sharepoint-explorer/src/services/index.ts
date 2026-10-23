@@ -18,7 +18,7 @@ export async function chooseBackend(): Promise<Chosen> {
     return isLocalHost() ? { backend: demo } : { error: `The SharePoint module failed to load: ${(e as Error).message}` }
   }
   if (!live.hasSharePointConnector()) {
-    return isLocalHost() ? { backend: demo } : { error: 'No SharePoint connector is compiled into this app. The deploy script must run “pac code add-data-source” before the build, so that .power/schemas/appschemas/dataSourcesInfo.ts exists.' }
+    return isLocalHost() ? { backend: demo } : { error: live.compiledSources().length ? `This build contains the data source(s) ${live.compiledSources().join(', ')} but no SharePoint connection. It was dropped when a second connector was added at deploy time (pac regenerates the schema on every add). Run Deploy.cmd again — it now registers SharePoint last and checks the result — or, in the project folder, run: pac code add-data-source -a shared_sharepointonline -c <sharepoint connection id> -d <site url> -t <existing list>, then npm run build and pac code push.` : 'No SharePoint connector is compiled into this app. The deploy script must run “pac code add-data-source” before the build, so that .power/schemas/appschemas/dataSourcesInfo.ts exists.' }
   }
   try {
     const who = await withTimeout(live.sp.whoAmI(), 60_000, 'Power Apps (getContext)')
