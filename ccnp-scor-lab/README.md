@@ -18,7 +18,17 @@ Real Cisco software images (IOSv, ASAv, FTDv/FMCv, ISE, C8000V…) running in **
 | Native Cisco appliances | use Marketplace NVAs | `ftdv_ami/fmcv_ami/c8000v_ami` vars |
 | Recommendation | **Start here for EVE** | Use for the Domain-2 cloud labs |
 
-## ⚡ Zero-touch (recommended)
+## 🖥️ Run it on your own Windows PC (no cloud)
+Double-click `local\Deploy-Local.cmd` (run as admin the first time), or:
+```cmd
+local\Deploy-Local.cmd up "C:\my-images"     :: optional folder of .qcow2 images
+local\Deploy-Local.cmd stop | start | status | down
+local\Deploy-Local.cmd images "C:\my-images"
+```
+Installs VirtualBox (winget), downloads Ubuntu 22.04, builds a VM (≈65% of your RAM, 200 GB sparse disk), installs EVE-NG itself, imports the SCOR-Core lab and opens the portal. GUI: https://localhost:8443.
+**Requirements:** Intel VT-x/AMD-V on, 32 GB+ RAM recommended (16 GB works for ASAv/IOSv only), and Hyper-V/WSL2 off (`bcdedit /set hypervisorlaunchtype off`, reboot) because VirtualBox can't nest-virtualize alongside it. Not tested on a real Windows machine - report any error text and it gets fixed.
+
+## ⚡ Zero-touch cloud (recommended for heavy images)
 ```bash
 ./deploy.sh                      # menu
 ./deploy.sh up azure --images ./my-images   # my-images/asav-9.20.qcow2 etc.
