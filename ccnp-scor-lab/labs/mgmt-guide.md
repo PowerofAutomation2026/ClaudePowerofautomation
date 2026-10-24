@@ -10,7 +10,7 @@ All devices' management ports sit on one internal network **MGMT 192.168.100.0/2
 | FW1-ASAv | 192.168.100.11 | https://192.168.100.11/admin (ASDM) | admin / Cisco123! |
 | ISE1 | 192.168.100.14 | https://192.168.100.14/admin | admin / (setup wizard) |
 | R1 / R2 / SW1 | .21 / .22 / .23 | https://<ip> (IOS web UI) | admin / Cisco123! |
-| JumpBox | 192.168.100.10 | - | set via console |
+| JumpBox | 192.168.100.10 | - | lab / Cisco123! (image built by `./deploy.sh desktop`) |
 
 ## Day-0 commands (paste into each device's console in EVE-NG)
 **JumpBox** (console): `sudo ip addr add 192.168.100.10/24 dev ens3; sudo ip link set ens3 up`  (iface name may be eth0/ens3)
@@ -46,3 +46,11 @@ ip http authentication local
 Don't boot everything: ASAv-or-FTD, not both, unless you have 64 GB. Full set is ~66 GB.
 Typical combos: Network labs = ASAv+R1+R2+SW1+JumpBox (~9 GB). NAC = + ISE1 (~25 GB). FTD = FTD1+FMC1+JumpBox+WebSrv (~42 GB).
 Image names in lab: edit in EVE (Edit node > Image) if yours differ.
+
+## Desktop machines for testing firewall policy (full XFCE GUI + Firefox, nmap, curl, hping3, iperf3, tshark)
+Built automatically by deploy (or run `./deploy.sh desktop` / `local\Deploy-Local.cmd desktop`). Login `lab` / `Cisco123!`, auto-logs in.
+- **Client** (inside, behind SW1/R1) - test outbound policy: browse/curl/ping to WebSrv and "internet".
+- **Outside-Desktop** (outside, behind R2) - test inbound: NAT/port-forwards, nmap scans, IPS triggers (`curl -A "sqlmap"`, EICAR file).
+- **JumpBox** - management network only; use its Firefox to open FMC/ASDM/ISE.
+In each desktop terminal set an address, e.g. Client: `sudo ip addr add 10.1.1.10/24 dev ens3; sudo ip route add default via 10.1.1.1`.
+(Interface name may be ens3/eth0: check `ip a`.) The routers/firewall still need their data-plane IP/routes.

@@ -58,6 +58,7 @@ up(){
   scp $SSHO labs/scor-core.unl scripts/post-install.sh $USR@$EVE:/tmp/ >/dev/null
   ssh $SSHO $USR@$EVE "bash /tmp/post-install.sh '$PASS'"
   [ -n "$imgs" ] && images "$imgs"
+  desktop
   portal_cfg "$EVE" "$PASS" "$c"
   ok "${B}READY${N}  https://$EVE   user: admin   pass: $PASS"
   echo "   Portal: portal/index.html   |   SSH: ./deploy.sh ssh   |   Done for the day: ./deploy.sh stop"
@@ -75,6 +76,10 @@ images(){  # folder of qcow2 named <eve-folder>.qcow2, e.g. asav-9.20.qcow2 -> /
   done
   ssh $SSHO $USR@$EVE "sudo /opt/unetlab/wrappers/unl_wrapper -a fixpermissions" && ok "Images ready"
 }
+desktop(){ local EVE USR; EVE=$(cat $S/ip); USR=$(cat $S/user)
+  SSHO="-i $S/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+  scp $SSHO scripts/build-ubuntu-desktop.sh $USR@$EVE:/tmp/ >/dev/null
+  say "Building Ubuntu desktop image on the lab host (15-25 min)…"; ssh $SSHO $USR@$EVE "sudo bash /tmp/build-ubuntu-desktop.sh"; ok "Desktop image ready (login lab / Cisco123!)"; }
 portal_cfg(){
   printf 'window.LAB={ip:"%s",pass:"%s",cloud:"%s"};\n' "$1" "$2" "$3" > portal/config.js
   (xdg-open portal/index.html || open portal/index.html) >/dev/null 2>&1 || true
@@ -92,7 +97,7 @@ sshc(){ exec ssh -i $S/id_ed25519 -o StrictHostKeyChecking=no $(cat $S/user)@$(c
 
 banner
 case "${1:-menu}" in
-  up) shift; up "$@";; status) status;; stop) stop;; start) start;; down) down;; ssh) sshc;; images) images "${2:-}";;
+  up) shift; up "$@";; status) status;; stop) stop;; start) start;; down) down;; ssh) sshc;; desktop) desktop;; images) images "${2:-}";;
   menu) echo "1) Deploy on Azure (recommended)  2) Deploy on AWS  3) Status  4) Stop  5) Start  6) Destroy  7) Upload images"
         read -rp "> " m; case $m in 1) up azure;; 2) up aws;; 3) status;; 4) stop;; 5) start;; 6) down;; 7) read -rp "Folder: " f; images "$f";; esac;;
   *) die "Usage: $0 [up azure|aws [--images DIR] | status | stop | start | down | ssh | images DIR]";;
