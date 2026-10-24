@@ -57,3 +57,6 @@ terraform apply -var 'my_ip_cidr=YOUR.IP/32'    # optional -var ftdv_ami=ami-...
 
 ## Study order
 `labs/00-topology.md` then domains 1→6 (`labs/0*.md`). Blueprint weights: Network 30, Cloud 15, Content 20, Endpoint 10, Secure Access 15, Visibility 10.
+
+## Device GUIs
+See labs/mgmt-guide.md - every device sits on a MGMT network with a browser-based JumpBox desktop, so FMC, ASDM, ISE and IOS web GUIs are all reachable from your browser.

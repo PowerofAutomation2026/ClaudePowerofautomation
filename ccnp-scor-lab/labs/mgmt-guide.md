@@ -1,0 +1,48 @@
+# Reaching EVERY device's GUI (one browser, one jump box)
+
+All devices' management ports sit on one internal network **MGMT 192.168.100.0/24**.
+**JumpBox** (Ubuntu desktop, has Firefox) is on it. Click JumpBox in EVE-NG -> desktop opens in your browser -> browse to the device.
+
+| Device | Mgmt IP | GUI URL (from JumpBox) | Login |
+|---|---|---|---|
+| FMC1 | 192.168.100.13 | https://192.168.100.13 | admin / (set at FMC setup) |
+| FTD1 | 192.168.100.12 | managed via FMC (or FDM at https://192.168.100.12 if standalone) | |
+| FW1-ASAv | 192.168.100.11 | https://192.168.100.11/admin (ASDM) | admin / Cisco123! |
+| ISE1 | 192.168.100.14 | https://192.168.100.14/admin | admin / (setup wizard) |
+| R1 / R2 / SW1 | .21 / .22 / .23 | https://<ip> (IOS web UI) | admin / Cisco123! |
+| JumpBox | 192.168.100.10 | - | set via console |
+
+## Day-0 commands (paste into each device's console in EVE-NG)
+**JumpBox** (console): `sudo ip addr add 192.168.100.10/24 dev ens3; sudo ip link set ens3 up`  (iface name may be eth0/ens3)
+
+**ASAv**
+```
+interface Management0/0
+ nameif mgmt
+ security-level 100
+ ip address 192.168.100.11 255.255.255.0
+ no shutdown
+username admin password Cisco123! privilege 15
+aaa authentication http console LOCAL
+http server enable
+http 192.168.100.0 255.255.255.0 mgmt
+```
+**FTD** (CLI): `configure network ipv4 manual 192.168.100.12 255.255.255.0 192.168.100.1` then
+`configure manager add 192.168.100.13 cisco123`   (FMC: Devices > Add Device, same key)
+
+**FMC** (console first boot wizard): IP 192.168.100.13/24, gw 192.168.100.1, set admin password.
+**ISE** (console wizard): hostname ise1, IP 192.168.100.14/24, gw 192.168.100.1, DNS 192.168.100.10, set admin password. Wait ~30 min after setup for the GUI.
+
+**R1 / R2 / SW1** (IOS), change IP per device (.21/.22/.23):
+```
+interface GigabitEthernet0/0
+ ip address 192.168.100.21 255.255.255.0
+ no shutdown
+username admin privilege 15 secret Cisco123!
+ip http secure-server
+ip http authentication local
+```
+## RAM reality
+Don't boot everything: ASAv-or-FTD, not both, unless you have 64 GB. Full set is ~66 GB.
+Typical combos: Network labs = ASAv+R1+R2+SW1+JumpBox (~9 GB). NAC = + ISE1 (~25 GB). FTD = FTD1+FMC1+JumpBox+WebSrv (~42 GB).
+Image names in lab: edit in EVE (Edit node > Image) if yours differ.

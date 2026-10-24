@@ -1,18 +1,59 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<lab name="SCOR-Core" id="11111111-2222-3333-4444-555555555555" version="1" scripttimeout="300" lock="0">
+<lab name="SCOR-Core" id="11111111-2222-3333-4444-555555555555" version="2" scripttimeout="300" lock="0">
   <topology>
     <nodes>
-      <node id="1" name="FW1-ASAv" type="qemu" template="asav" image="asav-9.20" console="telnet" cpu="1" ram="2048" ethernet="4" uuid="aaaaaaaa-0000-0000-0000-000000000001" icon="Firewall.png" left="420" top="150"/>
-      <node id="2" name="R1" type="qemu" template="vios" image="vios-adventerprisek9-m.SPA.159-3.M6" console="telnet" cpu="1" ram="1024" ethernet="4" uuid="aaaaaaaa-0000-0000-0000-000000000002" icon="Router.png" left="250" top="300"/>
-      <node id="3" name="R2" type="qemu" template="vios" image="vios-adventerprisek9-m.SPA.159-3.M6" console="telnet" cpu="1" ram="1024" ethernet="4" uuid="aaaaaaaa-0000-0000-0000-000000000003" icon="Router.png" left="600" top="300"/>
-      <node id="4" name="SW1" type="qemu" template="viosl2" image="viosl2-adventerprisek9-m.ssa.high_iron_20200929" console="telnet" cpu="1" ram="1024" ethernet="8" uuid="aaaaaaaa-0000-0000-0000-000000000004" icon="Switch.png" left="250" top="450"/>
-      <node id="5" name="ISE" type="qemu" template="ise" image="ise-3.2" console="vnc" cpu="4" ram="16384" ethernet="2" uuid="aaaaaaaa-0000-0000-0000-000000000005" icon="Server.png" left="420" top="450"/>
-      <node id="6" name="Client" type="qemu" template="linux" image="linux-ubuntu-server-22.04" console="vnc" cpu="1" ram="1024" ethernet="1" uuid="aaaaaaaa-0000-0000-0000-000000000006" icon="Desktop.png" left="100" top="550"/>
-      <node id="7" name="WebSrv" type="qemu" template="linux" image="linux-ubuntu-server-22.04" console="telnet" cpu="1" ram="1024" ethernet="1" uuid="aaaaaaaa-0000-0000-0000-000000000007" icon="Server.png" left="600" top="150"/>
+      <node id="1" name="JumpBox" type="qemu" template="linux" image="linux-ubuntu-desktop-22.04" console="vnc" cpu="2" ram="4096" ethernet="2" uuid="aaaaaaaa-0000-0000-0000-000000000001" icon="Desktop.png" left="80" top="60">
+        <interface id="0" name="e0" type="ethernet" network_id="1"/>
+      </node>
+      <node id="2" name="FW1-ASAv" type="qemu" template="asav" image="asav-9.20" console="telnet" cpu="1" ram="2048" ethernet="4" uuid="aaaaaaaa-0000-0000-0000-000000000002" icon="Firewall.png" left="420" top="200">
+        <interface id="0" name="e0" type="ethernet" network_id="1"/>
+        <interface id="1" name="e1" type="ethernet" network_id="2"/>
+        <interface id="2" name="e2" type="ethernet" network_id="3"/>
+        <interface id="3" name="e3" type="ethernet" network_id="4"/>
+      </node>
+      <node id="3" name="FTD1" type="qemu" template="firepower6" image="firepower6-FTD-7.4.1" console="telnet" cpu="4" ram="8192" ethernet="4" uuid="aaaaaaaa-0000-0000-0000-000000000003" icon="Firewall.png" left="620" top="200">
+        <interface id="0" name="e0" type="ethernet" network_id="1"/>
+        <interface id="1" name="e1" type="ethernet" network_id="1"/>
+        <interface id="2" name="e2" type="ethernet" network_id="2"/>
+        <interface id="3" name="e3" type="ethernet" network_id="4"/>
+      </node>
+      <node id="4" name="FMC1" type="qemu" template="firepower6" image="firepower6-FMC-7.4.1" console="vnc" cpu="4" ram="28672" ethernet="2" uuid="aaaaaaaa-0000-0000-0000-000000000004" icon="Server.png" left="620" top="60">
+        <interface id="0" name="e0" type="ethernet" network_id="1"/>
+      </node>
+      <node id="5" name="ISE1" type="qemu" template="ise" image="ise-3.2" console="vnc" cpu="4" ram="16384" ethernet="2" uuid="aaaaaaaa-0000-0000-0000-000000000005" icon="Server.png" left="250" top="60">
+        <interface id="0" name="e0" type="ethernet" network_id="1"/>
+      </node>
+      <node id="6" name="R1" type="qemu" template="vios" image="vios-adventerprisek9-m.SPA.159-3.M6" console="telnet" cpu="1" ram="1024" ethernet="4" uuid="aaaaaaaa-0000-0000-0000-000000000006" icon="Router.png" left="250" top="330">
+        <interface id="0" name="e0" type="ethernet" network_id="1"/>
+        <interface id="1" name="e1" type="ethernet" network_id="3"/>
+        <interface id="2" name="e2" type="ethernet" network_id="5"/>
+      </node>
+      <node id="7" name="R2" type="qemu" template="vios" image="vios-adventerprisek9-m.SPA.159-3.M6" console="telnet" cpu="1" ram="1024" ethernet="4" uuid="aaaaaaaa-0000-0000-0000-000000000007" icon="Router.png" left="600" top="330">
+        <interface id="0" name="e0" type="ethernet" network_id="1"/>
+        <interface id="1" name="e1" type="ethernet" network_id="2"/>
+        <interface id="2" name="e2" type="ethernet" network_id="6"/>
+      </node>
+      <node id="8" name="SW1" type="qemu" template="viosl2" image="viosl2-adventerprisek9-m.ssa.high_iron_20200929" console="telnet" cpu="1" ram="1024" ethernet="8" uuid="aaaaaaaa-0000-0000-0000-000000000008" icon="Switch.png" left="250" top="460">
+        <interface id="0" name="e0" type="ethernet" network_id="1"/>
+        <interface id="1" name="e1" type="ethernet" network_id="5"/>
+        <interface id="2" name="e2" type="ethernet" network_id="7"/>
+      </node>
+      <node id="9" name="Client" type="qemu" template="linux" image="linux-ubuntu-desktop-22.04" console="vnc" cpu="1" ram="2048" ethernet="1" uuid="aaaaaaaa-0000-0000-0000-000000000009" icon="Desktop.png" left="100" top="560">
+        <interface id="0" name="e0" type="ethernet" network_id="7"/>
+      </node>
+      <node id="10" name="WebSrv" type="qemu" template="linux" image="linux-ubuntu-server-22.04" console="telnet" cpu="1" ram="1024" ethernet="2" uuid="aaaaaaaa-0000-0000-0000-000000000010" icon="Server.png" left="800" top="200">
+        <interface id="0" name="e0" type="ethernet" network_id="1"/>
+        <interface id="1" name="e1" type="ethernet" network_id="4"/>
+      </node>
     </nodes>
     <networks>
-      <network id="1" type="pnet0" name="Internet-NAT" left="420" top="30"/>
+      <network id="1" type="bridge" name="MGMT 192.168.100.0/24" left="400" top="30" visibility="1"/>
+      <network id="2" type="bridge" name="OUTSIDE" left="520" top="300" visibility="1"/>
+      <network id="3" type="bridge" name="INSIDE" left="340" top="330" visibility="1"/>
+      <network id="4" type="bridge" name="DMZ" left="720" top="300" visibility="1"/>
+      <network id="5" type="bridge" name="R1-SW1" left="250" top="400" visibility="1"/>
+      <network id="6" type="bridge" name="R2-LAN" left="600" top="420" visibility="1"/>
+      <network id="7" type="bridge" name="ACCESS-VLAN" left="170" top="520" visibility="1"/>
     </networks>
   </topology>
-  <objects><textobjects><textobject id="1" name="Banner" type="text"><data>PGRpdj5DQ05QIFNDT1IgMzUwLTcwMSBDb3JlIExhYjwvZGl2Pg==</data></textobject></textobjects></objects>
 </lab>
