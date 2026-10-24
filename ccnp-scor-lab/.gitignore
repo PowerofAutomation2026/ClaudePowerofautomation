@@ -1,0 +1,6 @@
+.terraform/
+*.tfstate*
+*.tfvars
+*.qcow2
+*.iso
+*.ova
