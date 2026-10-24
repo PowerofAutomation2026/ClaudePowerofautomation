@@ -33,6 +33,8 @@ mk "R1" https://192.168.100.21
 mk "R2" https://192.168.100.22
 mk "SW1" https://192.168.100.23
 mk "FTD FDM" https://192.168.100.12
+mk "WSA" https://192.168.100.15:8443
+mk "Umbrella Dashboard" https://dashboard.umbrella.com
 chown -R lab:lab /home/lab
 cat > /etc/netplan/60-mgmt.yaml <<'Y'
 network:

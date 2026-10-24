@@ -48,6 +48,10 @@
       <node id="11" name="Outside-Desktop" type="qemu" template="linux" image="linux-ubuntu-desktop-22.04" console="vnc" cpu="1" ram="2048" ethernet="1" uuid="aaaaaaaa-0000-0000-0000-000000000011" icon="Desktop.png" left="600" top="520">
         <interface id="0" name="e0" type="ethernet" network_id="6"/>
       </node>
+      <node id="12" name="WSA1" type="qemu" template="wsa" image="wsa-15.0" console="telnet" cpu="4" ram="8192" ethernet="3" uuid="aaaaaaaa-0000-0000-0000-000000000012" icon="Server.png" left="340" top="200">
+        <interface id="0" name="e0" type="ethernet" network_id="1"/>
+        <interface id="1" name="e1" type="ethernet" network_id="3"/>
+      </node>
     </nodes>
     <networks>
       <network id="1" type="bridge" name="MGMT 192.168.100.0/24" left="400" top="30" visibility="1"/>

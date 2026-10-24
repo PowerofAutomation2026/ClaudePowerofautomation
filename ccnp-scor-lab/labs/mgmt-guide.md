@@ -9,6 +9,7 @@ All devices' management ports sit on one internal network **MGMT 192.168.100.0/2
 | FTD1 | 192.168.100.12 | managed via FMC (or FDM at https://192.168.100.12 if standalone) | |
 | FW1-ASAv | 192.168.100.11 | https://192.168.100.11/admin (ASDM) | admin / Cisco123! |
 | ISE1 | 192.168.100.14 | https://192.168.100.14/admin | admin / (setup wizard) |
+| WSA1 | 192.168.100.15 | https://192.168.100.15:8443 | admin / ironport (forces change) |
 | R1 / R2 / SW1 | .21 / .22 / .23 | https://<ip> (IOS web UI) | admin / Cisco123! |
 | JumpBox (admin desktop) | 192.168.100.10 (pre-set) | - | lab / Cisco123! |
 
@@ -59,3 +60,12 @@ In each desktop terminal set an address, e.g. Client: `sudo ip addr add 10.1.1.1
 Image `linux-ubuntu-admin-22.04`: XFCE desktop, auto-login, **static IP 192.168.100.10 already set** (no manual config),
 desktop icons that open FMC / ASDM / ISE / R1 / R2 / SW1 / FDM in Firefox, plus Wireshark (GUI), PuTTY, minicom, Remmina (RDP/VNC/SSH),
 FileZilla, Git, Ansible, Python with Netmiko + requests. Note: ASDM's Java launcher is not included (use the web UI of the other devices, or the ASA CLI).
+
+## WSA (Secure Web Appliance) - node WSA1
+Needs a WSA virtual image (from Cisco, folder `wsa-15.0` - rename in EVE if yours differs). 4 vCPU / 8 GB. e0 = management (MGMT net), e1 = data port on INSIDE net.
+Console first boot: login `admin` / `ironport`, run `ifconfig` to set mgmt IP 192.168.100.15/24, then `systemsetup` wizard. GUI: https://192.168.100.15:8443.
+Test: on **Client** set Firefox proxy to the WSA data IP:3128 (explicit proxy), then browse; see Reporting > Web Tracking in the WSA GUI.
+
+## Umbrella (cloud - cannot run in the lab)
+Umbrella is Cisco's cloud service. Sign up for the free trial at https://signup.umbrella.com, open https://dashboard.umbrella.com from the JumpBox (desktop icon).
+Test from Client: set DNS to Umbrella (208.67.222.222 / 208.67.220.220) after adding the lab's public IP as a Network in the dashboard; browse https://internetbadguys.com - you should see the block page.
