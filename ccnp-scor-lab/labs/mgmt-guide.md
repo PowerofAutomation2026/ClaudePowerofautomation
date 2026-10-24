@@ -10,7 +10,7 @@ All devices' management ports sit on one internal network **MGMT 192.168.100.0/2
 | FW1-ASAv | 192.168.100.11 | https://192.168.100.11/admin (ASDM) | admin / Cisco123! |
 | ISE1 | 192.168.100.14 | https://192.168.100.14/admin | admin / (setup wizard) |
 | R1 / R2 / SW1 | .21 / .22 / .23 | https://<ip> (IOS web UI) | admin / Cisco123! |
-| JumpBox | 192.168.100.10 | - | lab / Cisco123! (image built by `./deploy.sh desktop`) |
+| JumpBox (admin desktop) | 192.168.100.10 (pre-set) | - | lab / Cisco123! |
 
 ## Day-0 commands (paste into each device's console in EVE-NG)
 **JumpBox** (console): `sudo ip addr add 192.168.100.10/24 dev ens3; sudo ip link set ens3 up`  (iface name may be eth0/ens3)
@@ -54,3 +54,8 @@ Built automatically by deploy (or run `./deploy.sh desktop` / `local\Deploy-Loca
 - **JumpBox** - management network only; use its Firefox to open FMC/ASDM/ISE.
 In each desktop terminal set an address, e.g. Client: `sudo ip addr add 10.1.1.10/24 dev ens3; sudo ip route add default via 10.1.1.1`.
 (Interface name may be ens3/eth0: check `ip a`.) The routers/firewall still need their data-plane IP/routes.
+
+## Admin desktop (JumpBox) - full admin workstation
+Image `linux-ubuntu-admin-22.04`: XFCE desktop, auto-login, **static IP 192.168.100.10 already set** (no manual config),
+desktop icons that open FMC / ASDM / ISE / R1 / R2 / SW1 / FDM in Firefox, plus Wireshark (GUI), PuTTY, minicom, Remmina (RDP/VNC/SSH),
+FileZilla, Git, Ansible, Python with Netmiko + requests. Note: ASDM's Java launcher is not included (use the web UI of the other devices, or the ASA CLI).

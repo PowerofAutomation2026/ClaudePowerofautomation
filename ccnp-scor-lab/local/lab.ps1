@@ -40,7 +40,7 @@ switch ($Action) {
  "status" { VBM showvminfo $VM --machinereadable | Select-String 'VMState='; try { Invoke-WebRequest https://127.0.0.1:8443 -UseBasicParsing | Out-Null; Ok "EVE GUI up: https://localhost:8443" } catch { Write-Host "GUI not reachable" }; return }
  "stop"   { VBM controlvm $VM acpipoweroff; Ok "Stopped (RAM freed)"; return }
  "start"  { VBM startvm $VM --type headless; Ok "Starting - GUI in ~1 min: https://localhost:8443"; return }
- "desktop" { scp @ScpO (Join-Path $Root "scripts\build-ubuntu-desktop.sh") "$User@127.0.0.1:/tmp/"; ssh @SshO "$User@127.0.0.1" "sudo bash /tmp/build-ubuntu-desktop.sh"; return }
+ "desktop" { scp @ScpO (Join-Path $Root "scripts\build-ubuntu-desktop.sh") "$User@127.0.0.1:/tmp/"; ssh @SshO "$User@127.0.0.1" "sudo bash /tmp/build-ubuntu-desktop.sh desktop && sudo bash /tmp/build-ubuntu-desktop.sh admin"; return }
  "images" { Send-Images $Arg; return }
  "down"   { $a = Read-Host "Delete the VM and ALL its disks? [y/N]"; if ($a -eq "y") { try{VBM controlvm $VM poweroff}catch{}; Start-Sleep 3; VBM unregistervm $VM --delete; Ok "Deleted" }; return }
 }
@@ -134,7 +134,8 @@ Write-Host ""; if (-not $ready) { Die "Timed out. Check VM in VirtualBox; log: /
 scp @ScpO (Join-Path $Root "labs\scor-core.unl") (Join-Path $Root "scripts\post-install.sh") "$User@127.0.0.1:/tmp/"
 ssh @SshO "$User@127.0.0.1" "bash /tmp/post-install.sh '$pass'"
 if ($Arg) { Send-Images $Arg }
-ssh @SshO "$User@127.0.0.1" "sudo bash -s" < (Join-Path $Root "scripts\build-ubuntu-desktop.sh")
+scp @ScpO (Join-Path $Root "scripts\build-ubuntu-desktop.sh") "$User@127.0.0.1:/tmp/"
+ssh @SshO "$User@127.0.0.1" "sudo bash /tmp/build-ubuntu-desktop.sh desktop && sudo bash /tmp/build-ubuntu-desktop.sh admin"
 
 "window.LAB={ip:`"localhost:8443`",pass:`"$pass`",cloud:`"local`"};" | Set-Content (Join-Path $Root "portal\config.js")
 Start-Process (Join-Path $Root "portal\index.html")

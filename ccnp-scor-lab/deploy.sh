@@ -79,7 +79,7 @@ images(){  # folder of qcow2 named <eve-folder>.qcow2, e.g. asav-9.20.qcow2 -> /
 desktop(){ local EVE USR; EVE=$(cat $S/ip); USR=$(cat $S/user)
   SSHO="-i $S/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
   scp $SSHO scripts/build-ubuntu-desktop.sh $USR@$EVE:/tmp/ >/dev/null
-  say "Building Ubuntu desktop image on the lab host (15-25 min)…"; ssh $SSHO $USR@$EVE "sudo bash /tmp/build-ubuntu-desktop.sh"; ok "Desktop image ready (login lab / Cisco123!)"; }
+  say "Building Ubuntu test-desktop + admin-desktop images on the lab host (30-50 min)…"; ssh $SSHO $USR@$EVE "sudo bash /tmp/build-ubuntu-desktop.sh desktop && sudo bash /tmp/build-ubuntu-desktop.sh admin"; ok "Desktop + Admin images ready (login lab / Cisco123!)"; }
 portal_cfg(){
   printf 'window.LAB={ip:"%s",pass:"%s",cloud:"%s"};\n' "$1" "$2" "$3" > portal/config.js
   (xdg-open portal/index.html || open portal/index.html) >/dev/null 2>&1 || true

@@ -2,7 +2,7 @@
 <lab name="SCOR-Core" id="11111111-2222-3333-4444-555555555555" version="2" scripttimeout="300" lock="0">
   <topology>
     <nodes>
-      <node id="1" name="JumpBox" type="qemu" template="linux" image="linux-ubuntu-desktop-22.04" console="vnc" cpu="2" ram="4096" ethernet="2" uuid="aaaaaaaa-0000-0000-0000-000000000001" icon="Desktop.png" left="80" top="60">
+      <node id="1" name="JumpBox" type="qemu" template="linux" image="linux-ubuntu-admin-22.04" console="vnc" cpu="2" ram="4096" ethernet="2" uuid="aaaaaaaa-0000-0000-0000-000000000001" icon="Desktop.png" left="80" top="60">
         <interface id="0" name="e0" type="ethernet" network_id="1"/>
       </node>
       <node id="2" name="FW1-ASAv" type="qemu" template="asav" image="asav-9.20" console="telnet" cpu="1" ram="2048" ethernet="4" uuid="aaaaaaaa-0000-0000-0000-000000000002" icon="Firewall.png" left="420" top="200">
