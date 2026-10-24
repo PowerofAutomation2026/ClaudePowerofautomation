@@ -4,3 +4,5 @@
 *.qcow2
 *.iso
 *.ova
+.lab/
+portal/config.js

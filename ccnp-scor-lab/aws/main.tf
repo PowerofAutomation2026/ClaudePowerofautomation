@@ -5,7 +5,7 @@ provider "aws" { region = var.region }
 
 variable "region"      { default = "us-east-1" }
 variable "my_ip_cidr"  { description = "Your public IP as x.x.x.x/32" }
-variable "key_name"    { description = "Existing EC2 key pair name" }
+variable "ssh_pubkey_path" { default = "~/.ssh/id_rsa.pub" }
 # KVM needs bare metal on AWS (no nested virt on regular instances). ~US$4/hr — STOP IT when done.
 variable "eve_instance_type" { default = "c5.metal" }
 # Optional NATIVE Cisco appliances. Subscribe in AWS Marketplace first, then paste AMI IDs for your region.
@@ -23,6 +23,11 @@ data "aws_ami" "ubuntu" {
     name   = "name"
     values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
   }
+}
+
+resource "aws_key_pair" "k" {
+  key_name   = "scor-lab"
+  public_key = file(pathexpand(var.ssh_pubkey_path))
 }
 
 resource "aws_vpc" "v" {
@@ -90,7 +95,7 @@ resource "aws_security_group" "lab" {
 resource "aws_instance" "eve" {
   ami                    = data.aws_ami.ubuntu.id
   instance_type          = var.eve_instance_type
-  key_name               = var.key_name
+  key_name               = aws_key_pair.k.key_name
   subnet_id              = aws_subnet.mgmt.id
   vpc_security_group_ids = [aws_security_group.lab.id]
   user_data              = file("${path.module}/../scripts/install-eve.sh")
@@ -106,7 +111,7 @@ resource "aws_instance" "ftdv" {
   count                  = var.ftdv_ami == "" ? 0 : 1
   ami                    = var.ftdv_ami
   instance_type          = var.ftdv_type
-  key_name               = var.key_name
+  key_name               = aws_key_pair.k.key_name
   subnet_id              = aws_subnet.mgmt.id
   vpc_security_group_ids = [aws_security_group.lab.id]
   # FTDv first-boot day0 (manage via FMC): fill in your FMC address / reg key
@@ -125,7 +130,7 @@ resource "aws_instance" "fmcv" {
   count                  = var.fmcv_ami == "" ? 0 : 1
   ami                    = var.fmcv_ami
   instance_type          = var.fmcv_type
-  key_name               = var.key_name
+  key_name               = aws_key_pair.k.key_name
   subnet_id              = aws_subnet.mgmt.id
   vpc_security_group_ids = [aws_security_group.lab.id]
   user_data = jsonencode({ AdminPassword = "ChangeMe!12345", Hostname = "fmc1" })
@@ -135,7 +140,7 @@ resource "aws_instance" "c8000v" {
   count                  = var.c8000v_ami == "" ? 0 : 1
   ami                    = var.c8000v_ami
   instance_type          = var.c8000v_type
-  key_name               = var.key_name
+  key_name               = aws_key_pair.k.key_name
   subnet_id              = aws_subnet.mgmt.id
   vpc_security_group_ids = [aws_security_group.lab.id]
   tags = { Name = "c8000v" }
@@ -143,3 +148,5 @@ resource "aws_instance" "c8000v" {
 
 output "eve_gui_url" { value = "https://${aws_instance.eve.public_ip}  (admin/eve — change it)" }
 output "fmc_url"     { value = length(aws_instance.fmcv) > 0 ? "https://${aws_instance.fmcv[0].public_ip}" : "n/a" }
+
+output "eve_ip" { value = aws_instance.eve.public_ip }

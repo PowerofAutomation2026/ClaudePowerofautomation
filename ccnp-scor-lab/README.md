@@ -18,7 +18,14 @@ Real Cisco software images (IOSv, ASAv, FTDv/FMCv, ISE, C8000V…) running in **
 | Native Cisco appliances | use Marketplace NVAs | `ftdv_ami/fmcv_ami/c8000v_ami` vars |
 | Recommendation | **Start here for EVE** | Use for the Domain-2 cloud labs |
 
-## Deploy (Azure)
+## ⚡ Zero-touch (recommended)
+```bash
+./deploy.sh                      # menu
+./deploy.sh up azure --images ./my-images   # my-images/asav-9.20.qcow2 etc.
+```
+It installs Terraform if missing, logs into your cloud, detects your IP, generates an SSH key and random EVE password, deploys, waits for the GUI, imports the `SCOR-Core` lab, and opens the `portal/` control center. Also: `status | stop | start | ssh | images DIR | down`. Needs `az` (Azure) or `aws` (AWS) CLI, `curl`, `unzip`, `ssh`.
+
+## Manual deploy (Azure)
 ```bash
 cd azure
 terraform init
@@ -30,7 +37,7 @@ terraform apply -var 'my_ip_cidr=YOUR.PUBLIC.IP/32'
 ```bash
 cd aws
 terraform init
-terraform apply -var 'my_ip_cidr=YOUR.IP/32' -var 'key_name=mykey'   # optional -var ftdv_ami=ami-...
+terraform apply -var 'my_ip_cidr=YOUR.IP/32'    # optional -var ftdv_ami=ami-...
 ```
 ## Safety / cost
 - Everything is locked to **your IP only**; don't open to 0.0.0.0/0.

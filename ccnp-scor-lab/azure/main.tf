@@ -104,3 +104,5 @@ resource "azurerm_dev_test_global_vm_shutdown_schedule" "off" {
 
 output "eve_gui_url" { value = "https://${azurerm_public_ip.pip.ip_address}  (user: admin / pass: eve — change it!)" }
 output "ssh"         { value = "ssh ${var.admin_user}@${azurerm_public_ip.pip.ip_address}" }
+
+output "eve_ip" { value = azurerm_public_ip.pip.ip_address }

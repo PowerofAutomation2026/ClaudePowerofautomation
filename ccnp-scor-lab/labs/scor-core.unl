@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lab name="SCOR-Core" id="11111111-2222-3333-4444-555555555555" version="1" scripttimeout="300" lock="0">
+  <topology>
+    <nodes>
+      <node id="1" name="FW1-ASAv" type="qemu" template="asav" image="asav-9.20" console="telnet" cpu="1" ram="2048" ethernet="4" uuid="aaaaaaaa-0000-0000-0000-000000000001" icon="Firewall.png" left="420" top="150"/>
+      <node id="2" name="R1" type="qemu" template="vios" image="vios-adventerprisek9-m.SPA.159-3.M6" console="telnet" cpu="1" ram="1024" ethernet="4" uuid="aaaaaaaa-0000-0000-0000-000000000002" icon="Router.png" left="250" top="300"/>
+      <node id="3" name="R2" type="qemu" template="vios" image="vios-adventerprisek9-m.SPA.159-3.M6" console="telnet" cpu="1" ram="1024" ethernet="4" uuid="aaaaaaaa-0000-0000-0000-000000000003" icon="Router.png" left="600" top="300"/>
+      <node id="4" name="SW1" type="qemu" template="viosl2" image="viosl2-adventerprisek9-m.ssa.high_iron_20200929" console="telnet" cpu="1" ram="1024" ethernet="8" uuid="aaaaaaaa-0000-0000-0000-000000000004" icon="Switch.png" left="250" top="450"/>
+      <node id="5" name="ISE" type="qemu" template="ise" image="ise-3.2" console="vnc" cpu="4" ram="16384" ethernet="2" uuid="aaaaaaaa-0000-0000-0000-000000000005" icon="Server.png" left="420" top="450"/>
+      <node id="6" name="Client" type="qemu" template="linux" image="linux-ubuntu-server-22.04" console="vnc" cpu="1" ram="1024" ethernet="1" uuid="aaaaaaaa-0000-0000-0000-000000000006" icon="Desktop.png" left="100" top="550"/>
+      <node id="7" name="WebSrv" type="qemu" template="linux" image="linux-ubuntu-server-22.04" console="telnet" cpu="1" ram="1024" ethernet="1" uuid="aaaaaaaa-0000-0000-0000-000000000007" icon="Server.png" left="600" top="150"/>
+    </nodes>
+    <networks>
+      <network id="1" type="pnet0" name="Internet-NAT" left="420" top="30"/>
+    </networks>
+  </topology>
+  <objects><textobjects><textobject id="1" name="Banner" type="text"><data>PGRpdj5DQ05QIFNDT1IgMzUwLTcwMSBDb3JlIExhYjwvZGl2Pg==</data></textobject></textobjects></objects>
+</lab>
