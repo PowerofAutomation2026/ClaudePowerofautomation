@@ -59,12 +59,14 @@ function runCfg(d) {
     o.push('interface ' + (x.svi ? x.name : LONG(x.name))); if (asa) o.push(' nameif ' + x.nameif, ' security-level ' + x.sec);
     if (x.desc) o.push(' description ' + x.desc);
     if (sw && x.auth === 'auto') o.push(' authentication port-control auto');
-    if (sw && !x.svi) { o.push(' switchport mode ' + (x.mode || 'access')); if ((x.mode || 'access') === 'access' && x.vlan && x.vlan !== 1) o.push(' switchport access vlan ' + x.vlan); }
+    if (sw && !x.svi) { o.push(' switchport mode ' + (x.mode || 'access')); if ((x.mode || 'access') === 'access' && x.vlan && x.vlan !== 1) o.push(' switchport access vlan ' + x.vlan); if (x.ps && x.ps.on) { o.push(' switchport port-security'); if (x.ps.max > 1) o.push(' switchport port-security maximum ' + x.ps.max); if (x.ps.viol && x.ps.viol !== 'shutdown') o.push(' switchport port-security violation ' + x.ps.viol); } }
     else o.push(x.ip ? ' ip address ' + x.ip + ' ' + lenToMask(x.len) : ' no ip address');
     if (!asa && x.aclIn) o.push(' ip access-group ' + x.aclIn + ' in'); if (!asa && x.aclOut) o.push(' ip access-group ' + x.aclOut + ' out');
     (x.extra || []).forEach(l => o.push(' ' + l)); o.push(x.up ? ' no shutdown' : ' shutdown', '!'); }
   if (asa) { for (const [k, ob] of Object.entries(d.objects)) { o.push('object network ' + k, ob.kind === 'host' ? ' host ' + ob.ip : ' subnet ' + ob.ip + ' ' + lenToMask(ob.len));
       for (const n of d.nats.filter(n => n.obj === k)) o.push(' nat (' + n.realIf + ',' + n.mappedIf + ') ' + n.kind + ' ' + (n.mapped === 'interface' ? 'interface' : n.mapped)); o.push('!'); } }
+  if (asa) { o.push('policy-map global_policy', ' class inspection_default'); Object.entries(d.inspect || {}).filter(([k, v]) => v).forEach(([k]) => o.push('  inspect ' + k)); o.push('!'); }
+  if (asa) { for (const [k, g] of Object.entries(d.objectGroups || {})) { o.push('object-group network ' + k); g.members.forEach(m => o.push(m.kind === 'host' ? ' network-object host ' + m.ip : m.kind === 'subnet' ? ' network-object ' + m.ip + ' ' + lenToMask(m.len) : m.kind === 'object' ? ' network-object object ' + m.name : ' group-object ' + m.name)); o.push('!'); } if (d.sameSec) o.push('same-security-traffic permit inter-interface'); if (d.intraSec) o.push('same-security-traffic permit intra-interface'); }
   for (const [k, ls] of Object.entries(d.sub || {})) { o.push(k); ls.forEach(l => o.push(' ' + l)); o.push('!'); }
   for (const [k, es] of Object.entries(d.acls)) { if (asa) es.forEach(e => o.push('access-list ' + k + ' extended ' + aclText(e, 'asa'))); else { o.push('ip access-list extended ' + k); es.forEach(e => o.push(' ' + aclText(e, 'ios'))); o.push('!'); } }
   if (asa) for (const x of Object.values(d.ifs)) if (x.aclIn) o.push('access-group ' + x.aclIn + ' in interface ' + x.nameif);
@@ -121,14 +123,14 @@ function vlanBrief(d) {
   return 'VLAN Name                             Status    Ports\n---- -------------------------------- --------- -------------------------------\n' + lines.join('\n');
 }
 function ifStatus(L, d) {
-  return pad('Port', 10) + pad('Name', 19) + pad('Status', 13) + pad('Vlan', 11) + pad('Duplex', 8) + pad('Speed', 7) + 'Type\n' + Object.values(d.ifs).filter(x => !x.svi).map(x => { const c = !!peerOf(L, d.name, x.name) && x.up; return pad(SHORT(x.name), 10) + pad(x.desc || '', 19) + pad(!x.up ? 'disabled' : c ? 'connected' : 'notconnect', 13) + pad((x.mode === 'trunk' ? 'trunk' : x.vlan || 1), 11) + pad('a-full', 8) + pad('a-1000', 7) + 'RJ45'; }).join('\n');
+  return pad('Port', 10) + pad('Name', 19) + pad('Status', 13) + pad('Vlan', 11) + pad('Duplex', 8) + pad('Speed', 7) + 'Type\n' + Object.values(d.ifs).filter(x => !x.svi).map(x => { const c = !!peerOf(L, d.name, x.name) && x.up; return pad(SHORT(x.name), 10) + pad(x.desc || '', 19) + pad(x.errdisable ? 'err-disabled' : !x.up ? 'disabled' : c ? 'connected' : 'notconnect', 13) + pad((x.mode === 'trunk' ? 'trunk' : x.vlan || 1), 11) + pad('a-full', 8) + pad('a-1000', 7) + 'RJ45'; }).join('\n');
 }
 function verText(d) {
   if (d.type === 'asa') return 'Cisco Adaptive Security Appliance Software Version 9.20(1) (SIMULATED)\nDevice Manager Version 7.20(1)\n\nCompiled by simulator\nSystem image file is "disk0:/asa9-20-1-smp-k8.bin"\nConfig file at boot was "startup-config"\n\n' + d.hostname + ' up 2 hours 14 mins\n\nHardware:   ASAv, 2048 MB RAM, CPU Xeon\nInternal ATA Compact Flash, 1024MB\n' + Object.keys(d.ifs).length + ' GigabitEthernet interfaces\nLicense mode: Smart Licensing (simulated)';
   return 'Cisco IOS-style Software (SIMULATED), ' + (d.type === 'switch' ? 'IOSv-L2' : 'IOSv') + ' Software, Version 15.9(3)M6 (sim)\nTechnical Support: simulator - not real Cisco software\n\nROM: Bootstrap program is IOSv\n' + d.hostname + ' uptime is 2 hours, 14 minutes\nSystem returned to ROM by reload\nSystem image file is "flash0:/vios-adventerprisek9-m"\n\ncisco ' + (d.type === 'switch' ? 'IOSv-L2' : 'IOSv') + ' (revision 1.0) with 984K/62K bytes of memory.\nProcessor board ID 9SIM' + d.name.length + '00' + '\n' + Object.keys(d.ifs).filter(k => !d.ifs[k].svi).length + ' Gigabit Ethernet interfaces\nConfiguration register is 0x0';
 }
 // ---------- registry ----------
-const MODEL = { user: ['U'], priv: ['P', 'U'], config: ['C'], if: ['I', 'C'], acl: ['A', 'C'], line: ['L', 'C'], obj: ['O', 'C'], rtr: ['R', 'C'], vlan: ['V', 'C'], clish: ['K'], diag: ['D'], diagp: ['D'], rad: ['X', 'C'] };
+const MODEL = { user: ['U'], priv: ['P', 'U'], config: ['C'], if: ['I', 'C'], acl: ['A', 'C'], line: ['L', 'C'], obj: ['O', 'C'], rtr: ['R', 'C'], vlan: ['V', 'C'], clish: ['K'], diag: ['D'], diagp: ['D'], rad: ['X', 'C'], og: ['G', 'C'], pm: ['Y', 'C'], pmc: ['Z', 'C'] };
 function mkReg() { return []; }
 function def(reg, modes, pat, help, fn, noOK) { reg.push({ modes, pat, help, fn, noOK: !!noOK, toks: pat.trim().split(/\s+/).map(w => w[0] === '<' ? (w.endsWith('...>') ? { rest: w.slice(1, -4) } : { arg: w.slice(1, -1) }) : { lit: w.toLowerCase() }) }); }
 const REG = { router: mkReg(), switch: mkReg(), asa: mkReg(), ftd: mkReg() };
@@ -173,7 +175,7 @@ function prompt(d, s) {
   if (d.role === 'ise') return 'ise1/admin# '; if (d.role === 'fmc') return '> '; if (d.role === 'esa') return 'esa1.lab.local> '; if (d.role === 'wsa') return 'wsa1.lab.local> ';
   if (d.type === 'host') return 'lab@' + d.name.toLowerCase() + ':~$ ';
   if (d.type === 'ftd') return s.mode === 'diag' ? 'firepower> ' : s.mode === 'diagp' ? 'firepower# ' : '> ';
-  const suf = { user: '>', priv: '#', config: '(config)#', if: d.type === 'asa' ? '(config-if)#' : '(config-if)#', acl: '(config-ext-nacl)#', line: '(config-line)#', obj: '(config-network-object)#', rtr: '(config-router)#', vlan: '(config-vlan)#', rad: '(config-radius-server)#' }[s.mode];
+  const suf = { user: '>', priv: '#', config: '(config)#', if: d.type === 'asa' ? '(config-if)#' : '(config-if)#', acl: '(config-ext-nacl)#', line: '(config-line)#', obj: '(config-network-object)#', rtr: '(config-router)#', vlan: '(config-vlan)#', rad: '(config-radius-server)#', og: '(config-network-object-group)#', pm: '(config-pmap)#', pmc: '(config-pmap-c)#' }[s.mode];
   return d.hostname + suf;
 }
 function exec(L, d, s, line) {
@@ -181,7 +183,7 @@ function exec(L, d, s, line) {
   let pipe = null; const pi = line.indexOf('|'); if (pi >= 0) { pipe = line.slice(pi + 1); line = line.slice(0, pi); }
   const out = execLine(L, d, s, line); return pipe ? pipeFilter(out, pipe) : out;
 }
-const CFGM = ['config', 'if', 'acl', 'line', 'obj', 'rtr', 'vlan', 'rad'];
+const CFGM = ['config', 'if', 'acl', 'line', 'obj', 'rtr', 'vlan', 'rad', 'og', 'pm', 'pmc'];
 function execLine(L, d, s, line) {
   const asa = d.type === 'asa', E = asa ? 'ERROR: ' : '';
   const { t: toks, p: pos } = splitTokens(line); if (!toks.length) return '';
@@ -191,7 +193,7 @@ function execLine(L, d, s, line) {
     if (['ex', 'exi', 'exit', 'logout', 'quit'].includes(w)) {
       if (s.mode === 'diag' || s.mode === 'diagp') { s.mode = 'clish'; return ''; }
       if (s.mode === 'clish') return 'Close this window to leave the FTD console.';
-      s.mode = ['if', 'acl', 'line', 'obj', 'rtr', 'vlan', 'rad'].includes(s.mode) ? 'config' : s.mode === 'config' ? 'priv' : s.mode === 'priv' ? 'user' : s.mode; return ''; } }
+      s.mode = ['pmc'].includes(s.mode) ? 'pm' : ['if', 'acl', 'line', 'obj', 'rtr', 'vlan', 'rad', 'og', 'pm'].includes(s.mode) ? 'config' : s.mode === 'config' ? 'priv' : s.mode === 'priv' ? 'user' : s.mode; return ''; } }
   let rest = toks, rpos = pos, no = false, doMode = null;
   if (CFGM.includes(s.mode) && /^do$/i.test(toks[0]) && toks.length > 1) { rest = toks.slice(1); rpos = pos.slice(1); doMode = s.mode; s.mode = 'priv'; }
   if (/^no$/i.test(rest[0]) && rest.length > 1) { no = true; rest = rest.slice(1); rpos = rpos.slice(1); }
@@ -275,7 +277,7 @@ function iosCommon(reg) {
   D('U', 'show cdp neighbors', 'CDP neighbor entries', (a, c) => cdpText(c.L, c.d));
   D('U', 'show users', 'Display information about terminal lines', (a, c) => '    Line       User       Host(s)              Idle       Location\n*  0 con 0                idle                 00:00:00');
   D('U', 'show history', 'Display the session command history', () => '(history is kept in the terminal: use the Up arrow)');
-  D('U', 'show logging', 'Show the contents of logging buffers', (a, c) => 'Syslog logging: enabled\n    Console logging: level debugging\n    Buffer logging: level debugging, 12 messages logged\nLog Buffer (8192 bytes):\n%SYS-5-CONFIG_I: Configured from console by console');
+  D('U', 'show logging', 'Show the contents of logging buffers', (a, c) => 'Syslog logging: enabled\n    Console logging: level debugging\n    Buffer logging: level debugging, ' + (2 + (c.d.logs || []).length) + ' messages logged\nLog Buffer (8192 bytes):\n%SYS-5-CONFIG_I: Configured from console by console\n' + (c.d.logs || []).slice().reverse().map(l => l.msg).join('\n'));
   D('U', 'show flash', 'Display information about flash', () => 'Directory of flash0:/\n    2  -rw-  vios-adventerprisek9-m (simulated)');
   D('U', 'ping <ip>', 'Send echo messages', (a, c) => doPing(c.L, c.d, a[0])); D('U', 'traceroute <ip>', 'Trace route to destination', (a, c) => doTrace(c.L, c.d, a[0]));
   D('U', 'terminal length <n>', 'Set number of lines on a screen', () => ''); D('U', 'terminal monitor', 'Copy debug output to the current terminal', () => '');
@@ -314,7 +316,7 @@ function iosCommon(reg) {
   D('C', 'line console <n>', 'Primary terminal line', (a, c) => { c.s.mode = 'line'; c.s.ctx = 'line con ' + a[0]; return ''; }); D('C', 'line vty <a> <b>', 'Virtual terminal', (a, c) => { c.s.mode = 'line'; c.s.ctx = 'line vty ' + a[0] + ' ' + a[1]; return ''; });
   D('R', '<x...>', 'Routing process subcommand', (a, c) => store(c, a[0]), true);
   D('I', 'description <text...>', 'Interface specific description', (a, c) => { c.d.ifs[c.s.ctx].desc = c.no ? '' : a[0]; return ''; }, true);
-  D('I', 'shutdown', 'Shutdown the selected interface', (a, c) => { c.d.ifs[c.s.ctx].up = c.no; return ''; }, true);
+  D('I', 'shutdown', 'Shutdown the selected interface', (a, c) => { if (c.d.type === 'switch') S.portUp(c.L, c.d.name, c.s.ctx, c.no); else c.d.ifs[c.s.ctx].up = c.no; return ''; }, true);
   D('I', 'duplex <x>', 'Configure duplex operation', (a, c) => store(c, 'duplex ' + a[0]), true); D('I', 'speed <x>', 'Configure speed operation', (a, c) => store(c, 'speed ' + a[0]), true);
   D('I', 'cdp enable', 'Enable CDP on interface', () => ''); D('I', 'negotiation auto', 'Negotiation', () => '');
 }
@@ -364,6 +366,12 @@ def(Sw, 'U', 'show authentication sessions', 'Authentication Manager session inf
 def(Sw, 'U', 'show authentication sessions interface <name...>', 'Session on one interface', (a, c) => { const n = normIf(c.d, a[0].replace(/\s+/g, '')); const x = n && c.d.ifs[n]; if (!x) return '% Invalid interface'; return 'Interface:  ' + LONG(n) + '\n  Status:  ' + (x.state === 'authorized' ? 'Authorized' : x.state === 'quarantine' ? 'Authorized (quarantine VLAN)' : x.auth === 'auto' ? 'Unauthorized' : 'port-control force-authorized') + '\n  User-Name: ' + (x.user || '-') + '\n  Policy: ' + (x.profile || '-') + '\n  ACS ACL: ' + (x.dacl ? 'xACSACLx-IP-dACL (' + x.dacl.length + ' ACEs)' : '-') + '\n  Vlan: ' + (x.vlan || 1); });
 def(Sw, 'U', 'show dot1x all', 'Show dot1x information for all interfaces', (a, c) => 'Sysauthcontrol              ' + (c.d.dot1xGlobal ? 'Enabled' : 'Disabled') + '\nDot1x Info for ' + (nacRows(c.d).map(([n]) => LONG(n)).join(', ') || '(no ports in auto mode)'));
 def(Sw, 'U', 'show aaa servers', 'Show AAA server status', (a, c) => c.d.radius && c.d.radius.ip ? 'RADIUS: id 1, priority 1, host ' + c.d.radius.ip + ', auth-port 1812, acct-port 1813\n     State: current UP' : 'No RADIUS servers configured');
+def(Sw, 'I', 'switchport port-security', 'Enable port security on the interface', (a, c) => { const x = c.d.ifs[c.s.ctx]; if (c.no) { x.ps = null; return ''; } x.ps = Object.assign({ on: true, max: 1, viol: 'shutdown' }, x.ps || {}, { on: true }); S.psCheck(c.L, c.d, c.s.ctx); return ''; }, true);
+def(Sw, 'I', 'switchport port-security maximum <n>', 'Max secure MAC addresses', (a, c) => { const x = c.d.ifs[c.s.ctx]; x.ps = Object.assign({ on: true, max: 1, viol: 'shutdown' }, x.ps || {}); x.ps.max = +a[0] || 1; S.psCheck(c.L, c.d, c.s.ctx); return ''; }, true);
+def(Sw, 'I', 'switchport port-security violation <v>', 'Violation mode: shutdown | restrict | protect', (a, c) => { const x = c.d.ifs[c.s.ctx]; if (!['shutdown', 'restrict', 'protect'].includes(a[0])) return '% Invalid violation mode (shutdown|restrict|protect)'; x.ps = Object.assign({ on: true, max: 1, viol: 'shutdown' }, x.ps || {}); x.ps.viol = a[0]; return ''; }, true);
+def(Sw, 'I', 'switchport port-security mac-address sticky', 'Learn MACs dynamically and keep them (sticky)', (a, c) => store(c, 'switchport port-security mac-address sticky'), true);
+def(Sw, 'U', 'show port-security', 'Show secure port information', (a, c) => 'Secure Port  MaxSecureAddr  CurrentAddr  SecurityViolation  Security Action\n' + Object.values(c.d.ifs).filter(x => x.ps && x.ps.on).map(x => pad(SHORT(x.name), 13) + pad(x.ps.max, 14) + pad((S.segment(c.L, c.d.name, x.name).eps.length ? 1 : 0) + (x.rogue || 0), 13) + pad(x.ps.count || 0, 19) + (x.ps.viol || 'shutdown')).join('\n'));
+def(Sw, 'U', 'show port-security interface <name...>', 'Port security for one interface', (a, c) => { const n = normIf(c.d, a[0].replace(/\s+/g, '')); const x = n && c.d.ifs[n]; if (!x) return '% Invalid interface'; return 'Port Security              : ' + (x.ps && x.ps.on ? 'Enabled' : 'Disabled') + '\nPort Status                : ' + (x.errdisable ? 'Secure-shutdown' : 'Secure-up') + '\nViolation Mode             : ' + ((x.ps && x.ps.viol) || '-') + '\nMaximum MAC Addresses      : ' + ((x.ps && x.ps.max) || '-') + '\nSecurity Violation Count   : ' + ((x.ps && x.ps.count) || 0); });
 def(Sw, 'C', 'ip default-gateway <ip>', 'Specify default gateway', (a, c) => store(c, 'ip default-gateway ' + a[0]), true);
 // ---------- ASA ----------
 function asaShow(reg, U_) {
@@ -395,7 +403,7 @@ def(As, 'P', 'reload', 'Reload the system', () => 'Proceed with reload? [confirm
 def(As, 'C', 'hostname <name>', 'Set the hostname', (a, c) => { c.d.hostname = a[0]; return ''; });
 def(As, 'C', 'domain-name <n>', 'Set the default domain name', (a, c) => store(c, 'domain-name ' + a[0]), true); def(As, 'C', 'enable password <pw>', 'Set enable password', (a, c) => store(c, 'enable password ' + a[0]), true);
 def(As, 'C', 'username <u> password <pw> privilege <n>', 'Create a user', (a, c) => store(c, 'username ' + a[0] + ' password ' + a[1] + ' privilege ' + a[2]), true); def(As, 'C', 'username <u> password <pw>', 'Create a user', (a, c) => store(c, 'username ' + a[0] + ' password ' + a[1]), true);
-for (const w of ['aaa', 'http', 'ssh', 'telnet', 'logging', 'ntp', 'snmp-server', 'crypto', 'policy-map', 'class-map', 'service-policy', 'dhcpd', 'icmp', 'threat-detection', 'asdm', 'mtu', 'failover', 'same-security-traffic', 'timeout', 'dns', 'names', 'service', 'clock', 'webvpn', 'group-policy', 'tunnel-group']) def(As, 'C', w + ' <x...>', WH[w] || 'Configuration command', (a, c) => store(c, w + ' ' + a[0]), true);
+for (const w of ['aaa', 'http', 'ssh', 'telnet', 'logging', 'ntp', 'snmp-server', 'crypto', 'class-map', 'service-policy', 'dhcpd', 'icmp', 'threat-detection', 'asdm', 'mtu', 'failover', 'timeout', 'dns', 'names', 'service', 'clock', 'webvpn', 'group-policy', 'tunnel-group']) def(As, 'C', w + ' <x...>', WH[w] || 'Configuration command', (a, c) => store(c, w + ' ' + a[0]), true);
 def(As, 'C', 'interface <name...>', 'Select an interface', (a, c) => { const n = normIf(c.d, a[0].replace(/\s+/g, '')); if (!n) return 'ERROR: invalid interface name'; c.s.mode = 'if'; c.s.ctx = n; return ''; });
 def(As, 'I', 'nameif <n>', 'Assign name to interface', (a, c) => { c.d.ifs[c.s.ctx].nameif = a[0]; return ''; }, true); def(As, 'I', 'security-level <n>', 'Set security level', (a, c) => { c.d.ifs[c.s.ctx].sec = +a[0]; return ''; }, true);
 def(As, 'I', 'ip address <ip> <mask>', 'Set the IP address', (a, c) => { const x = c.d.ifs[c.s.ctx]; if (c.no) { x.ip = null; return ''; } if (!isIp(a[0]) || !isIp(a[1])) return 'ERROR: invalid address'; x.ip = a[0]; x.len = maskToLen(a[1]); return ''; }, true);
@@ -403,10 +411,24 @@ def(As, 'I', 'shutdown', 'Shut down the interface', (a, c) => { c.d.ifs[c.s.ctx]
 def(As, 'I', 'speed <x>', 'Speed', () => ''); def(As, 'I', 'duplex <x>', 'Duplex', () => ''); def(As, 'I', 'management-only', 'Management only', () => '');
 def(As, 'C', 'route <if> <net> <mask> <gw>', 'Configure a static route', (a, c) => { const x = ifByNameif(c.d, a[0]); if (!x) return 'ERROR: interface "' + a[0] + '" not found'; if (!isIp(a[1]) || !isIp(a[2]) || !isIp(a[3])) return 'ERROR: invalid address'; const len = maskToLen(a[2]); c.d.routes = c.d.routes.filter(r => !(r.net === a[1] && r.len === len)); if (!c.no) c.d.routes.push({ net: a[1], len, nh: a[3], nameif: a[0] }); return ''; }, true);
 def(As, 'C', 'route <if> <net> <mask> <gw> <metric>', 'Configure a static route', (a, c) => { const x = ifByNameif(c.d, a[0]); if (!x) return 'ERROR: interface "' + a[0] + '" not found'; const len = maskToLen(a[2]); c.d.routes = c.d.routes.filter(r => !(r.net === a[1] && r.len === len)); if (!c.no) c.d.routes.push({ net: a[1], len, nh: a[3], nameif: a[0] }); return ''; }, true);
-function asaAcl(c, name, rule) { const { d, no } = c; const r = rule.split(/\s+/); let act = r.shift(); if (act === 'line') { r.shift(); act = r.shift(); } if (act === 'extended') act = r.shift();
+function asaAcl(c, name, rule, lineNo) { const { d, no } = c; const r = rule.split(/\s+/); let act = r.shift(); if (act === 'line') { r.shift(); act = r.shift(); } if (act === 'extended') act = r.shift();
   if (!['permit', 'deny'].includes(act)) return 'ERROR: invalid action'; try { const e = parseAclTokens(r, 'asa'); e.action = act; e.hits = 0; d.acls[name] = d.acls[name] || [];
-    if (no) d.acls[name] = d.acls[name].filter(x => aclText(x, 'asa') !== aclText(e, 'asa')); else d.acls[name].push(e); return ''; } catch (err) { return 'ERROR: ' + err.message; } }
-def(As, 'C', 'access-list <name> extended <rule...>', 'Extended access list', (a, c) => asaAcl(c, a[0], 'extended ' + a[1]), true); def(As, 'C', 'access-list <name> line <n> extended <rule...>', 'Insert at line', (a, c) => asaAcl(c, a[0], 'extended ' + a[2]), true);
+    if (no) d.acls[name] = d.acls[name].filter(x => aclText(x, 'asa') !== aclText(e, 'asa')); else { const arr = (d.acls[name] = d.acls[name] || []); if (lineNo && +lineNo >= 1 && +lineNo <= arr.length) arr.splice(+lineNo - 1, 0, e); else arr.push(e); } return ''; } catch (err) { return 'ERROR: ' + err.message; } }
+def(As, 'C', 'access-list <name> extended <rule...>', 'Extended access list', (a, c) => asaAcl(c, a[0], 'extended ' + a[1]), true); def(As, 'C', 'access-list <name> line <n> extended <rule...>', 'Insert at line', (a, c) => asaAcl(c, a[0], 'extended ' + a[2], a[1]), true);
+def(As, 'C', 'policy-map <name>', 'Configure a policy map', (a, c) => { c.s.mode = 'pm'; c.s.ctx = a[0]; return ''; });
+def(As, 'Y', 'class <name>', 'Specify a class map', (a, c) => { c.s.mode = 'pmc'; c.s.ctx = c.s.ctx + '/' + a[0]; return ''; });
+def(As, 'Z', 'inspect <proto>', 'Enable protocol inspection', (a, c) => { if (!(a[0] in c.d.inspect)) return 'ERROR: unknown inspection ' + a[0]; c.d.inspect[a[0]] = !c.no; return ''; }, true);
+def(As, 'C', 'service-policy <name> global', 'Apply a policy map globally', () => '', true);
+def(As, 'U', 'show service-policy', 'Show the active service policy', (a, c) => 'Global policy:\n  Service-policy: global_policy\n' + Object.entries(c.d.inspect).filter(([k, v]) => v).map(([k]) => '    Inspect: ' + k).join('\n'));
+def(As, 'C', 'same-security-traffic permit inter-interface', 'Permit traffic between interfaces with the same security level', (a, c) => { c.d.sameSec = !c.no; return ''; }, true);
+def(As, 'C', 'same-security-traffic permit intra-interface', 'Permit traffic in and out of the same interface', (a, c) => { c.d.intraSec = !c.no; return ''; }, true);
+def(As, 'C', 'object-group network <name>', 'Create a network object group', (a, c) => { if (c.no) { delete c.d.objectGroups[a[0]]; return ''; } c.d.objectGroups[a[0]] = c.d.objectGroups[a[0]] || { members: [] }; c.s.mode = 'og'; c.s.ctx = a[0]; return ''; }, true);
+def(As, 'G', 'network-object host <ip>', 'Add a host to the group', (a, c) => { if (!isIp(a[0])) return 'ERROR: invalid address'; const g = c.d.objectGroups[c.s.ctx].members; const i = g.findIndex(m => m.kind === 'host' && m.ip === a[0]); if (c.no) { if (i >= 0) g.splice(i, 1); } else if (i < 0) g.push({ kind: 'host', ip: a[0] }); return ''; }, true);
+def(As, 'G', 'network-object <ip> <mask>', 'Add a subnet to the group', (a, c) => { if (!isIp(a[0]) || !isIp(a[1])) return 'ERROR: invalid address'; const g = c.d.objectGroups[c.s.ctx].members, len = maskToLen(a[1]); const i = g.findIndex(m => m.kind === 'subnet' && m.ip === a[0] && m.len === len); if (c.no) { if (i >= 0) g.splice(i, 1); } else if (i < 0) g.push({ kind: 'subnet', ip: a[0], len }); return ''; }, true);
+def(As, 'G', 'network-object object <name>', 'Add a network object to the group', (a, c) => { const g = c.d.objectGroups[c.s.ctx].members; const i = g.findIndex(m => m.kind === 'object' && m.name === a[0]); if (c.no) { if (i >= 0) g.splice(i, 1); } else if (i < 0) g.push({ kind: 'object', name: a[0] }); return ''; }, true);
+def(As, 'G', 'group-object <name>', 'Nest another group', (a, c) => { const g = c.d.objectGroups[c.s.ctx].members; if (!c.d.objectGroups[a[0]]) return 'ERROR: group ' + a[0] + ' does not exist'; if (!g.find(m => m.kind === 'group' && m.name === a[0])) g.push({ kind: 'group', name: a[0] }); return ''; }, true);
+def(As, 'G', 'description <t...>', 'Description', () => '', true);
+def(As, 'U', 'show running-config object-group', 'Show object groups', (a, c) => pipeFilter(runCfg(c.d), 'section ^object-group'));
 def(As, 'C', 'access-list <name> remark <text...>', 'Access list comment', () => '', true);
 def(As, 'C', 'access-group <name> in interface <if>', 'Bind an access-list to an interface', (a, c) => { const x = ifByNameif(c.d, a[1]); if (!x) return 'ERROR: interface "' + a[1] + '" not found'; if (c.no) { delete x.aclIn; return ''; } if (!c.d.acls[a[0]]) return 'ERROR: access-list ' + a[0] + ' does not exist'; x.aclIn = a[0]; return ''; }, true);
 def(As, 'C', 'object network <name>', 'Create a network object', (a, c) => { if (c.no) { delete c.d.objects[a[0]]; c.d.nats = c.d.nats.filter(n => n.obj !== a[0]); return ''; } c.d.objects[a[0]] = c.d.objects[a[0]] || { kind: 'host', ip: '0.0.0.0' }; c.s.mode = 'obj'; c.s.ctx = a[0]; return ''; }, true);
@@ -445,7 +467,7 @@ function execHost(L, d, s, line) {
   if (t[0] === 'swaks') { const g = k => { const i = t.indexOf(k); return i > 0 ? t[i + 1] : null; }; const to = g('--to'), from = g('--from') || ('user@' + d.name.toLowerCase() + '.example'), srv = g('--server') || g('-s');
     if (!to || !srv) return 'usage: swaks --to rcpt@lab.local --from you@domain --server <esa-ip> [--header "Subject: hi"] [--body "text"] [--attach file.exe]';
     const hdr = g('--header') || ''; const att = []; t.forEach((w, i) => { if (w === '--attach') att.push(t[i + 1]); });
-    const r = S.esaSend(L, d.name, { from, to, subject: hdr.replace(/^Subject:\s*/i, '') || '(no subject)', body: g('--body') || '', attach: att, server: srv });
+    const r = S.esaSend(L, d.name, { from, to, subject: hdr.replace(/^Subject:\s*/i, '') || '(no subject)', body: g('--body') || '', attach: att, server: srv, dkim: t.includes('--dkim') });
     const lines = ['=== Trying ' + srv + ':25...']; if (r.disp === 'not-connected') return lines.concat(['*** Error connecting to ' + srv + ':25: ' + (r.why || 'connection failed'), '   (the packet was dropped before reaching the ESA - check NAT + firewall policy)']).join('\n');
     lines.push('=== Connected to ' + srv + '.', '<-  220 esa1.lab.local ESMTP', ' -> EHLO ' + d.name.toLowerCase(), ' -> MAIL FROM:<' + from + '>', ' -> RCPT TO:<' + to + '>'); r.steps.forEach(x => lines.push('    [ESA] ' + x.t));
     lines.push(r.disp.startsWith('delivered') ? '<-  250 2.0.0 Message accepted for delivery (MID ' + r.mid + ')' : r.disp === 'rejected' ? '<** 550 5.7.1 ' + r.why : '<-  250 2.0.0 Message accepted (MID ' + r.mid + ') - ' + r.disp + ': ' + r.why, ' -> QUIT', '<-  221 Bye', '=== Connection closed. Final disposition: ' + r.disp.toUpperCase()); return lines.join('\n'); }

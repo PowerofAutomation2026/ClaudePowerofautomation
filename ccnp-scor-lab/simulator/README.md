@@ -23,7 +23,7 @@ Not real Cisco software: command syntax and behaviour follow ASA/IOS/FMC concept
 
 **Real behaviour behind the screens:** stateful firewall + NAT engine, ISE RADIUS/802.1X authentication with dACLs (and realistic failure reasons: wrong secret, switch not registered, bad password...), ESA mail pipeline (HAT, SPF, spam score, antivirus, content filters, DLP), WSA proxy (categories, HTTPS decryption blind spot, malware blocking), animated packets on the map.
 
-**15 auto-graded lab tasks** with hints and answers; progress saved in your browser. Start screen lets you choose which devices are powered on.
+**20 auto-graded lab tasks** (firewall, FTD/FMC policy + Deploy, ISE 802.1X + dACL, ESA/WSA Commit, port-security, VLANs) with hints and answers; progress saved in your browser. Start screen lets you choose which devices are powered on.
 
 ## How to use it (2 ways to open anything)
 1. **Click a device on the map** - an action bar appears under the map with **Terminal / Open GUI / Power on-off** buttons.
@@ -35,7 +35,7 @@ GUIs open like application windows (full size). Use **—** to minimize (the win
 - Press **Self-test** (top right): it checks the right-click menu, terminal, GUI and power on/off of every device in *your* browser and lists exactly what fails.
 - A red bar at the top shows any error message - send me that text. Its **Reset lab** button clears saved data.
 - Saved labs are versioned: an old saved lab from an earlier version is discarded automatically (this was the cause of "right-click FTD/ASA GUI errors").
-- Automated tests: `npm i playwright` then `node tests/e2e.cjs` (197 checks: every device menu/power/GUI + all 15 lab tasks done through the GUIs).
+- Automated tests: `npm i playwright` then `node tests/e2e.cjs` (293 checks: every device menu/power/GUI, a 163-page GUI sweep, stale-save recovery, the self-test, and all 20 lab tasks done through the GUIs).
 
 ## Product-style GUIs
 ASDM-style (toolbar + navigation tree), FMC-style (top menu, **Deploy** workflow), ISE-style (Home / Operations / Policy / Administration), ESA and WSA (AsyncOS-style: edits stay **pending until Commit Changes**), IOS web-UI style for routers and switches.

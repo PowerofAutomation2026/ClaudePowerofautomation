@@ -72,6 +72,14 @@ h3,h4{margin:8px 0 4px}.deploy{display:flex;justify-content:space-between;align-
 .prod .up{color:#15803d}.prod .dn{color:#b42318}.prod .warn{color:#b45309}.prod .dim{color:#64748b}.prod .chip{background:#eef2f7;border:1px solid var(--pbd);color:#26364a}.prod .x{background:transparent;border:0;color:#b42318;cursor:pointer}
 .ptiles{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 12px}.ptile{background:#fff;border:1px solid var(--pbd);border-top:3px solid var(--pb);border-radius:4px;padding:8px 16px;min-width:110px}.ptile b{display:block;font-size:22px;color:var(--pb)}.ptile span{color:#64748b;font-size:11.5px}
 .prod .ph{background:#f1f5f9;border-left:3px solid #94a3b8;padding:5px 9px;margin:4px 0;color:#1b2733}.prod .ph.ok{border-color:#16a34a}.prod .ph.drop{border-color:#dc2626}.prod .phr{margin-top:8px;font-weight:700}.prod .mini{margin:0;font:11px ui-monospace,monospace;color:#475569}
+
+.pfield{display:inline-flex;flex-direction:column;gap:2px;font-size:11.5px;color:#475569}.pfield>span{font-weight:600}.ppick{display:inline-flex;gap:4px;align-items:center}.pval{display:inline-flex}
+.pbadge{display:inline-block;margin-left:8px;padding:0 7px;border-radius:9px;font-size:10.5px;background:#e2e8f0;color:#334155}.pbadge.cfgonly{background:#fef3c7;color:#92400e}
+.pbars{display:flex;flex-direction:column;gap:5px}.pbar{display:flex;align-items:center;gap:8px;font-size:12px}.pbar .bl{width:150px;color:#334155}.pbar .bt{flex:1;background:#e5eaf1;border-radius:3px;height:12px;overflow:hidden}.pbar .bt i{display:block;height:100%;background:var(--pb)}.pbar .bv{width:34px;text-align:right;color:#475569}
+.pmulti{border:1px solid #cdd6e2;background:#fff;border-radius:4px;padding:6px;min-width:200px}.pmlist{max-height:170px;overflow:auto}.pmlist label{display:flex;gap:5px;align-items:center;padding:1px 0}
+.cli{max-height:50vh;min-height:220px}.clip{color:#0b6bcb;font:12px ui-monospace,Consolas,monospace}.cliin{flex:1;min-width:200px;font:12px ui-monospace,Consolas,monospace}
+.pdlg{border:2px solid var(--pb);background:#fff;border-radius:4px;margin:8px 0}.pdlg .dh{background:var(--pb);color:#fff;padding:6px 12px;font-weight:600}.pdlg .db{padding:10px 12px}
+.prod tr.disabled td{opacity:.5}.pdlgbody{padding:8px 0}
 /* per-product header colours */
 .asdm .phdr{background:linear-gradient(#5b6f86,#3d4f66)}.asdm .pmenu button.on{color:#3d4f66}.asdm{--pb:#2b6cb0}
 .fmc .phdr{background:#0b2545}.fmc .pmenu button.on{color:#0b2545}.fmc{--pb:#0a7abf}.fmc .deploybtn{background:#ffffff22;color:#fff;border:1px solid #ffffff55;border-radius:3px;padding:4px 14px;cursor:pointer}.fmc .deploybtn.pend{background:#f59e0b;color:#1b1300;border-color:#f59e0b;font-weight:700}
@@ -88,5 +96,5 @@ h3,h4{margin:8px 0 4px}.deploy{display:flex;justify-content:space-between;align-
  </div>
  <div class="col"><div class="card" id="deskCard"><div id="desk"><div id="deskhint"><h3>Right-click a device on the map</h3><p>→ <b>Open Terminal</b> or <b>Open GUI</b><br>Double-click a device to open its terminal / desktop.<br>Windows can be dragged, resized and closed.</p></div></div></div></div>
 </main><div id="errbar"></div><div id="toast"></div><div id="ctx"></div><div id="modal"></div>
-<script src="engine.js"></script><script src="cli.js"></script><script src="gui.js"></script><script src="app.js"></script>
+<script src="engine.js"></script><script src="cli.js"></script><script src="gui-core.js"></script><script src="gui-asa.js"></script><script src="gui-fmc.js"></script><script src="gui-ise.js"></script><script src="gui-esa.js"></script><script src="gui-ios.js"></script><script src="app.js"></script>
 </body></html>

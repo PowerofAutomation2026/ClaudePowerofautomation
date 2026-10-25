@@ -219,6 +219,12 @@ Commands not listed here are rejected like a real device would (`% Invalid input
 | user EXEC (and priv) | `show authentication sessions interface <name ...>` | Session on one interface |
 | user EXEC (and priv) | `show dot1x all` | Show dot1x information for all interfaces |
 | user EXEC (and priv) | `show aaa servers` | Show AAA server status |
+| interface config | `switchport port-security` | Enable port security on the interface (supports `no`) |
+| interface config | `switchport port-security maximum <n>` | Max secure MAC addresses (supports `no`) |
+| interface config | `switchport port-security violation <v>` | Violation mode: shutdown | restrict | protect (supports `no`) |
+| interface config | `switchport port-security mac-address sticky` | Learn MACs dynamically and keep them (sticky) (supports `no`) |
+| user EXEC (and priv) | `show port-security` | Show secure port information |
+| user EXEC (and priv) | `show port-security interface <name ...>` | Port security for one interface |
 | global config | `ip default-gateway <ip>` | Specify default gateway (supports `no`) |
 
 ## ASA-style firewall (FW1-ASA)
@@ -270,7 +276,6 @@ Commands not listed here are rejected like a real device would (`% Invalid input
 | global config | `ntp <x ...>` | Configuration command (supports `no`) |
 | global config | `snmp-server <x ...>` | Configuration command (supports `no`) |
 | global config | `crypto <x ...>` | Configuration command (supports `no`) |
-| global config | `policy-map <x ...>` | Configuration command (supports `no`) |
 | global config | `class-map <x ...>` | Configuration command (supports `no`) |
 | global config | `service-policy <x ...>` | Configuration command (supports `no`) |
 | global config | `dhcpd <x ...>` | Configuration command (supports `no`) |
@@ -279,7 +284,6 @@ Commands not listed here are rejected like a real device would (`% Invalid input
 | global config | `asdm <x ...>` | Configuration command (supports `no`) |
 | global config | `mtu <x ...>` | Configuration command (supports `no`) |
 | global config | `failover <x ...>` | Configuration command (supports `no`) |
-| global config | `same-security-traffic <x ...>` | Configuration command (supports `no`) |
 | global config | `timeout <x ...>` | Configuration command (supports `no`) |
 | global config | `dns <x ...>` | Configuration command (supports `no`) |
 | global config | `names <x ...>` | Configuration command (supports `no`) |
@@ -301,6 +305,20 @@ Commands not listed here are rejected like a real device would (`% Invalid input
 | global config | `route <if> <net> <mask> <gw> <metric>` | Configure a static route (supports `no`) |
 | global config | `access-list <name> extended <rule ...>` | Extended access list (supports `no`) |
 | global config | `access-list <name> line <n> extended <rule ...>` | Insert at line (supports `no`) |
+| global config | `policy-map <name>` | Configure a policy map |
+|  | `class <name>` | Specify a class map |
+|  | `inspect <proto>` | Enable protocol inspection (supports `no`) |
+| global config | `service-policy <name> global` | Apply a policy map globally (supports `no`) |
+| user EXEC (and priv) | `show service-policy` | Show the active service policy |
+| global config | `same-security-traffic permit inter-interface` | Permit traffic between interfaces with the same security level (supports `no`) |
+| global config | `same-security-traffic permit intra-interface` | Permit traffic in and out of the same interface (supports `no`) |
+| global config | `object-group network <name>` | Create a network object group (supports `no`) |
+|  | `network-object host <ip>` | Add a host to the group (supports `no`) |
+|  | `network-object <ip> <mask>` | Add a subnet to the group (supports `no`) |
+|  | `network-object object <name>` | Add a network object to the group (supports `no`) |
+|  | `group-object <name>` | Nest another group (supports `no`) |
+|  | `description <t ...>` | Description (supports `no`) |
+| user EXEC (and priv) | `show running-config object-group` | Show object groups |
 | global config | `access-list <name> remark <text ...>` | Access list comment (supports `no`) |
 | global config | `access-group <name> in interface <if>` | Bind an access-list to an interface (supports `no`) |
 | global config | `object network <name>` | Create a network object (supports `no`) |
