@@ -199,7 +199,7 @@ function asaNew(ctx, d, inIf, inI, inName, pkt, depth) {
   const r = routeLookup(d, dstReal);
   if (!r) { T(ctx, d.name, 'no route to ' + dstReal, 'drop'); return { st: 'drop', dev: d.name, why: 'no route to ' + dstReal, kind: 'noroute', silent: true }; }
   const out = d.ifs[r.if], outName = out.nameif;
-  if (outName === inName) { T(ctx, d.name, 'same-interface traffic denied', 'drop'); return { st: 'drop', dev: d.name, why: 'same-security-traffic permit intra-interface not set', kind: 'drop', silent: true }; }
+  if (outName === inName) { T(ctx, d.name, 'No NAT/untranslate rule matched ' + pkt.dst + ': it routes back out the ingress interface (' + inName + ') - dropped', 'drop'); return { st: 'drop', dev: d.name, why: pkt.dst + ' is reachable only back out the ingress interface: no static NAT (untranslate) rule for it', kind: 'drop', silent: true }; }
   const chk = Object.assign({}, pkt, { dst: dstReal });
   if (inI.aclIn && d.acls[inI.aclIn]) {
     const a = evalAcl(d, inI.aclIn, chk);
