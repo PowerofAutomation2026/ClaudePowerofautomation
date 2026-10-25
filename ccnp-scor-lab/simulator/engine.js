@@ -17,7 +17,7 @@ const clone = o => JSON.parse(JSON.stringify(o));
 function mk(type, name, label, x, y) { return { type, name, label, x, y, ifs: {}, routes: [], acls: {}, hostname: label }; }
 function addIf(d, name, ip, len, extra) { d.ifs[name] = Object.assign({ name, ip: ip || null, len: len || 24, up: true }, extra || {}); }
 function newLab() {
-  const L = { dev: {}, links: [], conns: [], ver: 6 };
+  const L = { dev: {}, links: [], conns: [], ver: 7 };
   const D = (t, n, label, x, y) => (L.dev[n] = mk(t, n, label, x, y));
   const host = (n, label, x, y, ip, len, gw, listen) => { const d = D('host', n, label, x, y); addIf(d, 'eth0', ip, len); d.gw = gw; d.listen = listen; return d; };
   host('Outside', 'Outside-Desktop', 70, 120, '198.51.100.10', 24, '198.51.100.1', { tcp: [22, 80, 443], udp: [], page: 'Outside web server (198.51.100.10)' });
@@ -61,8 +61,18 @@ function newLab() {
   L.esa = { domains: ['lab.local'], hat: [{ name: 'BLOCKLIST', policy: 'block', ips: [] }, { name: 'ALLOWLIST', policy: 'allow', ips: [] }], dmarc: { on: false }, spfAction: 'tag', antispam: { on: true, threshold: 50, action: 'quarantine' }, antivirus: true, dlp: false, filters: [],
     dns: { 'partner.com': { spf: ['198.51.100.10'], dkim: true, dmarc: 'reject' }, 'example.org': { spf: ['198.51.100.99'], dkim: false, dmarc: 'reject' }, 'lab.local': { spf: ['203.0.113.1'], dkim: true, dmarc: 'none' } }, tracking: [], quarantine: [], mailboxes: {}, counters: { accepted: 0, spam: 0, virus: 0, blocked: 0, dlp: 0 } };
   ft.draft = clone({ ifs: ft.ifs, routes: ft.routes, policy: ft.policy, nat: ft.nat, objects: ft.objects, portObjs: ft.portObjs, zones: ft.zones });
+  addIf(r2, 'Gi0/4', '208.67.222.1', 24); addIf(r2, 'Gi0/5', '198.18.50.1', 24); addIf(r2, 'Gi0/6', '52.10.0.1', 24); addIf(r2, 'Gi0/7', '20.50.0.1', 24); addIf(r2, 'Gi0/8', '34.80.0.1', 24);
+  const umb = host('UMB', 'Cisco Umbrella (cloud)', 70, 235, '208.67.222.222', 24, '208.67.222.1', { tcp: [80, 443], udp: [53], page: 'Cisco Umbrella resolver / block page' }); umb.role = 'umb'; umb.hostname = 'umbrella';
+  const sep = host('SEP', 'Secure Endpoint (cloud)', 70, 345, '198.18.50.10', 24, '198.18.50.1', { tcp: [443], udp: [], page: 'Cisco Secure Endpoint cloud console' }); sep.role = 'sep'; sep.hostname = 'secure-endpoint';
+  [['AWS', 'AWS Cloud', 40, 445, '52.10.0', 'aws'], ['AZURE', 'Azure Cloud', 170, 555, '20.50.0', 'azure'], ['GCP', 'GCP Cloud', 905, 450, '34.80.0', 'gcp']].forEach(([n, lb, x, y, pre, role]) => { const e = host(n, lb, x, y, pre + '.2', 24, pre + '.1', { tcp: [], udp: [], page: '' }); e.role = role; e.cloud = true; e.hostname = role; });
+  ['Outside', 'Client', 'DMZ', 'FTDClient', 'WSA1', 'ESA1'].forEach(n => { L.dev[n].dns = '8.8.8.8'; }); L.dev.Outside.listen.udp = [53];
+  L.umb = { on: true, networks: [], roaming: {}, log: [], counters: { total: 0, blocked: 0 }, policies: [{ name: 'Default Policy', identities: ['*'], cats: [], security: { malware: true, c2: true, phishing: true }, allow: [], block: [] }] };
+  L.sep = { agents: {}, events: [], custom: [], allow: [], isolations: [], integ: { ise: { on: false }, umbrella: { on: false } }, policies: { Audit: { mode: 'audit', autoIsolate: false, desc: 'Detects and reports but lets the file run' }, Protect: { mode: 'protect', autoIsolate: false, desc: 'Quarantines malicious files on download/execute' } } };
+  ['Client', 'FTDClient', 'DMZ'].forEach(n => { L.sep.agents[n] = { installed: false, policy: 'Audit', state: 'ok', ver: '8.2.1', t: '' }; });
+  L.ise.pxgrid = { on: false, autoApprove: false, clients: [] }; L.ise.anc = { assigned: {}, log: [] }; L.wsa.dns = '8.8.8.8'; L.wsa.ise = { on: false };
+  L.cloud = { seq: 0, aws: cloudNew('aws'), azure: cloudNew('azure'), gcp: cloudNew('gcp') };
   L.links = [['Outside:eth0', 'R2:Gi0/2'], ['R2:Gi0/1', 'FW1:Gi0/0'], ['FW1:Gi0/1', 'R1:Gi0/1'], ['FW1:Gi0/2', 'DMZ-SW:Gi0/1'], ['DMZ-SW:Gi0/2', 'DMZ:eth0'], ['DMZ-SW:Gi0/3', 'ESA1:eth0'], ['DMZ-SW:Gi0/4', 'WSA1:eth0'], ['SW1:Gi0/3', 'MGMT-SW:Gi0/1'], ['MGMT-SW:Gi0/2', 'FMC1:eth0'], ['MGMT-SW:Gi0/3', 'ISE1:eth0'], ['R1:Gi0/2', 'SW1:Gi0/1'],
-    ['SW1:Gi0/2', 'Client:eth0'], ['R2:Gi0/3', 'FTD1:Gi0/0'], ['FTD1:Gi0/1', 'FTDClient:eth0']];
+    ['SW1:Gi0/2', 'Client:eth0'], ['R2:Gi0/3', 'FTD1:Gi0/0'], ['FTD1:Gi0/1', 'FTDClient:eth0'], ['R2:Gi0/4', 'UMB:eth0'], ['R2:Gi0/5', 'SEP:eth0'], ['R2:Gi0/6', 'AWS:eth0'], ['R2:Gi0/7', 'AZURE:eth0'], ['R2:Gi0/8', 'GCP:eth0']];
   return L;
 }
 
@@ -89,6 +99,7 @@ function segment(L, d, i) {
 function arp(L, dn, ifn, ip) {
   const s = segment(L, dn, ifn);
   for (const ep of s.eps) { if (L.dev[ep.dev].on === false) continue; if (L.dev[ep.dev].type === 'host' && nacBlocked(L, ep.dev)) continue; const x = L.dev[ep.dev].ifs[ep.if]; if (x && x.up && x.ip === ip) return { dev: ep.dev, if: ep.if, sw: s.sw }; }
+  for (const ep of s.eps) { const fd = L.dev[ep.dev]; if (!fd.cloud || fd.on === false) continue; for (const k in fd.ifs) if (k !== 'eth0' && fd.ifs[k].ip === ip) return { dev: ep.dev, if: ep.if, sw: s.sw }; }   // cloud edge answers for VM public IPs
   for (const ep of s.eps) { const fd = L.dev[ep.dev]; if (fd.type !== 'asa' || fd.on === false) continue;   // proxy-ARP for static-NAT mapped addresses
     for (const n of fd.nats) if (n.kind === 'static' && n.mapped === ip && fd.ifs[ep.if].nameif === n.mappedIf) return { dev: ep.dev, if: ep.if, sw: s.sw }; }
   for (const ep of s.eps) { const fd = L.dev[ep.dev]; if (fd.type !== 'ftd' || fd.on === false) continue;
@@ -338,9 +349,11 @@ function iseAuth(L, rq) {
   if (rq.method === 'dot1x') { if (!I.allowDot1x) return fail('ISE: 802.1X (PEAP) is not allowed in Allowed Protocols'); const u = I.users.find(x => x.name === rq.user); if (!u) return fail('ISE: 22056 Subject not found in the applicable identity store(s)'); if (u.enabled === false) return fail('ISE: 22057 User account is disabled'); if (u.pass !== rq.pass) return fail('ISE: 22040 Wrong password or invalid shared secret'); group = u.group; }
   else { if (!I.allowMab) return fail('ISE: MAB is not allowed in Allowed Protocols'); const en = I.endpoints.find(x => x.mac.toLowerCase() === (rq.mac || '').toLowerCase()); group = en ? en.group : 'Unknown'; }
   const rule = I.authz.find(r => r.enabled !== false && (r.group === 'any' || r.group === group) && (r.method === 'any' || r.method === rq.method) && (!r.device || r.device === 'any' || r.device === rq.nas));
-  const pname = rule ? rule.profile : 'DenyAccess', prof = I.profiles[pname] || { access: 'reject' };
+  const hn0 = hostAtPort(L, rq.nas, rq.port), anc = hn0 && I.anc && I.anc.assigned[hn0];
+  const pname = anc ? 'Quarantine' : rule ? rule.profile : 'DenyAccess', prof = I.profiles[pname] || { access: 'reject' };
   if (prof.access === 'reject') return fail('Authorization: ' + (rule ? 'rule "' + rule.name + '"' : 'Default rule') + ' -> ' + pname, 'unauth');
-  port.state = prof.quarantine ? 'quarantine' : 'authorized'; port.user = rq.user || rq.mac; port.profile = pname; port.authVlan = prof.vlan; port.dacl = parseDacl(prof.dacl).length ? parseDacl(prof.dacl) : null;
+  port.state = prof.quarantine ? 'quarantine' : 'authorized'; port.user = rq.user || rq.mac; port.profile = anc ? 'Quarantine (ANC)' : pname; port.group = group; port.authVlan = prof.vlan; port.dacl = parseDacl(prof.dacl).length ? parseDacl(prof.dacl) : null;
+  if (anc) return log('Pass', 'ISE ANC policy ' + anc.policy + ' (assigned by ' + anc.by + ') overrides authorization -> quarantine', 'Quarantine', { group });
   if (prof.quarantine) return log('Pass', 'Authorized into quarantine VLAN ' + prof.vlan + ' (no network access)', pname, { group });
   return log('Pass', 'Authorization rule "' + rule.name + '" -> ' + pname + (port.dacl ? ' (+ dACL)' : '') + ' [' + group + ']', pname, { group });
 }
@@ -377,21 +390,140 @@ function esaSend(L, from, m) {
   const user = m.to.split('@')[0].toLowerCase(); (E.mailboxes[user] = E.mailboxes[user] || []).unshift({ from: m.from, subject: tag + m.subject, t: hhmm() }); E.counters.accepted++;
   steps.push({ k: 'ok', t: 'Delivered to mailbox ' + m.to + (tag ? ' (tagged ' + tag.trim() + ')' : '') }); return done(tag ? 'delivered (tagged)' : 'delivered', true, '');
 }
+
+// ---------- Umbrella DNS, Secure Endpoint, pxGrid / ANC, public clouds ----------
+const UMB_IPS = ['208.67.222.222', '208.67.220.220'], SECNAME = { malware: 'Malware', c2: 'Command and Control', phishing: 'Phishing' };
+function hostAtPort(L, nas, port) { const f = farEnd(L, nas + ':' + port); return f ? f.split(':')[0] : null; }
+function iseGroupOf(L, ip) { for (const d of Object.values(L.dev)) if (d.type === 'host' && d.ifs.eth0 && d.ifs.eth0.ip === ip) { const p = portOf(L, d.name); if (p && p.port.auth === 'auto' && p.port.state === 'authorized') return p.port.group || null; } return null; }
+function pxClient(L, name) { return L.ise.pxgrid.clients.find(c => c.name === name); }
+function pxRegister(L, name, kind) { const P = L.ise.pxgrid; if (!P.on) return { ok: false, why: 'pxGrid service is not enabled on ISE (ISE > Administration > pxGrid Services > Enable pxGrid)' }; let c = pxClient(L, name); if (!c) { c = { name, kind, status: P.autoApprove ? 'Approved' : 'Pending', t: hhmm() }; P.clients.push(c); } return { ok: true, status: c.status }; }
+function iseAnc(L, key, policy, by) {
+  const I = L.ise, rec = { t: hhmm(), host: key, ip: hostIp(L, key), policy, by };
+  if (L.dev.ISE1.on === false) return { ok: false, why: 'ISE is powered off' };
+  if (!I.pxgrid.on) return { ok: false, why: 'pxGrid is disabled on ISE - ANC request not delivered' };
+  const c = pxClient(L, by === 'Secure Endpoint' ? 'SecureEndpoint' : by); if (!c || c.status !== 'Approved') return { ok: false, why: 'pxGrid client "' + by + '" is not approved on ISE (pxGrid Services > Client Management) - ANC request refused' };
+  I.anc.assigned[key] = rec; I.anc.log.unshift(rec); const p = portOf(L, key);
+  if (!p || p.port.auth !== 'auto' || p.port.state === 'unauth') { rec.result = 'ANC ' + policy + ' assigned, but there is no active 802.1X session for ' + key + ' - ISE has nothing to quarantine'; return { ok: true, why: rec.result }; }
+  p.port.state = 'quarantine'; p.port.profile = 'Quarantine (ANC)'; p.port.dacl = null; rec.result = 'CoA sent: ' + p.sw.name + ' ' + p.name + ' moved to quarantine';
+  I.logs.unshift({ t: hhmm(), user: p.port.user || key, mac: '', nas: p.sw.name + ' ' + p.name, method: 'CoA', result: 'Pass', profile: 'Quarantine', why: 'ANC ' + policy + ' by ' + by + ' -> CoA reauthenticate/quarantine' }); return { ok: true, why: rec.result };
+}
+function iseAncClear(L, key) { const I = L.ise, p = portOf(L, key); delete I.anc.assigned[key]; if (p && p.port.state === 'quarantine') { p.port.state = 'unauth'; p.port.profile = ''; p.port.user = ''; } }
+// --- Secure Endpoint
+function classify(f) { f = (f || '').toLowerCase(); if (/eicar/.test(f)) return 'Eicar-Test-File'; if (/\.exe$/.test(f) || /malware/.test(f)) return 'W32.Trojan.Agent'; return null; }
+function fakeSha(s) { let h = 2166136261; for (const c of s) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619) >>> 0; } const x = h.toString(16).padStart(8, '0'); return (x + [...x].reverse().join('')).repeat(4); }
+function sepIsolated(L, key) { const a = L.sep && L.sep.agents[key]; return !!(a && a.installed && a.state === 'isolated'); }
+function hostIp(L, key) { if (L.dev[key] && L.dev[key].ifs.eth0) return L.dev[key].ifs.eth0.ip; const c = cloudFind(L, key); return c ? (c.vm.publicIp || c.vm.privateIp) : null; }
+function sepFile(L, key, file, how) {
+  const S = L.sep; let a = S.agents[key]; if (!a || !a.installed) return null; if (L.dev[key] && L.dev[key].on === false) return null;
+  const low = (file || '').toLowerCase(); let threat = classify(file); const cd = (S.custom || []).find(c => low.includes(c.toLowerCase())); if (!threat && cd) threat = 'Simple Custom Detection (' + cd + ')';
+  if (!threat) return { action: 'clean' }; if ((S.allow || []).some(x => low.includes(x.toLowerCase()))) return { action: 'allowed (allow list)', threat };
+  const pol = S.policies[a.policy] || S.policies.Audit, prot = pol.mode === 'protect';
+  const ev = { t: hhmm(), host: key, ip: hostIp(L, key), file, threat, sha: fakeSha(file), how: how || 'download', policy: a.policy, action: prot ? 'Quarantined' : 'Detected - file executed', sev: prot ? 'Medium' : 'High' };
+  S.events.unshift(ev); S.events.length = Math.min(S.events.length, 80);
+  if (!prot) { a.state = 'compromised'; ev.indicator = 'Malicious activity: ' + threat; if (pol.autoIsolate) { a.state = 'isolated'; ev.indicator += ' (auto-isolated)'; }
+    ev.ise = S.integ.ise.on ? iseAnc(L, key, 'QUARANTINE', 'Secure Endpoint').why : 'ISE integration is off'; }
+  return { action: ev.action, threat, ev };
+}
+function sepTest(L, key, file) { return sepFile(L, key, file, 'download'); }
+// --- DNS / Umbrella
+function siteOf(L, name) { if (WEB[name]) return WEB[name]; for (const [pv, suf] of [['aws', '.s3.amazonaws.com'], ['azure', '.blob.core.windows.net'], ['gcp', '.storage.googleapis.com']]) if (name.endsWith(suf)) { const b = L.cloud[pv].buckets.find(x => x.name === name.slice(0, -suf.length)); if (b) return { cat: 'Business', page: 'Object storage bucket "' + b.name + '" (' + pv.toUpperCase() + ') - index.html', bucket: b }; } return null; }
+function flowFrom(L, who, p) { return typeof who === 'string' ? flow(L, who, p) : cloudFlow(L, who.key, p); }
+function resolve(L, who, name, o) {
+  o = o || {}; const steps = [], dev = typeof who === 'string' ? L.dev[who] : null, vm = typeof who === 'object' ? (cloudFind(L, who.key) || {}).vm : null;
+  const server = o.server || (dev && dev.dns) || (vm && vm.dns) || '8.8.8.8', isUmb = UMB_IPS.includes(server);
+  if (/^\d+(\.\d+){3}$/.test(name)) return { ok: true, ip: name, steps };
+  const site = siteOf(L, name); if (!site) return { ok: false, kind: 'dns', why: 'DNS: ' + name + ' could not be resolved (NXDOMAIN - try www.facebook.com, www.cisco.com, www.casino-royal.com, www.youtube.com, downloads.example.org, www.malware-test.net)', steps };
+  let seen = null;
+  if (o.check !== false) { const r = flowFrom(L, who, { proto: 'udp', dst: isUmb ? '208.67.222.222' : '198.51.100.10', dport: 53 }); steps.push({ k: r.ok ? 'ok' : 'drop', t: 'DNS query to resolver ' + server + ' (udp/53): ' + (r.ok ? 'answered' : 'FAILED - ' + (r.why || r.kind)) }); if (!r.ok) return { ok: false, kind: 'dns', why: 'DNS server ' + server + ' unreachable on udp/53: ' + (r.why || r.kind), steps }; seen = r.seenSrc; }
+  const ip = site.bucket ? '198.51.100.10' : '198.51.100.10';
+  if (!isUmb) { steps.push({ k: 'ok', t: 'DNS: ' + name + ' -> ' + ip + ' (resolver ' + server + ')' }); return { ok: true, ip, steps }; }
+  const U = L.umb, key = typeof who === 'string' ? who : who.key, rm = U.roaming[key], net = seen && U.networks.find(n => n.ip === seen && n.on !== false);
+  const idn = rm && rm.on ? 'roaming:' + key : net ? 'network:' + net.name : null, idLabel = rm && rm.on ? 'Roaming computer ' + key : net ? 'Network ' + net.name + ' (' + net.ip + ')' : null;
+  U.counters.total++; const lg = (act, why, cat) => { U.log.unshift({ t: hhmm(), identity: idLabel || (seen || '?') + ' (unregistered)', domain: name, cat: cat || site.cat, action: act, why: why || '' }); U.log.length = Math.min(U.log.length, 80); };
+  if (U.on === false || !idn) { steps.push({ k: 'warn', t: 'Umbrella: query from ' + (seen || 'unknown source') + ' does not match any registered Network or Roaming Computer - answered with NO policy applied' }); lg('Allowed', 'no matching identity'); return { ok: true, ip, steps }; }
+  const pol = U.policies.find(p => p.identities.includes(idn)) || U.policies.find(p => p.identities.includes('*')); let act = 'allow', why = '';
+  if (pol.allow.includes(name)) { act = 'allow'; why = 'destination list (allow)'; } else if (pol.block.includes(name)) { act = 'block'; why = 'destination list (block)'; } else if (site.sec && pol.security[site.sec]) { act = 'block'; why = 'security category: ' + SECNAME[site.sec]; } else if (pol.cats.includes(site.cat)) { act = 'block'; why = 'content category: ' + site.cat; }
+  steps.push({ k: act === 'block' ? 'drop' : 'ok', t: 'Umbrella: identity ' + idLabel + ' -> policy "' + pol.name + '": ' + name + ' ' + act.toUpperCase() + (why ? ' (' + why + ')' : '') });
+  if (act === 'block') { U.counters.blocked++; lg('Blocked', why); return { ok: false, kind: 'dnsblock', ip: '146.112.61.106', why: 'Blocked by Cisco Umbrella (' + why + ') - DNS answered with the block page 146.112.61.106', steps }; }
+  lg('Allowed', why); return { ok: true, ip, steps };
+}
+// --- public clouds (AWS / Azure / GCP): networks, subnets, firewall rules, VMs, buckets
+const CLOUDS = { aws: { edge: 'AWS', pub: '52.10.0', label: 'AWS' }, azure: { edge: 'AZURE', pub: '20.50.0', label: 'Azure' }, gcp: { edge: 'GCP', pub: '34.80.0', label: 'Google Cloud' } };
+const IMAGES = { 'ubuntu-web': { name: 'Ubuntu 22.04 + nginx (web)', ports: [22, 80, 443] }, ubuntu: { name: 'Ubuntu 22.04 (SSH only)', ports: [22] }, windows: { name: 'Windows Server 2022', ports: [3389, 80] }, ftdv: { name: 'Cisco Secure Firewall Threat Defense Virtual (marketplace)', ports: [22, 443] } };
+function cloudNew(pv) { const P = { seq: 0, nets: [], subnets: [], fws: [], vms: [], buckets: [], log: [] };
+  const nid = pv === 'aws' ? 'vpc-default' : pv === 'azure' ? 'vnet-lab' : 'default', cidr = pv === 'aws' ? '172.31.0.0/16' : pv === 'azure' ? '10.50.0.0/16' : '10.128.0.0/16';
+  P.nets.push({ id: nid, name: nid, cidr }); P.subnets.push({ id: 'subnet-1', name: pv === 'azure' ? 'default' : 'subnet-1', net: nid, cidr: cidr.replace(/\.0\.0\/16/, '.1.0/24'), publicIp: true });
+  P.fws.push({ id: 'fw-default', name: pv === 'aws' ? 'default-sg' : pv === 'azure' ? 'default-nsg' : 'default (VPC firewall)', rules: pv === 'gcp' ? [{ id: 1, dir: 'in', action: 'allow', proto: 'icmp', from: 0, to: 0, cidr: '0.0.0.0/0', prio: 65534, name: 'default-allow-icmp' }] : [] }); return P; }
+function syncEdge(L) { for (const [pv, c] of Object.entries(CLOUDS)) { const e = L.dev[c.edge]; if (!e) continue; for (const k of Object.keys(e.ifs)) if (k !== 'eth0') delete e.ifs[k]; L.cloud[pv].vms.filter(v => v.publicIp).forEach(v => { e.ifs['vm-' + v.id] = { name: 'vm-' + v.id, ip: v.publicIp, len: 32, up: true }; }); } }
+function cloudFind(L, key) { const m = /^(aws|azure|gcp):(.+)$/.exec(key || ''); if (!m || !L.cloud) return null; const P = L.cloud[m[1]], vm = P.vms.find(v => v.id === m[2]); return vm ? { P, vm, prov: m[1] } : null; }
+function fwEval(fw, dir, proto, port, ip) {
+  if (!fw) return { ok: dir === 'out', why: 'no firewall attached' };
+  for (const r of fw.rules.filter(x => x.dir === dir).sort((a, b) => (a.prio || 100) - (b.prio || 100))) {
+    if (proto === 'icmp' ? !(r.proto === 'icmp' || r.proto === 'any') : !(r.proto === proto || r.proto === 'any')) continue;
+    if (proto !== 'icmp' && r.proto !== 'any' && !(port >= r.from && port <= r.to)) continue;
+    const [n, l] = r.cidr.split('/'); if (!inNet(ip, n, l === undefined ? 32 : +l)) continue; return { ok: r.action === 'allow', rule: r, why: (r.action === 'allow' ? 'allowed' : 'DENIED') + ' by rule "' + (r.name || r.id) + '"' };
+  } return { ok: dir === 'out', why: 'no matching rule - default ' + (dir === 'in' ? 'DENY inbound' : 'ALLOW outbound') };
+}
+function cloudInbound(L, e, fp) {
+  const pv = Object.keys(CLOUDS).find(k => CLOUDS[k].edge === e.name), P = L.cloud[pv], lab = CLOUDS[pv].label, vm = P.vms.find(v => v.publicIp === fp.dst);
+  if (!vm) return { drop: true, why: lab + ': no resource owns public IP ' + fp.dst };
+  if (vm.state !== 'running') return { drop: true, why: lab + ': VM ' + vm.name + ' is ' + vm.state };
+  const fw = P.fws.find(f => f.id === vm.fw), ev = fwEval(fw, 'in', fp.proto, fp.dport, fp.src);
+  if (!ev.ok) { P.log.unshift({ t: hhmm(), vm: vm.name, src: fp.src, proto: fp.proto, port: fp.dport || '', action: 'DENY', why: ev.why }); P.log.length = Math.min(P.log.length, 60); return { drop: true, why: lab + ' firewall "' + (fw ? fw.name : '-') + '": inbound ' + fp.proto + (fp.dport ? '/' + fp.dport : '') + ' from ' + fp.src + ' ' + ev.why }; }
+  P.log.unshift({ t: hhmm(), vm: vm.name, src: fp.src, proto: fp.proto, port: fp.dport || '', action: 'ALLOW', why: ev.why }); P.log.length = Math.min(P.log.length, 60);
+  return { open: fp.proto === 'icmp' || (IMAGES[vm.image] || IMAGES.ubuntu).ports.includes(fp.dport) };
+}
+function cloudFlow(L, key, p) {
+  const c = cloudFind(L, key); if (!c) return { ok: false, kind: 'off', why: 'VM not found' }; const { P, vm, prov } = c;
+  if (vm.state !== 'running') return { ok: false, kind: 'off', why: vm.name + ' is ' + vm.state };
+  if (!vm.publicIp) return { ok: false, kind: 'noroute', why: vm.name + ' has no public IP / NAT gateway - no internet egress' };
+  if (sepIsolated(L, key) && p.dst !== '198.18.50.10') return { ok: false, kind: 'isolated', why: 'Secure Endpoint: VM is ISOLATED' };
+  const ev = fwEval(P.fws.find(f => f.id === vm.fw), 'out', p.proto, p.dport, p.dst); if (!ev.ok) return { ok: false, kind: 'prohibited', why: CLOUDS[prov].label + ' egress rule: ' + ev.why };
+  return flow(L, CLOUDS[prov].edge, Object.assign({}, p, { srcIp: vm.publicIp }));
+}
+function cloudLaunch(L, pv, o) {
+  const P = L.cloud[pv], sn = P.subnets.find(s => s.id === o.subnet); if (!sn) return { error: 'Choose a subnet' }; if (!o.name || !/^[a-z0-9-]+$/i.test(o.name)) return { error: 'VM name: letters, digits, hyphen' }; if (P.vms.find(v => v.name === o.name)) return { error: 'A VM named ' + o.name + ' already exists' };
+  P.seq++; const id = (pv === 'aws' ? 'i-0a' + (1000 + P.seq) : o.name), [b] = sn.cidr.split('/'), pre = b.split('.').slice(0, 3).join('.');
+  const vm = { id, name: o.name, subnet: sn.id, net: sn.net, fw: o.fw || 'fw-default', image: o.image || 'ubuntu-web', privateIp: pre + '.' + (3 + P.seq), publicIp: o.publicIp ? CLOUDS[pv].pub + '.' + (10 + P.seq) : null, state: 'running', dns: '', size: o.size || 'small', tags: o.tags || '' };
+  P.vms.push(vm); if (L.sep.agents) L.sep.agents[pv + ':' + id] = { installed: false, policy: 'Audit', state: 'ok', ver: '8.2.1', t: '' }; syncEdge(L); return { vm };
+}
+function cloudSetState(L, pv, id, st) { const vm = L.cloud[pv].vms.find(v => v.id === id); if (vm) vm.state = st; }
+function cloudDelete(L, pv, id) { const P = L.cloud[pv]; P.vms = P.vms.filter(v => v.id !== id); delete L.sep.agents[pv + ':' + id]; syncEdge(L); }
+function cloudBucket(L, pv, name, pub) { const P = L.cloud[pv]; if (!/^[a-z0-9][a-z0-9-]{2,}$/.test(name || '')) return { error: 'Bucket name: 3+ lowercase letters, digits, hyphen' }; if (P.buckets.find(b => b.name === name)) return { error: 'Bucket already exists' }; P.buckets.push({ name, public: !!pub, objects: ['index.html'] }); return { ok: true }; }
+function cloudExec(L, key, line) {
+  const c = cloudFind(L, key); if (!c) return 'VM not found'; const { vm, prov } = c, t = line.trim().split(/\s+/), cmd = t[0];
+  if (vm.state !== 'running') return 'VM is ' + vm.state + ' - start it first';
+  if (!cmd) return '';
+  if (cmd === 'help') return 'ping <ip> | curl [url] | nslookup <name> [server] | resolvectl dns <ip> | ip addr | hostname | sep-status';
+  if (cmd === 'hostname') return vm.name; if (cmd === 'whoami') return 'cloud-user';
+  if (cmd === 'ip') return '2: eth0: <UP> mtu 1500\n    inet ' + vm.privateIp + '/24 brd scope global eth0\n    public (NAT) ' + (vm.publicIp || 'none');
+  if (cmd === 'resolvectl') { if (t[1] === 'dns' && t[2]) { vm.dns = t[2]; return 'DNS server set to ' + t[2]; } return 'Link eth0: DNS Servers: ' + (vm.dns || '(cloud default 8.8.8.8)'); }
+  if (cmd === 'nslookup') { const r = resolve(L, { key }, t[1] || '', t[2] ? { server: t[2] } : {}); return r.ok ? 'Server: ' + (t[2] || vm.dns || '8.8.8.8') + '\nName: ' + t[1] + '\nAddress: ' + r.ip : (r.kind === 'dnsblock' ? 'Name: ' + t[1] + '\nAddress: ' + r.ip + '   <-- Cisco Umbrella block page\n' + r.why : '** server can\'t find ' + t[1] + ': ' + r.why); }
+  if (cmd === 'sep-status') { const a = L.sep.agents[key]; return a && a.installed ? 'Cisco Secure Endpoint connector ' + a.ver + ' policy ' + a.policy + ' state ' + a.state : 'Cisco Secure Endpoint connector is not installed'; }
+  if (cmd === 'ping') { const ip = t[1]; if (!/^\d+(\.\d+){3}$/.test(ip || '')) return 'usage: ping <ip>'; const out = []; let ok = 0; for (let i = 1; i <= 3; i++) { const r = cloudFlow(L, key, { proto: 'icmp', dst: ip }); if (r.ok) { ok++; out.push('64 bytes from ' + ip + ': icmp_seq=' + i + ' time=' + (20 + i) + ' ms'); } else out.push(i === 1 ? 'ping: ' + (r.why || r.kind) : ''); } out.push('3 packets transmitted, ' + ok + ' received'); return out.filter(Boolean).join('\n'); }
+  if (cmd === 'curl') { let url = t[1] || ''; if (!/^https?:\/\//.test(url)) url = 'http://' + url; const r = webGet(L, null, { url, vm: key }); if (r.ok) return '<html><h1>' + r.page + '</h1></html>\n[HTTP 200' + (r.ep ? ' | Secure Endpoint: ' + r.ep.action : '') + ']'; if (r.kind === 'dnsblock') return 'HTTP/1.1 200 (Cisco Umbrella block page)\n' + r.why; if (r.kind === 'blocked') return '403 ' + r.why; return 'curl: (7) ' + (r.why || r.kind); }
+  return cmd + ': command not found (type help)';
+}
 // ---------- web (simulated Internet + WSA proxy) ----------
 const WEB = { 'www.facebook.com': { cat: 'Social Networking', page: 'Facebook (simulated social network)' }, 'www.casino-royal.com': { cat: 'Gambling', page: 'Casino Royal - place your bets' }, 'www.cisco.com': { cat: 'Business', page: 'Cisco - business site (simulated)' },
-  'news.example.org': { cat: 'News', page: 'Example News - today' }, 'www.youtube.com': { cat: 'Streaming Media', page: 'Video streaming (simulated)' }, 'www.malware-test.net': { cat: 'Malware Sites', page: 'Malware distribution site (simulated)' }, 'downloads.example.org': { cat: 'File Downloads', page: 'Example downloads - files' } };
+  'news.example.org': { cat: 'News', page: 'Example News - today' }, 'www.youtube.com': { cat: 'Streaming Media', page: 'Video streaming (simulated)' }, 'www.malware-test.net': { cat: 'Malware Sites', sec: 'malware', page: 'Malware distribution site (simulated)' }, 'downloads.example.org': { cat: 'File Downloads', page: 'Example downloads - files' }, 'login-secure-bank.biz': { cat: 'Uncategorized', sec: 'phishing', page: 'Fake bank login (phishing site, simulated)' }, 'c2.evil-botnet.ru': { cat: 'Uncategorized', sec: 'c2', page: 'Botnet command-and-control server (simulated)' } };
 function webGet(L, host, rq) {
   const m = /^(https?):\/\/([^\/:]+)(?::(\d+))?(\/.*)?$/i.exec(rq.url || ''); if (!m) return { ok: false, kind: 'bad', why: 'Invalid URL (use http://name or https://name)', steps: [] };
   const https = m[1].toLowerCase() === 'https', name = m[2].toLowerCase(), port = m[3] ? +m[3] : https ? 443 : 80, path = m[4] || '/', steps = [], isIpN = /^\d+(\.\d+){3}$/.test(name);
-  const site = WEB[name], dst = isIpN ? name : site ? '198.51.100.10' : null;
-  if (!dst) return { ok: false, kind: 'dns', why: 'DNS: ' + name + ' could not be resolved (not in the simulated Internet: try www.facebook.com, www.cisco.com, www.casino-royal.com, www.youtube.com, downloads.example.org)', steps };
+  const who = rq.vm ? { key: rq.vm } : host; const site = isIpN ? null : siteOf(L, name);
+  const rs = isIpN ? { ok: true, ip: name, steps: [] } : resolve(L, rq.proxy ? 'WSA1' : who, name, rq.proxy ? { server: L.wsa.dns, check: UMB_IPS.includes(L.wsa.dns) } : {});
+  steps.push(...rs.steps);
+  if (!rs.ok) return { ok: false, kind: rs.kind, why: rs.why, ip: rs.ip, cat: site ? site.cat : '', steps, page: rs.kind === 'dnsblock' ? 'Cisco Umbrella block page: this site is blocked' : undefined };
+  const dst = rs.ip;
   steps.push({ k: 'ok', t: 'DNS: ' + name + ' -> ' + dst });
-  if (!rq.proxy) { const r = flow(L, host, { proto: 'tcp', dst, dport: port, host: isIpN ? null : name, file: /eicar/i.test(path) ? 'eicar' : null }); steps.push({ k: r.ok ? 'ok' : 'drop', t: 'Direct connection to ' + dst + ':' + port + (r.ok ? ' succeeded' : ' failed: ' + (r.why || r.kind)) });
-    return { ok: r.ok, kind: r.kind, status: r.ok ? 200 : 0, page: site ? site.page : r.page, cat: site ? site.cat : '', why: r.why, steps, net: r }; }
+  const finish = r => { if (r.ok && /eicar|malware|\.exe$/i.test(path)) { const e = sepFile(L, rq.vm || host, path.split('/').pop() || path, 'download'); if (e) { r.ep = e; steps.push({ k: e.action === 'clean' ? 'ok' : 'warn', t: 'Secure Endpoint on ' + (rq.vm || host) + ': ' + e.action + (e.threat ? ' (' + e.threat + ')' : '') }); } } return r; };
+  if (site && site.bucket && !site.bucket.public) return { ok: false, kind: 'blocked', status: 403, why: 'AccessDenied: bucket "' + site.bucket.name + '" is private (enable public access to serve it)', steps, cat: site.cat };
+  if (!rq.proxy) { const fl = { proto: 'tcp', dst, dport: port, host: isIpN ? null : name, file: /eicar/i.test(path) ? 'eicar' : null }; const r = rq.vm ? cloudFlow(L, rq.vm, fl) : flow(L, host, fl); steps.push({ k: r.ok ? 'ok' : 'drop', t: 'Direct connection to ' + dst + ':' + port + (r.ok ? ' succeeded' : ' failed: ' + (r.why || r.kind)) });
+    return finish({ ok: r.ok, kind: r.kind, status: r.ok ? 200 : 0, page: site ? site.page : r.page, cat: site ? site.cat : '', why: r.why, steps, net: r }); }
   const [pip, pp] = rq.proxy.split(':'), pr = flow(L, host, { proto: 'tcp', dst: pip, dport: +pp || 3128 });
   steps.push({ k: pr.ok ? 'ok' : 'drop', t: 'Connect to proxy ' + rq.proxy + (pr.ok ? ' OK' : ' failed: ' + (pr.why || pr.kind)) });
   if (!pr.ok) return { ok: false, kind: 'proxy', why: 'Proxy ' + rq.proxy + ' unreachable: ' + (pr.why || pr.kind), steps, net: pr };
-  const W = L.wsa; W.counters.total++; const cat = site ? site.cat : 'Uncategorized'; const cip = L.dev[host].ifs.eth0.ip; const grp = (W.policies || []).find(p => p.members.some(mm => inCidr(cip, mm))); const pol = grp ? grp.policy : W.policy; let act = pol[cat] || 'allow'; if (grp) steps.push({ k: 'ok', t: 'WSA: client ' + cip + ' matched Access Policy "' + grp.name + '"' });
+  const W = L.wsa; W.counters.total++; const cat = site ? site.cat : 'Uncategorized'; const cip = L.dev[host].ifs.eth0.ip; const gid = iseGroupOf(L, cip), grp = (W.policies || []).find(p => p.members.some(mm => /^ise:/.test(mm) ? (W.ise.on && L.ise.pxgrid.on && (pxClient(L, 'WSA') || {}).status === 'Approved' && gid === mm.slice(4)) : inCidr(cip, mm))); const pol = grp ? grp.policy : W.policy; let act = pol[cat] || 'allow'; if (grp) steps.push({ k: 'ok', t: 'WSA: client ' + cip + ' matched Access Policy "' + grp.name + '"' });
   if (W.blocklist.includes(name)) { act = 'block'; steps.push({ k: 'warn', t: 'Custom URL list: ' + name + ' is in the Block list' }); } if (W.allowlist.includes(name)) { act = 'allow'; steps.push({ k: 'ok', t: 'Custom URL list: ' + name + ' is in the Allow list' }); }
   const lg = (a, why) => { W.log.unshift({ t: hhmm(), client: host, url: rq.url, cat, act: a, why: why || '' }); W.log.length = Math.min(W.log.length, 60); };
   steps.push({ k: 'ok', t: 'WSA: ' + (https ? 'HTTPS CONNECT (' + (W.decrypt && ((W.decryptCats || {})[cat] || 'decrypt') === 'decrypt' ? 'DECRYPTED - full inspection' : 'tunnelled - only the host name is visible') + ')' : 'HTTP request') + ', category "' + cat + '", policy action ' + act.toUpperCase() });
@@ -401,7 +533,7 @@ function webGet(L, host, rq) {
     steps.push({ k: 'warn', t: W.av ? 'WSA cannot scan inside the encrypted HTTPS tunnel - malware passes! (enable HTTPS decryption)' : 'Anti-Malware scanning is disabled' }); }
   const up = flow(L, 'WSA1', { proto: 'tcp', dst, dport: port }); steps.push({ k: up.ok ? 'ok' : 'drop', t: 'WSA fetches from the Internet ' + dst + ':' + port + (up.ok ? ' - OK' : ' - FAILED: ' + (up.why || up.kind)) });
   if (!up.ok) { lg('Error', 'upstream ' + (up.why || up.kind)); return { ok: false, kind: 'upstream', status: 503, cat, why: 'WSA could not reach the Internet: ' + (up.why || up.kind) + ' (check the firewall for DMZ -> outside)', steps, net: pr }; }
-  W.counters.allowed++; lg(act === 'monitor' ? 'Monitored' : 'Allowed', ''); return { ok: true, status: 200, cat, page: site ? site.page : 'OK', via: 'WSA', steps, net: pr };
+  W.counters.allowed++; lg(act === 'monitor' ? 'Monitored' : 'Allowed', ''); return finish({ ok: true, status: 200, cat, page: site ? site.page : 'OK', via: 'WSA', steps, net: pr });
 }
 // ---------- flows ----------
 function originate(ctx, dn, pkt) {
@@ -420,15 +552,17 @@ function flow0(L, srcName, p) {
   const sip = p.srcIp || srcIpFor(d, p.dst);
   if (!sip) return { ok: false, kind: 'noroute', why: 'no route to ' + p.dst, trace: ctx.trace, path: [srcName] };
   if (d.type === 'host' && nacBlocked(L, srcName)) { const pp = portOf(L, srcName); return { ok: false, kind: 'unauth', why: '802.1X: port ' + pp.name + ' on ' + pp.sw.name + ' is ' + (pp.port.state === 'quarantine' ? 'in the quarantine VLAN (no access)' : 'not authenticated') + ' - authenticate with ISE first', at: pp.sw.name, trace: ctx.trace, path: [srcName, pp.sw.name] }; }
+  if (sepIsolated(L, srcName) && p.dst !== '198.18.50.10') return { ok: false, kind: 'isolated', why: 'Secure Endpoint: ' + srcName + ' is ISOLATED (network access blocked except to the Secure Endpoint cloud)', trace: ctx.trace, path: [srcName] };
   const id = 1000 + Math.floor(Math.random() * 60000);
   const pkt = { proto: p.proto, src: sip, dst: p.dst, sport: p.proto === 'icmp' ? id : (p.sport || 40000 + Math.floor(Math.random() * 20000)), dport: p.proto === 'icmp' ? id : p.dport, ttl: p.ttl || 64, type: 'echo', sig: p.sig, host: p.host, file: p.file };
   if (d.type === 'host') { const pp = portOf(L, srcName); if (pp && pp.port.dacl) { const r = evalAcl({ acls: { D: pp.port.dacl }, objects: {} }, 'D', pkt); if (r.action === 'deny') { T(ctx, pp.sw.name, 'dACL from ISE denied ' + pstr(pkt), 'drop'); return { ok: false, kind: 'prohibited', why: 'downloadable ACL (dACL) assigned by ISE on ' + pp.sw.name + ' ' + pp.name + ' denied this traffic', at: pp.sw.name, trace: ctx.trace, path: [srcName, pp.sw.name] }; } } }
   const o = originate(ctx, srcName, pkt);
   if (o.st !== 'delivered') return { ok: false, kind: o.reset ? 'closed' : o.kind === 'prohibited' ? 'prohibited' : o.kind === 'noroute' || o.kind === 'unreach' ? 'unreach' : o.kind === 'ttl' ? 'ttl' : o.silent ? 'timeout' : 'timeout', why: o.why, at: o.dev, hopIp: o.hopIp, trace: ctx.trace, path: ctx.path };
   const dd = L.dev[o.dev], fp = o.pkt; let kind, rp;
-  const isHost = dd.type === 'host';
+  const isHost = dd.type === 'host'; let cl = null;
+  if (dd.cloud) { cl = cloudInbound(L, dd, fp); if (cl.drop) { T(ctx, dd.name, cl.why, 'drop'); return { ok: false, kind: 'timeout', why: cl.why, at: dd.name, trace: ctx.trace, path: ctx.path }; } }
   if (fp.proto === 'icmp') { kind = 'open'; rp = { proto: 'icmp', type: 'echo-reply' }; }
-  else if (isHost && ((dd.listen[fp.proto] || []).includes(fp.dport))) { kind = 'open'; rp = { proto: fp.proto }; }
+  else if (dd.cloud ? cl.open : (isHost && ((dd.listen[fp.proto] || []).includes(fp.dport)))) { kind = 'open'; rp = { proto: fp.proto }; }
   else { kind = 'closed'; rp = { proto: fp.proto }; }
   T(ctx, dd.name, fp.proto === 'icmp' ? 'sends echo-reply' : kind === 'open' ? fp.proto + '/' + fp.dport + ' open -> ' + (fp.proto === 'tcp' ? 'SYN-ACK' : 'reply') : fp.proto + '/' + fp.dport + ' closed -> ' + (fp.proto === 'tcp' ? 'RST' : 'ICMP port unreachable'), kind === 'open' ? 'ok' : 'drop');
   const reply = { proto: fp.proto === 'icmp' ? 'icmp' : fp.proto, type: rp.type, src: fp.dst, dst: fp.src, sport: fp.dport, dport: fp.sport, ttl: 64 };
@@ -459,6 +593,6 @@ function packetTracer(L, dn, nameif, p) {
   d.conns.length = nc; d.xlates.length = nx; d.connSeq = seq; if (d.events) d.events.splice(0, d.events.length - evn);
   return { o, trace: ctx.trace, path: ctx.path };
 }
-const API = { WEB, IPS_POLICIES, SIGINFO, FTD_APPS, FTD_URLCATS, ftdChanges, ftdApps, addRogue, removeRogue, psCheck, portUp, VERSION: 6, webGet, packetTracer, iseAuth, iseLogoff, esaSend, portOf, nacBlocked,  ip2n, n2ip, inNet, maskToLen, lenToMask, wildToLen, isIp, portNum, clone, newLab, flow, traceroute, routeLookup, ownsIp, evalAcl, parseAclTokens, aclText, fmtAddr, ifByNameif, ftdDeploy, segment };
+const API = { UMB_IPS, resolve, sepFile, sepTest, sepIsolated, pxRegister, pxClient, iseAnc, iseAncClear, hostIp, cloudFind, cloudLaunch, cloudSetState, cloudDelete, cloudFlow, cloudExec, cloudNew, fwEval, cloudBucket, IMAGES, CLOUDS, iseGroupOf, syncEdge, WEB, IPS_POLICIES, SIGINFO, FTD_APPS, FTD_URLCATS, ftdChanges, ftdApps, addRogue, removeRogue, psCheck, portUp, VERSION: 7, webGet, packetTracer, iseAuth, iseLogoff, esaSend, portOf, nacBlocked,  ip2n, n2ip, inNet, maskToLen, lenToMask, wildToLen, isIp, portNum, clone, newLab, flow, traceroute, routeLookup, ownsIp, evalAcl, parseAclTokens, aclText, fmtAddr, ifByNameif, ftdDeploy, segment };
 root.Sim = API; if (typeof module !== 'undefined' && module.exports) module.exports = API;
 })(typeof window !== 'undefined' ? window : globalThis);

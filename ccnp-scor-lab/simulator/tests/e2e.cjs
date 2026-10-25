@@ -7,7 +7,7 @@ const T = (n, ok, extra) => { if (ok) pass++; else { fail++; console.log('  FAIL
   const b = await chromium.launch(); const p = await b.newPage({ viewport: { width: 1500, height: 950 } });
   p.on('pageerror', e => errs.push('PAGEERR ' + e.message)); p.on('console', m => { if (m.type() === 'error') errs.push('CONSOLE ' + m.text()); });
   const W = () => p.locator('.win').last(), ts = async () => (await p.$$eval('.task', e => e.map(x => x.className.includes('ok') ? 1 : 0)));
-  const names = { Outside: 'Outside-Desktop', R2: 'R2', FW1: 'FW1-ASA', R1: 'R1', SW1: 'SW1', Client: 'Client (inside PC)', DMZ: 'DMZ-Server', FTD1: 'FTD1', FTDClient: 'FTD-Client', 'DMZ-SW': 'DMZ-SW', ESA1: 'ESA1', 'MGMT-SW': 'MGMT-SW', FMC1: 'FMC1', ISE1: 'ISE1', WSA1: 'WSA1' };
+  const names = { Outside: 'Outside-Desktop', R2: 'R2', FW1: 'FW1-ASA', R1: 'R1', SW1: 'SW1', Client: 'Client (inside PC)', DMZ: 'DMZ-Server', FTD1: 'FTD1', FTDClient: 'FTD-Client', 'DMZ-SW': 'DMZ-SW', ESA1: 'ESA1', 'MGMT-SW': 'MGMT-SW', FMC1: 'FMC1', ISE1: 'ISE1', WSA1: 'WSA1', UMB: 'Cisco Umbrella (cloud)', SEP: 'Secure Endpoint (cloud)', AWS: 'AWS Cloud', AZURE: 'Azure Cloud', GCP: 'GCP Cloud' };
   const node = k => p.locator(`g.node:has-text("${names[k]}")`).first();
   const closeAll = async () => { for (let i = 0; i < 25; i++) { const c = await p.$$('.win .wx:not(.wm)'); if (!c.length) break; await c[0].click(); } };
   const gui = async k => { await node(k).click(); await p.locator('#abar button', { hasText: 'Open GUI' }).click(); };
@@ -35,7 +35,7 @@ const T = (n, ok, extra) => { if (ok) pass++; else { fail++; console.log('  FAIL
 
   console.log('2. GUI sweep (every page, every button)');
   let pages = 0;
-  for (const k of ['FW1', 'R1', 'R2', 'SW1', 'DMZ-SW', 'MGMT-SW', 'FTD1', 'FMC1', 'ISE1', 'ESA1', 'WSA1']) {
+  for (const k of ['FW1', 'R1', 'R2', 'SW1', 'DMZ-SW', 'MGMT-SW', 'FTD1', 'FMC1', 'ISE1', 'ESA1', 'WSA1', 'UMB', 'SEP', 'AWS', 'AZURE', 'GCP']) {
     await gui(k); const w = W(), mains = await w.locator('.pmenu button').count();
     for (let mi = 0; mi < Math.max(mains, 1); mi++) {
       if (mains) await w.locator('.pmenu button').nth(mi).click(); const nN = await w.locator('.tnode').count(), tN = await w.locator('.ptabs:not(.inner) button').count();
@@ -103,9 +103,64 @@ const T = (n, ok, extra) => { if (ok) pass++; else { fail++; console.log('  FAIL
   await gui('WSA1'); await menu('Web Security Manager'); await page('Access Policies'); await W().locator('tr:has(td:text-is("Social Networking")) select').first().selectOption('block'); await menu('Security Services'); await page('HTTPS Proxy'); await tick(W().locator('.pcontent input[type=checkbox]').first());
   T('WSA edits staged', (await ts())[13] === 0); await W().locator('.commitbtn').click(); await btn('Commit Changes'); await closeAll();
   s = await ts(); T('task 14 (WSA block social)', s[13] === 1, s.join('')); T('task 15 (WSA https decrypt)', s[14] === 1);
-  console.log('   tasks:', s.join(''));
-  T('ALL 20 lab tasks complete via the GUIs', s.every(x => x === 1), s.join(''));
 
+  console.log('3b. Cisco Umbrella / Secure Endpoint / pxGrid / public clouds');
+  const term = async (k, cmd) => { if (process.env.TRACE) console.log('  term', k, cmd); await rc(k, 'Open Terminal'); await W().locator('.tin').fill(cmd); await W().locator('.tin').press('Enter'); const o = await W().locator('.term').innerText(); await closeAll(); return o; };
+  // T21 Umbrella
+  await gui('UMB'); await page('Core Identities > Networks'); await fill('public (egress) IP', '203.0.113.1'); await btn('Save'); await page('Management > DNS Policies'); await tick(W().locator('tr:has(td:text-is("Gambling")) input')); await closeAll();
+  const o21 = await term('Client', 'resolvectl dns 208.67.222.222'); T('resolvectl sets Umbrella', /Umbrella/.test(o21), o21.slice(-120));
+  const ns = await term('Client', 'nslookup www.casino-royal.com'); T('nslookup shows Umbrella block page', /BLOCK PAGE/.test(ns), ns.slice(-200));
+  s = await ts(); T('task 21 (Umbrella)', s[20] === 1, s.join(''));
+  // T22 force DNS via R1 ACL
+  await gui('R1'); await page('Access Lists (ACL)');
+  const aclRow = async (act, pr, dt, dv, port, ifc) => { await fill('ACL name', 'DNS-FORCE'); const sl = await W().locator('.pcontent .prow select').all(); await sl[0].selectOption(act); await sl[1].selectOption(pr); await sl[2].selectOption('any'); await sl[3].selectOption(dt); if (dv) await fill('destination', dv); await fill('port', port); if (ifc) { await sl[sl.length - 2].selectOption(ifc); await sl[sl.length - 1].selectOption('out'); } await btn('Add'); };
+  await aclRow('permit', 'udp', 'host', '208.67.222.222', '53'); await aclRow('deny', 'udp', 'any', '', '53'); await aclRow('permit', 'ip', 'any', '', '', 'Gi0/1'); await closeAll();
+  s = await ts(); T('task 22 (force DNS to Umbrella)', s[21] === 1, s.join(''));
+  // T23 Secure Endpoint
+  await gui('SEP'); await menu('Management'); await page('Computers'); await W().locator('tr:has(td:text-is("Client")) button:text-is("Install connector")').click(); await W().locator('tr:has(td:text-is("Client")) select').selectOption('Protect');
+  s = await ts(); T('task 23 (Secure Endpoint Protect)', s[22] === 1, s.join(''));
+  await closeAll();
+  const dl = await term('Client', 'curl http://downloads.example.org/eicar.com'); T('curl shows endpoint quarantine', /Quarantined/.test(dl), dl.slice(-200));
+  // T24 pxGrid + ANC
+  await gui('ISE1'); await menu('Administration'); await page('pxGrid Services'); await tick(W().locator('.pcontent input[type=checkbox]').first()); await closeAll();
+  await gui('SEP'); await menu('Accounts'); await page('Integrations (ISE / Umbrella)'); await tick(W().locator('.pcontent input[type=checkbox]').first()); await closeAll();
+  await gui('ISE1'); await menu('Administration'); await page('pxGrid Services'); await W().locator('tr:has(td:text-is("SecureEndpoint")) button:text-is("Approve")').click(); await closeAll();
+  s = await ts(); T('task 24 (pxGrid + ANC)', s[23] === 1, s.join(''));
+  // T25 WSA + ISE identity
+  await gui('WSA1'); await menu('Network'); await page('Identification Services (ISE)'); await tick(W().locator('.pcontent input[type=checkbox]').first()); await closeAll();
+  await gui('ISE1'); await menu('Administration'); await page('pxGrid Services'); await W().locator('tr:has(td:text-is("WSA")) button:text-is("Approve")').click(); await closeAll();
+  await gui('WSA1'); await menu('Web Security Manager'); await page('Access Policies'); await fill('policy name', 'Contractors-Web'); await W().locator('select:has(option[value="Contractors"])').selectOption('Contractors'); await btn('Add policy');
+  await W().locator('tr:has(td:text-is("Streaming Media")) select').selectOption('block'); await W().locator('.commitbtn').click(); await btn('Commit Changes'); await closeAll();
+  s = await ts(); T('task 25 (WSA + ISE identity)', s[24] === 1, s.join(''));
+  // T26 AWS
+  await gui('AWS'); await page('EC2 Instances'); await W().locator('button:text-is("Create")').click(); await page('Security Groups'); await btn('Add rule'); await closeAll();
+  s = await ts(); T('task 26 (AWS instance, http only)', s[25] === 1, s.join(''));
+  // T27 Azure
+  await gui('AZURE'); await page('Virtual machines'); await W().locator('button:text-is("Create")').click(); await page('Network security groups'); await fill('port from', '22'); await fill('to', '22'); await fill('source / destination CIDR', '203.0.113.1/32'); await btn('Add rule'); await closeAll();
+  s = await ts(); T('task 27 (Azure NSG, lab egress only)', s[26] === 1, s.join(''));
+  // T28 GCP + Umbrella
+  await gui('GCP'); await page('Compute Engine VM instances'); await W().locator('button:text-is("Create")').click(); await W().locator('tbody tr select:has(option[value="208.67.222.222"])').selectOption('208.67.222.222'); await closeAll();
+  const gip = await p.evaluate(() => App.L.cloud.gcp.vms[0].publicIp);
+  await gui('UMB'); await page('Core Identities > Networks'); await fill('network name', 'GCP-VM'); await fill('public (egress) IP', gip); await btn('Save'); await closeAll();
+  s = await ts(); T('task 28 (GCP + Umbrella)', s[27] === 1, s.join(''));
+  // T29 cloud endpoint
+  await gui('SEP'); await menu('Management'); await page('Computers'); await W().locator('tr:has(td:text-is("AWS / web1")) button:text-is("Install connector")').click(); await W().locator('tr:has(td:text-is("AWS / web1")) select').selectOption('Protect'); await closeAll();
+  s = await ts(); T('task 29 (cloud VM endpoint protection)', s[28] === 1, s.join(''));
+  // cloud VM console
+  await gui('AWS'); await page('Connect to VM (console)'); await W().locator('.cliin').fill('curl http://downloads.example.org/eicar.com'); await W().locator('.cliin').press('Enter'); T('cloud VM console runs curl + endpoint verdict', /Quarantined/.test(await W().locator('.ppre').innerText())); await closeAll();
+  console.log('   tasks:', s.join(''));
+  T('ALL ' + s.length + ' lab tasks complete via the GUIs', s.every(x => x === 1), s.join(''));
+
+
+  console.log('3c. live containment: compromised PC is quarantined by ISE, then released');
+  await gui('SEP'); await menu('Management'); await page('Computers'); await W().locator('tr:has(td:text-is("Client")) select').selectOption('Audit'); await closeAll();
+  const dl2 = await term('Client', 'curl http://downloads.example.org/eicar.com'); T('Audit mode: malware executes', /Detected/.test(dl2), dl2.slice(-160));
+  let st = await p.evaluate(() => ({ port: App.L.dev.SW1.ifs['Gi0/2'].state, ok: Sim.flow(App.L, 'Client', { proto: 'icmp', dst: '198.51.100.10' }).ok, ag: App.L.sep.agents.Client.state }));
+  T('ISE quarantined the compromised Client (port + no network)', st.port === 'quarantine' && !st.ok && st.ag === 'compromised', JSON.stringify(st));
+  await gui('ISE1'); await menu('Operations'); await page('Adaptive Network Control'); T('ANC page lists the endpoint', /Client/.test(await W().locator('.pcontent').innerText())); await W().locator('button:text-is("Clear (release)")').click(); await closeAll();
+  await node('Client').click(); await p.locator('#abar button', { hasText: '802.1X login' }).click(); await W().locator('button:has-text("Log on (802.1X)")').click(); await closeAll();
+  st = await p.evaluate(() => ({ port: App.L.dev.SW1.ifs['Gi0/2'].state })); T('after release + re-authentication the port is authorized again', st.port === 'authorized', JSON.stringify(st));
+  await gui('SEP'); await menu('Dashboard'); await page('Inbox'); T('Secure Endpoint inbox lists the compromised PC', /Client/.test(await W().locator('.pcontent').innerText())); await closeAll();
   console.log('4. built-in self-test');
   await p.click('#selftest'); await p.waitForSelector('.stlist'); const title = await p.locator('.mbox h2').innerText(); T('self-test passes on this browser', /all \d+ checks passed/.test(title), title);
   T('no uncaught page errors', errs.length === 0, errs.slice(0, 4).join(' || '));

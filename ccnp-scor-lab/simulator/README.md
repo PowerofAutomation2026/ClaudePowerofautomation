@@ -21,9 +21,19 @@ Not real Cisco software: command syntax and behaviour follow ASA/IOS/FMC concept
 | **WSA1** (web proxy) | status CLI | URL-category policies, custom lists, HTTPS decryption, anti-malware, reporting, test request |
 | Client, Outside-Desktop, DMZ-Server, FTD-Client | Linux shell (ping, curl, nmap, swaks...) | Desktop browser (with proxy setting), Mail client, 802.1X login |
 
+| **Cisco Umbrella** (cloud) | status CLI | DNS-layer security: Networks (egress IP) / Roaming Computers, DNS policies (content + security categories), allow/block lists, activity search |
+| **Cisco Secure Endpoint** (cloud) | status CLI | Computers (install connector, Audit/Protect policy, isolate, remediate), events, custom detections, allow list, ISE integration |
+| **AWS / Azure / GCP** (cloud) | status CLI | Networks/VPC, subnets, security groups / NSGs / firewall rules, VMs with public IP + console, buckets, flow log, Cisco-integration page. VPN, load balancer, DNS zones, IAM, monitoring pages are **config only** |
+
+**How everything is integrated (all of it really changes behaviour):**
+- **Umbrella <-> every device:** point a PC / WSA / cloud VM at 208.67.222.222; Umbrella identifies it by the egress IP (ASA PAT 203.0.113.1) or roaming module and blocks categories / malware / phishing / C2. DNS must pass the firewalls (force-DNS ACL task).
+- **ISE pxGrid:** enable it, approve clients (WSA, FMC, Secure Endpoint). WSA access policies can then match an **ISE group**; FMC shows ISE sessions.
+- **Secure Endpoint -> ISE:** a compromised PC (Audit policy) makes ISE quarantine its switch port by CoA (ANC). Clear it in ISE > Adaptive Network Control and re-authenticate.
+- **Public clouds <-> lab:** VM public IPs sit behind R2; reachability is decided by the VM firewall rules, the ASA (Client leaves as 203.0.113.1) and ACLs. Cloud VMs can use Umbrella and Secure Endpoint.
+
 **Real behaviour behind the screens:** stateful firewall + NAT engine, ISE RADIUS/802.1X authentication with dACLs (and realistic failure reasons: wrong secret, switch not registered, bad password...), ESA mail pipeline (HAT, SPF, spam score, antivirus, content filters, DLP), WSA proxy (categories, HTTPS decryption blind spot, malware blocking), animated packets on the map.
 
-**20 auto-graded lab tasks** (firewall, FTD/FMC policy + Deploy, ISE 802.1X + dACL, ESA/WSA Commit, port-security, VLANs) with hints and answers; progress saved in your browser. Start screen lets you choose which devices are powered on.
+**29 auto-graded lab tasks** (firewall, FTD/FMC policy + Deploy, ISE 802.1X + dACL, ESA/WSA Commit, port-security, VLANs, Umbrella, Secure Endpoint, pxGrid/ANC, AWS/Azure/GCP) with hints and answers; progress saved in your browser. Start screen lets you choose which devices are powered on.
 
 ## How to use it (2 ways to open anything)
 1. **Click a device on the map** - an action bar appears under the map with **Terminal / Open GUI / Power on-off** buttons.
@@ -35,7 +45,7 @@ GUIs open like application windows (full size). Use **—** to minimize (the win
 - Press **Self-test** (top right): it checks the right-click menu, terminal, GUI and power on/off of every device in *your* browser and lists exactly what fails.
 - A red bar at the top shows any error message - send me that text. Its **Reset lab** button clears saved data.
 - Saved labs are versioned: an old saved lab from an earlier version is discarded automatically (this was the cause of "right-click FTD/ASA GUI errors").
-- Automated tests: `npm i playwright` then `node tests/e2e.cjs` (293 checks: every device menu/power/GUI, a 163-page GUI sweep, stale-save recovery, the self-test, and all 20 lab tasks done through the GUIs).
+- Automated tests: `npm i playwright` then `node tests/e2e.cjs` (about 410 checks: every device menu/power/GUI, a 229-page GUI sweep, stale-save recovery, the self-test, all 29 lab tasks done through the GUIs, and a live ISE quarantine test).
 
 ## Product-style GUIs
 ASDM-style (toolbar + navigation tree), FMC-style (top menu, **Deploy** workflow), ISE-style (Home / Operations / Policy / Administration), ESA and WSA (AsyncOS-style: edits stay **pending until Commit Changes**), IOS web-UI style for routers and switches.

@@ -91,10 +91,11 @@ h3,h4{margin:8px 0 4px}.deploy{display:flex;justify-content:space-between;align-
 <header><h1>SCOR Lab Simulator</h1><span class="dim">simulated Cisco-style devices · no images required · CCNP Security 350-701 practice</span><span id="wtabs"></span><span class="sp"></span><button id="selftest" title="Checks every device menu, terminal, GUI and power button in your browser">Self-test</button> <button id="devs">Devices…</button> <button id="reset">Reset lab</button></header>
 <main>
  <div class="col">
-  <div class="card" id="topoCard"><svg id="topo" viewBox="30 82 1000 448"></svg><div id="abar"></div><div class="dim" style="font-size:12px">Right-click a device → Terminal / GUI / Power. Packets animate across the map when you ping, curl or browse (green = delivered, red = dropped).</div></div>
+  <div class="card" id="topoCard"><svg id="topo" viewBox="30 82 1000 540"></svg><div id="abar"></div><div class="dim" style="font-size:12px">Right-click a device → Terminal / GUI / Power. Packets animate across the map when you ping, curl or browse (green = delivered, red = dropped).</div></div>
   <div class="card" id="tasksCard"><b>Lab tasks (auto-graded)</b> <span class="dim" id="progt"></span><div class="bar0"><i id="prog"></i></div><div id="tasks"></div></div>
  </div>
  <div class="col"><div class="card" id="deskCard"><div id="desk"><div id="deskhint"><h3>Right-click a device on the map</h3><p>→ <b>Open Terminal</b> or <b>Open GUI</b><br>Double-click a device to open its terminal / desktop.<br>Windows can be dragged, resized and closed.</p></div></div></div></div>
 </main><div id="errbar"></div><div id="toast"></div><div id="ctx"></div><div id="modal"></div>
-<script src="engine.js"></script><script src="cli.js"></script><script src="gui-core.js"></script><script src="gui-asa.js"></script><script src="gui-fmc.js"></script><script src="gui-ise.js"></script><script src="gui-esa.js"></script><script src="gui-ios.js"></script><script src="app.js"></script>
+<script src="engine.js"></script><script src="cli.js"></script><script src="gui-core.js"></script><script src="gui-asa.js"></script><script src="gui-fmc.js"></script><script src="gui-ise.js"></script><script src="gui-esa.js"></script>
+<script src="gui-cloud.js"></script><script src="gui-ios.js"></script><script src="app.js"></script>
 </body></html>

@@ -172,7 +172,7 @@ function pipeFilter(out, spec) {
 }
 function newSession(d) { return { mode: d.type === 'host' ? 'host' : d.type === 'ftd' ? 'clish' : 'user', ctx: null }; }
 function prompt(d, s) {
-  if (d.role === 'ise') return 'ise1/admin# '; if (d.role === 'fmc') return '> '; if (d.role === 'esa') return 'esa1.lab.local> '; if (d.role === 'wsa') return 'wsa1.lab.local> ';
+  if (d.role === 'ise') return 'ise1/admin# '; if (d.role === 'fmc') return '> '; if (d.role === 'esa') return 'esa1.lab.local> '; if (d.role === 'wsa') return 'wsa1.lab.local> '; if (d.role === 'umb') return 'umbrella> '; if (d.role === 'sep') return 'secure-endpoint> '; if (['aws', 'azure', 'gcp'].includes(d.role)) return d.role + '-cloud> ';
   if (d.type === 'host') return 'lab@' + d.name.toLowerCase() + ':~$ ';
   if (d.type === 'ftd') return s.mode === 'diag' ? 'firepower> ' : s.mode === 'diagp' ? 'firepower# ' : '> ';
   const suf = { user: '>', priv: '#', config: '(config)#', if: d.type === 'asa' ? '(config-if)#' : '(config-if)#', acl: '(config-ext-nacl)#', line: '(config-line)#', obj: '(config-network-object)#', rtr: '(config-router)#', vlan: '(config-vlan)#', rad: '(config-radius-server)#', og: '(config-network-object-group)#', pm: '(config-pmap)#', pmc: '(config-pmap-c)#' }[s.mode];
@@ -227,13 +227,13 @@ function nextOptions(L, d, s, line) {
   return { opts: [...opts.entries()], partial, toks };
 }
 function help(L, d, s, line) {
-  if (d.type === 'host') return 'ip addr | ip route | ping <ip> | traceroute <ip> | curl [-A agent] [-x proxy:port] <url> | nmap [-Pn] [-p ports] <ip> | ifconfig | arp -n | ss -tln | hostname | clear';
+  if (d.type === 'host') return 'nslookup <name> [server] | resolvectl dns <ip> | sep-status | ip addr | ip route | ping <ip> | traceroute <ip> | curl [-A agent] [-x proxy:port] <url> | nmap [-Pn] [-p ports] <ip> | ifconfig | arp -n | ss -tln | hostname | clear';
   const r = nextOptions(L, d, s, line);
   if (!r.opts.length) return '% Unrecognized command';
   return r.opts.sort((a, b) => a[0] === '<cr>' ? 1 : b[0] === '<cr>' ? -1 : a[0].localeCompare(b[0])).map(([w, h]) => '  ' + pad(w, 24) + h).join('\n');
 }
 function complete(L, d, s, line) {
-  if (d.type === 'host') { const w = ['ping', 'traceroute', 'curl', 'nmap', 'ip', 'ifconfig', 'arp', 'ss', 'hostname', 'help', 'clear', 'uname', 'whoami']; const p = line.trim(); const m = w.filter(x => x.startsWith(p)); return m.length === 1 ? { line: m[0] + ' ' } : { options: m }; }
+  if (d.type === 'host') { const w = ['ping', 'traceroute', 'curl', 'nmap', 'ip', 'ifconfig', 'arp', 'ss', 'hostname', 'help', 'clear', 'uname', 'whoami', 'nslookup', 'resolvectl', 'sep-status']; const p = line.trim(); const m = w.filter(x => x.startsWith(p)); return m.length === 1 ? { line: m[0] + ' ' } : { options: m }; }
   const r = nextOptions(L, d, s, line); const words = r.opts.map(o => o[0]).filter(w => w[0] !== '<');
   if (!words.length) return {}; const pre = line.slice(0, line.length - r.partial.length);
   if (words.length === 1) return { line: pre + words[0] + ' ' };
@@ -245,6 +245,7 @@ function suggest(d, s) {
   if (d.role === 'ise') return ['show version', 'show application status ise', 'ping 192.168.100.23', 'help'];
   if (d.role === 'fmc') return ['show version', 'show managed-devices', 'help'];
   if (d.role === 'esa' || d.role === 'wsa') return ['status', 'version', 'help'];
+  if (['umb', 'sep', 'aws', 'azure', 'gcp'].includes(d.role)) return ['status', 'help'];
   if (t === 'host') return ['ip addr', 'ip route', 'ping 198.51.100.10', 'curl http://172.16.1.10', 'curl -x 172.16.1.30:3128 http://www.facebook.com', 'traceroute 198.51.100.10', 'nmap -Pn 203.0.113.10', 'swaks --to alice@lab.local --from bob@partner.com --server 203.0.113.20 --header "Subject: hello" --body "hi"', 'help'];
   if (t === 'ftd') return s.mode.startsWith('diag') ? ['show interface ip brief', 'show route', 'show conn', 'show xlate', 'show access-list', 'exit'] : ['show version', 'show managers', 'show network', 'system support diagnostic-cli', '?'];
   const common = ['?'];
@@ -459,11 +460,14 @@ function execRole(L, d, t) {
   if (d.role === 'fmc') { if (/^show version/.test(k)) return '--------------[ fmc1 ]--------------\nModel: Cisco Secure Firewall Management Center (SIMULATED) Version 7.4.1 (sim)'; if (/^show (managed|devices)/.test(k)) return 'Managed devices: 1\n  FTD1  192.168.100.12  Status: Healthy  Policy: ' + (L.dev.FTD1.dirty ? 'OUT OF DATE (deploy pending)' : 'Up to date'); }
   if (d.role === 'esa') { if (/^(status|version)/.test(k)) return 'Cisco Email Security Appliance (SIMULATED) esa1.lab.local\nMessages accepted: ' + L.esa.counters.accepted + '   spam: ' + L.esa.counters.spam + '   virus: ' + L.esa.counters.virus + '   blocked: ' + L.esa.counters.blocked; }
   if (d.role === 'wsa') { if (/^(status|version)/.test(k)) return 'Cisco Secure Web Appliance (SIMULATED) wsa1.lab.local\nProxy: explicit, port 3128 | Requests: ' + L.wsa.counters.total + '  allowed: ' + L.wsa.counters.allowed + '  blocked: ' + L.wsa.counters.blocked + '  malware: ' + L.wsa.counters.malware; }
+  if (d.role === 'umb') { if (/^(status|version)/.test(k)) return 'Cisco Umbrella (SIMULATED cloud DNS security)\nResolvers: 208.67.222.222 / 208.67.220.220\nRegistered networks: ' + L.umb.networks.length + '   roaming computers: ' + Object.values(L.umb.roaming).filter(x => x.on).length + '\nQueries: ' + L.umb.counters.total + '   blocked: ' + L.umb.counters.blocked + '\nManage everything in the GUI (Open GUI).'; }
+  if (d.role === 'sep') { if (/^(status|version)/.test(k)) { const a = Object.entries(L.sep.agents).filter(([, v]) => v.installed); return 'Cisco Secure Endpoint cloud (SIMULATED)\nConnectors installed: ' + a.length + '   events: ' + L.sep.events.length + '\nComputers: ' + (a.map(([n, v]) => n + '(' + v.state + ')').join(', ') || '(none)'); } }
+  if (['aws', 'azure', 'gcp'].includes(d.role)) { if (/^(status|version)/.test(k)) { const P = L.cloud[d.role]; return d.label + ' (SIMULATED public cloud edge)\nNetworks: ' + P.nets.length + '  subnets: ' + P.subnets.length + '  firewalls: ' + P.fws.length + '  VMs: ' + P.vms.length + '\nVM terminals are in the console: Open GUI > Virtual machines > Connect.'; } }
   return null;
 }
 function execHost(L, d, s, line) {
   let t = tokQ(line); if (!t.length) return '';
-  if (d.role) { const r = execRole(L, d, t); if (r !== null) return r; if (t[0] === 'help' || t[0] === '?') return d.role === 'ise' ? 'show version | show application status ise | ping <ip>' : d.role === 'fmc' ? 'show version | show managed-devices | ping <ip>   (policy is configured in the GUI)' : 'status | version | ping <ip>   (policy is configured in the GUI)'; }
+  if (d.role) { const r = execRole(L, d, t); if (r !== null) return r; if (t[0] === 'help' || t[0] === '?') return ['umb', 'sep', 'aws', 'azure', 'gcp'].includes(d.role) ? 'status | help  (configure in the GUI)' : d.role === 'ise' ? 'show version | show application status ise | ping <ip>' : d.role === 'fmc' ? 'show version | show managed-devices | ping <ip>   (policy is configured in the GUI)' : 'status | version | ping <ip>   (policy is configured in the GUI)'; }
   if (t[0] === 'swaks') { const g = k => { const i = t.indexOf(k); return i > 0 ? t[i + 1] : null; }; const to = g('--to'), from = g('--from') || ('user@' + d.name.toLowerCase() + '.example'), srv = g('--server') || g('-s');
     if (!to || !srv) return 'usage: swaks --to rcpt@lab.local --from you@domain --server <esa-ip> [--header "Subject: hi"] [--body "text"] [--attach file.exe]';
     const hdr = g('--header') || ''; const att = []; t.forEach((w, i) => { if (w === '--attach') att.push(t[i + 1]); });
@@ -490,8 +494,8 @@ function execHost(L, d, s, line) {
   if (t[0] === 'curl') { let ua = '', url = null, proxy = null; for (let i = 1; i < t.length; i++) { if (t[i] === '-A') ua = t[++i] || ''; else if (t[i] === '-x' || t[i] === '--proxy') proxy = t[++i]; else if (!t[i].startsWith('-')) url = t[i]; }
     if (url && !/^https?:\/\//.test(url)) url = 'http://' + url;
     const isIpUrl = url && /^https?:\/\/[\d.]+(:\d+)?(\/.*)?$/.test(url);
-    if (proxy || (url && !isIpUrl)) { if (proxy && !/:/.test(proxy)) proxy += ':3128'; const r = S.webGet(L, d.name, { url, proxy }); if (!r.ok && r.kind === 'dns') return 'curl: (6) ' + r.why;
-      if (r.ok) return '<html><body><h1>' + r.page + '</h1></body></html>\n[HTTP/1.1 200 OK' + (r.via ? ' via ' + r.via : '') + (r.cat ? ' | category: ' + r.cat : '') + ']';
+    if (proxy || (url && !isIpUrl)) { if (proxy && !/:/.test(proxy)) proxy += ':3128'; const r = S.webGet(L, d.name, { url, proxy }); if (!r.ok && r.kind === 'dns') return 'curl: (6) ' + r.why; if (r.kind === 'dnsblock') return 'HTTP/1.1 200 OK  (Cisco Umbrella BLOCK PAGE from ' + r.ip + ')\n' + r.why;
+      if (r.ok) return '<html><body><h1>' + r.page + '</h1></body></html>\n[HTTP/1.1 200 OK' + (r.ep ? ' | Secure Endpoint: ' + r.ep.action + (r.ep.threat ? ' (' + r.ep.threat + ')' : '') : '') + (r.via ? ' via ' + r.via : '') + (r.cat ? ' | category: ' + r.cat : '') + ']';
       if (r.kind === 'blocked' || r.kind === 'malware') return 'HTTP/1.1 403 Forbidden\n<html><body><h1>Access Denied</h1><p>' + r.why + '</p></body></html>';
       if (r.status === 503) return 'HTTP/1.1 503 Service Unavailable  [' + r.why + ']'; return 'curl: (7) Failed to connect: ' + (r.why || 'error'); }
     const u = url && parseUrl(url); if (!u) return 'curl: (6) Could not resolve host';
@@ -500,6 +504,9 @@ function execHost(L, d, s, line) {
     if (r.kind === 'closed') return 'curl: (7) Failed to connect to ' + u.ip + ' port ' + u.port + ': Connection refused';
     if (r.kind === 'unreach' || r.kind === 'prohibited') return 'curl: (7) Failed to connect to ' + u.ip + ' port ' + u.port + ': No route to host';
     return 'curl: (28) Connection timed out after 5001 milliseconds   [' + (r.why || '') + ']'; }
+  if (t[0] === 'nslookup') { if (!t[1]) return 'usage: nslookup <name> [server]'; const r = S.resolve(L, d.name, t[1], t[2] ? { server: t[2] } : {}); const sv = t[2] || d.dns || '8.8.8.8'; return r.ok ? 'Server:  ' + sv + '\nName:    ' + t[1] + '\nAddress: ' + r.ip : r.kind === 'dnsblock' ? 'Server:  ' + sv + '\nName:    ' + t[1] + '\nAddress: ' + r.ip + '   <-- Cisco Umbrella BLOCK PAGE\n(' + r.why + ')' : '** server can\'t find ' + t[1] + ': ' + r.why; }
+  if (t[0] === 'resolvectl') { if (t[1] === 'dns' && t[2]) { d.dns = t[2]; return 'DNS server for eth0 set to ' + t[2] + (S.UMB_IPS.includes(t[2]) ? '  (Cisco Umbrella)' : ''); } return 'Link 2 (eth0)\n  DNS Servers: ' + (d.dns || '8.8.8.8') + '\nUsage: resolvectl dns <server-ip>   (Umbrella: 208.67.222.222)'; }
+  if (t[0] === 'sep-status') { const a = L.sep.agents[d.name]; return a && a.installed ? 'Cisco Secure Endpoint connector ' + a.ver + '\nPolicy: ' + a.policy + '  state: ' + a.state : 'Cisco Secure Endpoint connector is NOT installed on this computer (install it from the Secure Endpoint console > Management > Computers).'; }
   if (t[0] === 'nmap') { const ip = t.filter(z => isIp(z)).pop(); if (!ip) return 'Usage: nmap [-Pn] [-p 22,80] <ip>'; const pi = t.indexOf('-p'); const ports = pi > 0 ? t[pi + 1].split(',').map(Number) : [21, 22, 23, 25, 53, 80, 110, 443, 3389, 8080];
     const up = t.includes('-Pn') || flow(L, d.name, { proto: 'icmp', dst: ip }).ok; if (!up) return 'Starting Nmap against ' + ip + '\nNote: Host seems down. If it is really up, but blocking our ping probes, try -Pn\nNmap done: 1 IP address (0 hosts up)';
     const rows = []; let f = 0; for (const p of ports) { const r = flow(L, d.name, { proto: 'tcp', dst: ip, dport: p, sig: 'nmap-scan' }); const st = r.ok ? 'open' : r.kind === 'closed' ? 'closed' : 'filtered'; if (st === 'filtered') f++; if (st !== 'closed') rows.push(pad(p + '/tcp', 10) + pad(st, 10)); }
