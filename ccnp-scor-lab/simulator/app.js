@@ -14,7 +14,7 @@ function h(tag, attrs, ...kids) {
 const svgNS = 'http://www.w3.org/2000/svg';
 function sv(tag, attrs, ...kids) { const e = document.createElementNS(svgNS, tag); for (const k in attrs || {}) e.setAttribute(k, attrs[k]); for (const c of kids) if (c != null) e.append(c.nodeType ? c : document.createTextNode(c)); return e; }
 
-function load() { try { const j = localStorage.getItem(KEY); if (j) { L = JSON.parse(j); if (L.dev.FTD1 && L.dev.FTD1.draft && L.dev.FTD1.ifs['Gi0/0'].ip) return; } } catch (e) {} L = newLab(); }
+function load() { try { const j = localStorage.getItem(KEY); if (j) { L = JSON.parse(j); if (L.ver === 3) return; } } catch (e) {} L = newLab(); }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(L)); } catch (e) {} }
 
 // ---------- tasks ----------
@@ -112,7 +112,7 @@ function showMenu(n, x, y) {
   const item = (t, f, dis) => m.append(h('div', { class: 'mi' + (dis ? ' dis' : ''), onclick: () => { m.style.display = 'none'; if (!dis) f(); } }, t));
   m.append(h('div', { class: 'mh' }, d.label + (on ? '' : '  (powered off)')));
   if (d.type === 'host') { item('Open Desktop (browser)', () => openWin(n, 'browser'), !on); item('Open Terminal', () => openWin(n, 'term'), !on); }
-  else if (d.type === 'switch') item('Device info', () => openWin(n, 'info'), !on);
+  else if (d.type === 'switch') { item('Open Terminal / Console', () => openWin(n, 'term'), !on); item('Device info', () => openWin(n, 'info'), !on); }
   else { item('Open Terminal / Console', () => openWin(n, 'term'), !on); if (guiKind(d)) item('Open GUI (' + guiKind(d) + ')', () => openWin(n, 'gui'), !on); else item('Device info', () => openWin(n, 'info'), !on); }
   m.append(h('div', { class: 'ms' })); item(on ? 'Power off' : 'Power on', () => setPower(n, !on));
   m.style.left = Math.min(x, innerWidth - 230) + 'px'; m.style.top = Math.min(y, innerHeight - 190) + 'px'; m.style.display = 'block';
@@ -162,19 +162,25 @@ function startScreen() {
 function terminal(d) {
   if (!terms[d.name]) {
     const out = h('div', { class: 'tout' }); const s = Cli.newSession(d); sessions[d.name] = s; hist[d.name] = { l: [], i: 0 };
-    const banner = d.type === 'host' ? 'Ubuntu 22.04 LTS - type "help" for commands.' : d.type === 'ftd' ? 'Cisco Firepower Threat Defense (simulated) - policy is managed from FMC.' : d.label + ' (simulated CLI) - type "enable", then "conf t". "?" lists commands.';
+    const banner = d.type === 'host' ? 'Ubuntu 22.04 LTS (simulated) - type "help" for commands. Click a quick command below.' : d.type === 'ftd' ? 'Cisco Secure Firewall Threat Defense (simulated) - policy lives in the FMC GUI. Type ? for CLI help.' : d.label + ' (simulated CLI)\nType ? for help (works after any word), press Tab to complete, abbreviations work (sh ip int br).\nClick a quick command below to insert it.';
     out.append(h('div', {}, banner));
     const inp = h('input', { class: 'tin', spellcheck: 'false', autocomplete: 'off' }); const pr = h('span', { class: 'pr' }, Cli.prompt(d, s));
+    const chips = h('div', { class: 'chips' });
     const row = h('div', { class: 'trow' }, pr, inp);
+    const renderChips = () => { chips.innerHTML = ''; chips.append(h('span', { class: 'dim' }, 'Quick commands: ')); Cli.suggest(d, s).forEach(c => chips.append(h('button', { onclick: () => { inp.value = c.endsWith('?') ? '' : c; if (c === '?') { echo('?'); } inp.focus(); } }, c))); };
+    const echo = (line) => { out.append(h('div', {}, h('span', { class: 'pr' }, Cli.prompt(d, s)), line)); };
     inp.addEventListener('keydown', ev => {
       const H = hist[d.name];
-      if (ev.key === 'Enter') { const line = inp.value; const p0 = Cli.prompt(d, s); out.append(h('div', {}, h('span', { class: 'pr' }, p0), line)); inp.value = ''; if (line.trim()) { H.l.push(line); H.i = H.l.length; }
-        if (line.trim() === 'clear') out.innerHTML = ''; else { lastAnim = null; const res = Cli.exec(L, d, s, line); if (res) out.append(h('pre', { class: 'res' }, res)); }
-        pr.textContent = Cli.prompt(d, s); out.scrollTop = out.scrollHeight; save(); runChecks(); if (lastAnim) animate(lastAnim); refreshLive(); }
+      if (ev.key === '?' && d.type !== 'host') { ev.preventDefault(); echo(inp.value + '?'); out.append(h('pre', { class: 'res' }, Cli.help(L, d, s, inp.value))); out.scrollTop = out.scrollHeight; return; }
+      if (ev.key === 'Tab') { ev.preventDefault(); const r = Cli.complete(L, d, s, inp.value); if (r.line !== undefined) inp.value = r.line; if (r.options && r.options.length > 1) { echo(inp.value); out.append(h('pre', { class: 'res' }, r.options.join('   '))); out.scrollTop = out.scrollHeight; } return; }
+      if (ev.key === 'Enter') { const line = inp.value; echo(line); inp.value = ''; if (line.trim()) { H.l.push(line); H.i = H.l.length; }
+        if (line.trim() === 'clear' && d.type === 'host') out.innerHTML = ''; else { lastAnim = null; const res = Cli.exec(L, d, s, line); if (res) out.append(h('pre', { class: 'res' + (/^\s*\^|^(%|ERROR)/m.test(res) ? ' bad' : '') }, res)); }
+        pr.textContent = Cli.prompt(d, s); out.scrollTop = out.scrollHeight; renderChips(); save(); runChecks(); if (lastAnim) animate(lastAnim); refreshLive(); refreshWins(); }
       else if (ev.key === 'ArrowUp') { if (H.i > 0) inp.value = H.l[--H.i]; ev.preventDefault(); }
       else if (ev.key === 'ArrowDown') { inp.value = H.i < H.l.length - 1 ? H.l[++H.i] : ''; if (H.i >= H.l.length - 1) H.i = H.l.length; ev.preventDefault(); }
     });
-    const w = h('div', { class: 'term', onclick: () => inp.focus() }, out, row); terms[d.name] = w; w._inp = inp;
+    renderChips();
+    const w = h('div', { class: 'term', onclick: () => inp.focus() }, chips, out, row); terms[d.name] = w; w._inp = inp;
   }
   setTimeout(() => terms[d.name]._inp.focus(), 0); return terms[d.name];
 }

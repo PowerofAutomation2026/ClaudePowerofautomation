@@ -18,4 +18,6 @@ Topology: Outside-Desktop — R2 — **FW1-ASA** — R1 — SW1 — Client, DMZ-
 The simulated devices need no login. (Real-device logins are in the other lab docs.)
 
 ## Extend
+See `COMMANDS.md` for every supported command.
+
 `engine.js` (packet/firewall engine), `cli.js` (command lines), `app.js` (UI). Ask for ISE/WSA/VPN modules.

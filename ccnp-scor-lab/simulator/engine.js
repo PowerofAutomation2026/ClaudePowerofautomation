@@ -17,7 +17,7 @@ const clone = o => JSON.parse(JSON.stringify(o));
 function mk(type, name, label, x, y) { return { type, name, label, x, y, ifs: {}, routes: [], acls: {}, hostname: label }; }
 function addIf(d, name, ip, len, extra) { d.ifs[name] = Object.assign({ name, ip: ip || null, len: len || 24, up: true }, extra || {}); }
 function newLab() {
-  const L = { dev: {}, links: [], conns: [] };
+  const L = { dev: {}, links: [], conns: [], ver: 3 };
   const D = (t, n, label, x, y) => (L.dev[n] = mk(t, n, label, x, y));
   const host = (n, label, x, y, ip, len, gw, listen) => { const d = D('host', n, label, x, y); addIf(d, 'eth0', ip, len); d.gw = gw; d.listen = listen; return d; };
   host('Outside', 'Outside-Desktop', 70, 120, '198.51.100.10', 24, '198.51.100.1', { tcp: [22, 80], udp: [], page: 'Outside web server (198.51.100.10)' });
@@ -34,7 +34,8 @@ function newLab() {
   fw.nats.push({ kind: 'dynamic', obj: 'INSIDE-NETS', realIf: 'inside', mappedIf: 'outside', mapped: 'interface' });
   const r1 = D('router', 'R1', 'R1', 650, 120);
   addIf(r1, 'Gi0/1', '10.1.1.2', 24); addIf(r1, 'Gi0/2', '10.1.10.1', 24); r1.routes.push({ net: '0.0.0.0', len: 0, nh: '10.1.1.1' });
-  D('switch', 'SW1', 'SW1', 790, 120);
+  const sw = D('switch', 'SW1', 'SW1', 790, 120); sw.vlans = { 1: 'default', 10: 'USERS' };
+  addIf(sw, 'Gi0/1', null, 24, { mode: 'access', vlan: 1 }); addIf(sw, 'Gi0/2', null, 24, { mode: 'access', vlan: 1 }); addIf(sw, 'Gi0/3', null, 24, { mode: 'access', vlan: 1 });
   host('Client', 'Client (inside PC)', 920, 120, '10.1.10.10', 24, '10.1.10.1', { tcp: [22], udp: [], page: 'Client PC' });
   host('DMZ', 'DMZ-Server', 450, 290, '172.16.1.10', 24, '172.16.1.1', { tcp: [22, 80], udp: [], page: 'DMZ web server (172.16.1.10) - welcome!' });
   const ft = D('ftd', 'FTD1', 'FTD1', 250, 290); ft.conns = []; ft.xlates = []; ft.events = [];
@@ -43,8 +44,8 @@ function newLab() {
   ft.policy = { defaultAction: 'block', rules: [{ name: 'Allow-IN-OUT', srcZone: 'IN', dstZone: 'OUT', srcNet: 'any', dstNet: 'any', proto: 'any', dport: null, action: 'allow', ips: false, hits: 0 }] }; ft.nat = [{ srcZone: 'IN', dstZone: 'OUT' }]; ft.dirty = false;
   host('FTDClient', 'FTD-Client', 250, 450, '10.2.1.10', 24, '10.2.1.1', { tcp: [22, 80], udp: [], page: 'FTD-Client internal web server (10.2.1.10)' });
   ft.draft = clone({ ifs: ft.ifs, routes: ft.routes, policy: ft.policy, nat: ft.nat });
-  L.links = [['Outside:eth0', 'R2:Gi0/2'], ['R2:Gi0/1', 'FW1:Gi0/0'], ['FW1:Gi0/1', 'R1:Gi0/1'], ['FW1:Gi0/2', 'DMZ:eth0'], ['R1:Gi0/2', 'SW1:p1'],
-    ['SW1:p2', 'Client:eth0'], ['R2:Gi0/3', 'FTD1:Gi0/0'], ['FTD1:Gi0/1', 'FTDClient:eth0']];
+  L.links = [['Outside:eth0', 'R2:Gi0/2'], ['R2:Gi0/1', 'FW1:Gi0/0'], ['FW1:Gi0/1', 'R1:Gi0/1'], ['FW1:Gi0/2', 'DMZ:eth0'], ['R1:Gi0/2', 'SW1:Gi0/1'],
+    ['SW1:Gi0/2', 'Client:eth0'], ['R2:Gi0/3', 'FTD1:Gi0/0'], ['FTD1:Gi0/1', 'FTDClient:eth0']];
   return L;
 }
 
