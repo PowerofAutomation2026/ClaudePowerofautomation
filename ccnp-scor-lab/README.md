@@ -60,3 +60,6 @@ terraform apply -var 'my_ip_cidr=YOUR.IP/32'    # optional -var ftdv_ami=ami-...
 
 ## Device GUIs
 See labs/mgmt-guide.md - every device sits on a MGMT network with a browser-based JumpBox desktop, so FMC, ASDM, ISE and IOS web GUIs are all reachable from your browser.
+
+## 🪟 Windows (Azure) VM native
+See `windows/WINDOWS-GUIDE.md` - GNS3 + QEMU/WHPX on the Windows VM itself (no Linux VM). Needs 8+ vCPU; no FTD+FMC on 32 GB.
