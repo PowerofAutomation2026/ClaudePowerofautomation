@@ -14,29 +14,29 @@ function h(tag, attrs, ...kids) {
 const svgNS = 'http://www.w3.org/2000/svg';
 function sv(tag, attrs, ...kids) { const e = document.createElementNS(svgNS, tag); for (const k in attrs || {}) e.setAttribute(k, attrs[k]); for (const c of kids) if (c != null) e.append(c.nodeType ? c : document.createTextNode(c)); return e; }
 
-function load() { try { const j = localStorage.getItem(KEY); if (j) { L = JSON.parse(j); if (L.dev.FTD1 && L.dev.FTD1.draft) return; } } catch (e) {} L = newLab(); }
+function load() { try { const j = localStorage.getItem(KEY); if (j) { L = JSON.parse(j); if (L.dev.FTD1 && L.dev.FTD1.draft && L.dev.FTD1.ifs['Gi0/0'].ip) return; } } catch (e) {} L = newLab(); }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(L)); } catch (e) {} }
 
 // ---------- tasks ----------
 const sandbox = fn => fn(clone(L));
 const ok = (l, s, p) => flow(l, s, p).ok;
 const TASKS = [
-  { id: 1, t: 'Baseline: inside PC reaches the DMZ web server', hint: 'Client > curl http://172.16.1.10 (inside has higher security-level than dmz, so it is allowed by default).', check: l => ok(l, 'Client', { proto: 'tcp', dst: '172.16.1.10', dport: 80 }), ans: '(already works)' },
-  { id: 2, t: 'Baseline: inside PC reaches the outside network (dynamic PAT)', hint: 'Client > ping 198.51.100.10 ; then on FW1: show xlate / show conn.', check: l => ok(l, 'Client', { proto: 'icmp', dst: '198.51.100.10' }), ans: '(already works)' },
-  { id: 3, t: 'Publish the DMZ web server: Outside can browse http://203.0.113.10', hint: 'Needs BOTH a static NAT (172.16.1.10 -> 203.0.113.10, dmz,outside) AND an access-list on the outside interface permitting tcp/80 to the REAL address. Use packet-tracer on FW1 to see which is missing.',
+  { id: 1, t: 'Baseline: inside PC reaches the DMZ web server', hint: 'Client > Browser http://172.16.1.10 (inside has higher security-level than dmz, so it is allowed by default).', check: l => ok(l, 'Client', { proto: 'tcp', dst: '172.16.1.10', dport: 80 }), ans: '(already works)' },
+  { id: 2, t: 'Baseline: inside PC reaches the outside network (dynamic PAT)', hint: 'Client > ping 198.51.100.10 ; then on FW1-ASA console: show xlate / show conn.', check: l => ok(l, 'Client', { proto: 'icmp', dst: '198.51.100.10' }), ans: '(already works)' },
+  { id: 3, t: 'ASA: publish the DMZ web server - Outside can browse http://203.0.113.10', hint: 'Needs BOTH a static NAT (172.16.1.10 -> 203.0.113.10, dmz,outside) AND an access-list on the outside interface permitting tcp/80 to the REAL address. Use ASDM Packet Tracer (outside, tcp, 198.51.100.10 -> 203.0.113.10:80) to see what is missing.',
     check: l => ok(l, 'Outside', { proto: 'tcp', dst: '203.0.113.10', dport: 80 }),
     ans: 'object network DMZ-WEB\n host 172.16.1.10\n nat (dmz,outside) static 203.0.113.10\naccess-list OUT-IN extended permit tcp any object DMZ-WEB eq 80\naccess-group OUT-IN in interface outside' },
-  { id: 4, t: 'Least privilege: SSH to the published server must be blocked', hint: 'Only tcp/80 should be reachable from outside. Test with: Outside > nmap -Pn 203.0.113.10', dep: 3,
+  { id: 4, t: 'ASA: least privilege - SSH to the published server must be blocked', hint: 'Only tcp/80 should be reachable from outside. Test: Outside > Terminal > nmap -Pn 203.0.113.10', dep: 3,
     check: l => ok(l, 'Outside', { proto: 'tcp', dst: '203.0.113.10', dport: 80 }) && !ok(l, 'Outside', { proto: 'tcp', dst: '203.0.113.10', dport: 22 }), ans: '(task 3 already does this - implicit deny)' },
-  { id: 5, t: 'R1 ACL: block Client from DMZ web (tcp/80) but still allow ping and Internet', hint: 'Extended ACL on R1 Gi0/2 inbound: deny tcp any host 172.16.1.10 eq 80 then permit ip any any.',
+  { id: 5, t: 'R1 ACL: block Client from the DMZ web (tcp/80) but still allow ping and Internet', hint: 'Extended ACL on R1 Gi0/2 inbound: deny tcp any host 172.16.1.10 eq 80 then permit ip any any.',
     check: l => !ok(l, 'Client', { proto: 'tcp', dst: '172.16.1.10', dport: 80 }) && ok(l, 'Client', { proto: 'icmp', dst: '172.16.1.10' }) && ok(l, 'Client', { proto: 'icmp', dst: '198.51.100.10' }),
     ans: 'R1: ip access-list extended BLOCK-WEB\n deny tcp any host 172.16.1.10 eq 80\n permit ip any any\ninterface Gi0/2\n ip access-group BLOCK-WEB in' },
-  { id: 6, t: 'FTD (in FMC): bring up interfaces, route, PAT + allow rule so FTD-Client reaches Outside', hint: 'FMC GUI > Devices: Gi0/0 zone OUT 192.0.2.1/24, Gi0/1 zone IN 10.2.1.1/24 | Routing: 0.0.0.0/0 via 192.0.2.2 | NAT: PAT IN->OUT | Access Policy: allow IN->OUT | then DEPLOY.',
-    check: l => ok(l, 'FTDClient', { proto: 'icmp', dst: '198.51.100.10' }), ans: 'GUI only (FMC tab on FTD1)' },
-  { id: 7, t: 'FTD: Outside must NOT be able to reach FTD-Client', hint: 'Default action "Block all traffic" does this - make sure you did not add an OUT->IN allow rule.', dep: 6,
-    check: l => ok(l, 'FTDClient', { proto: 'icmp', dst: '198.51.100.10' }) && !ok(l, 'Outside', { proto: 'icmp', dst: '10.2.1.10' }), ans: '(default block)' },
-  { id: 8, t: 'FTD IPS: block a malicious web request (sqlmap) while normal browsing still works', hint: 'Edit your allow rule: enable "Intrusion Prevention". Test: FTD-Client > curl -A sqlmap http://198.51.100.10 (blocked) vs curl http://198.51.100.10 (ok). Deploy!', dep: 6,
-    check: l => ok(l, 'FTDClient', { proto: 'tcp', dst: '198.51.100.10', dport: 80 }) && !ok(l, 'FTDClient', { proto: 'tcp', dst: '198.51.100.10', dport: 80, sig: 'sqlmap' }), ans: 'GUI only (enable IPS on the rule, Deploy)' },
+  { id: 6, t: 'FTD: block SSH (tcp/22) from FTD-Client to Outside but keep web + ping working', hint: 'FTD1 > GUI > Access Policy: add a BLOCK rule IN->OUT tcp/22 and move it ABOVE Allow-IN-OUT (rules match top-down), then Deploy. Test from FTD-Client terminal: nmap -Pn 198.51.100.10',
+    check: l => ok(l, 'FTDClient', { proto: 'icmp', dst: '198.51.100.10' }) && ok(l, 'FTDClient', { proto: 'tcp', dst: '198.51.100.10', dport: 80 }) && !ok(l, 'FTDClient', { proto: 'tcp', dst: '198.51.100.10', dport: 22 }), ans: 'FTD1 GUI > Access Policy > add rule: name Block-SSH, IN -> OUT, tcp, port 22, action block, position top > Deploy' },
+  { id: 7, t: 'FTD: publish FTD-Client web (tcp/80) to Outside, but not SSH', hint: 'Add an ALLOW rule OUT->IN, destination network 10.2.1.10, tcp port 80, then Deploy. Test from Outside-Desktop browser: http://10.2.1.10', 
+    check: l => ok(l, 'Outside', { proto: 'tcp', dst: '10.2.1.10', dport: 80 }) && !ok(l, 'Outside', { proto: 'tcp', dst: '10.2.1.10', dport: 22 }), ans: 'FTD1 GUI > Access Policy > add rule: Allow-Web-In, OUT -> IN, dst net 10.2.1.10, tcp 80, allow > Deploy' },
+  { id: 8, t: 'FTD IPS: block a malicious web request (sqlmap) while normal browsing still works', hint: 'Tick the "IPS" box on the Allow-IN-OUT rule and Deploy. Test: FTD-Client terminal: curl -A sqlmap http://198.51.100.10 (blocked) vs curl http://198.51.100.10 (ok).',
+    check: l => ok(l, 'FTDClient', { proto: 'tcp', dst: '198.51.100.10', dport: 80 }) && !ok(l, 'FTDClient', { proto: 'tcp', dst: '198.51.100.10', dport: 80, sig: 'sqlmap' }), ans: 'FTD1 GUI > Access Policy > tick IPS on Allow-IN-OUT > Deploy' },
 ];
 let status = {};
 function runChecks() {
@@ -50,7 +50,7 @@ function renderTasks() {
   $('#prog').style.width = done / TASKS.length * 100 + '%'; $('#progt').textContent = done + ' / ' + TASKS.length + ' complete';
   for (const t of TASKS) {
     const d = h('details', { class: 'task ' + (status[t.id] ? 'ok' : '') }, h('summary', {}, h('span', { class: 'chk' }, status[t.id] ? '✔' : '○'), ' ' + t.id + '. ' + t.t),
-      h('p', {}, '💡 ', t.hint), h('details', { class: 'ans' }, h('summary', {}, 'Show answer'), h('pre', {}, t.ans)));
+      h('p', {}, h('b', {}, 'Hint: '), t.hint), h('details', { class: 'ans' }, h('summary', {}, 'Show answer'), h('pre', {}, t.ans)));
     box.append(d);
   }
 }
@@ -59,7 +59,14 @@ function renderTasks() {
 function commit() { save(); runChecks(); drawTopo(); renderPanel(true); }
 
 // ---------- topology ----------
-const ICON = { host: '🖥', router: '🔀', switch: '▤', asa: '🛡', ftd: '🛡' };
+function icon(type, c) {
+  const g = sv('g', { transform: 'translate(55,6)', stroke: c, fill: 'none', 'stroke-width': 2, 'stroke-linecap': 'round' });
+  if (type === 'host') { g.append(sv('rect', { x: -11, y: 0, width: 22, height: 14, rx: 2 }), sv('line', { x1: 0, y1: 14, x2: 0, y2: 19 }), sv('line', { x1: -6, y1: 19, x2: 6, y2: 19 })); }
+  else if (type === 'router') { g.append(sv('circle', { cx: 0, cy: 10, r: 10 }), sv('path', { d: 'M-6 10h12M3 6l3 4-3 4M-3 6l-3 4 3 4' })); }
+  else if (type === 'switch') { g.append(sv('rect', { x: -13, y: 2, width: 26, height: 16, rx: 3 }), sv('path', { d: 'M-8 8h14M3 5l3 3-3 3M8 14H-6M-3 11l-3 3 3 3' })); }
+  else { g.append(sv('rect', { x: -12, y: 1, width: 24, height: 18, rx: 2 }), sv('path', { d: 'M-12 7h24M-12 13h24M-3 1v6M5 7v6M-3 13v6' })); }
+  return g;
+}
 const COL = { host: '#3b82f6', router: '#22d3ee', switch: '#a78bfa', asa: '#f97316', ftd: '#ef4444' };
 function center(d) { return [d.x + 55, d.y + 28]; }
 function drawTopo() {
@@ -75,12 +82,14 @@ function drawTopo() {
   svg.append(sv('g', { id: 'anim' }));
   for (const n in L.dev) {
     const d = L.dev[n], c = COL[d.type];
-    const g = sv('g', { class: 'node' + (sel === n ? ' sel' : ''), transform: 'translate(' + d.x + ',' + d.y + ')' });
+    const g = sv('g', { class: 'node' + (sel === n ? ' sel' : ''), transform: 'translate(' + d.x + ',' + d.y + ')', opacity: d.on === false ? 0.3 : 1 });
     g.append(sv('rect', { width: 110, height: 56, rx: 12, fill: '#0f172a', stroke: c, 'stroke-width': sel === n ? 3 : 1.5 }));
-    g.append(sv('text', { x: 55, y: 26, class: 'ico', 'text-anchor': 'middle' }, ICON[d.type]));
+    g.append(icon(d.type, c));
     g.append(sv('text', { x: 55, y: 46, class: 'nm', 'text-anchor': 'middle' }, d.label));
     if (d.type === 'ftd' && d.dirty) g.append(sv('circle', { cx: 104, cy: 6, r: 5, fill: '#facc15' }));
-    g.addEventListener('click', () => { sel = n; drawTopo(); renderPanel(); });
+    g.addEventListener('click', () => { sel = n; drawTopo(); });
+    g.addEventListener('dblclick', () => openWin(n, d.type === 'host' ? 'browser' : 'term'));
+    g.addEventListener('contextmenu', ev => { ev.preventDefault(); sel = n; drawTopo(); showMenu(n, ev.clientX, ev.clientY); });
     svg.append(g);
   }
 }
@@ -95,20 +104,60 @@ function animate(r) {
 }
 Sim.hook = r => { lastAnim = r; };
 
-// ---------- right panel ----------
-function renderPanel(keepTab) {
-  const d = L.dev[sel], p = $('#panel'); p.innerHTML = '';
-  const names = d.type === 'host' ? ['Browser', 'Terminal'] : d.type === 'switch' ? ['Info'] : d.type === 'ftd' ? ['FMC (GUI)', 'CLI'] : d.type === 'asa' ? ['ASDM (GUI)', 'Console'] : ['Console', 'Device info'];
-  if (!names.includes(tabs[sel])) tabs[sel] = names[0];
-  p.append(h('div', { class: 'dhead' }, h('b', {}, d.label), h('span', { class: 'tag', style: 'background:' + COL[d.type] }, d.type === 'asa' ? 'ASA firewall' : d.type === 'ftd' ? 'Secure Firewall (FTD)' : d.type)));
-  p.append(h('div', { class: 'tabs' }, names.map(n => h('button', { class: tabs[sel] === n ? 'on' : '', onclick: () => { tabs[sel] = n; renderPanel(); } }, n))));
-  const body = h('div', { class: 'body' }); p.append(body);
-  const t = tabs[sel];
-  if (t === 'Console' || t === 'Terminal' || t === 'CLI') body.append(terminal(d));
-  else if (t === 'Browser') body.append(browser(d));
-  else if (t === 'ASDM (GUI)') body.append(asdm(d));
-  else if (t === 'FMC (GUI)') body.append(fmc(d));
-  else body.append(infoView(d));
+// ---------- floating windows + context menu ----------
+let wins = {}, zTop = 10, brs = {};
+function guiKind(d) { return d.type === 'asa' ? 'ASDM' : d.type === 'ftd' ? 'FMC' : null; }
+function showMenu(n, x, y) {
+  const d = L.dev[n], m = $('#ctx'); m.innerHTML = ''; const on = d.on !== false;
+  const item = (t, f, dis) => m.append(h('div', { class: 'mi' + (dis ? ' dis' : ''), onclick: () => { m.style.display = 'none'; if (!dis) f(); } }, t));
+  m.append(h('div', { class: 'mh' }, d.label + (on ? '' : '  (powered off)')));
+  if (d.type === 'host') { item('Open Desktop (browser)', () => openWin(n, 'browser'), !on); item('Open Terminal', () => openWin(n, 'term'), !on); }
+  else if (d.type === 'switch') item('Device info', () => openWin(n, 'info'), !on);
+  else { item('Open Terminal / Console', () => openWin(n, 'term'), !on); if (guiKind(d)) item('Open GUI (' + guiKind(d) + ')', () => openWin(n, 'gui'), !on); else item('Device info', () => openWin(n, 'info'), !on); }
+  m.append(h('div', { class: 'ms' })); item(on ? 'Power off' : 'Power on', () => setPower(n, !on));
+  m.style.left = Math.min(x, innerWidth - 230) + 'px'; m.style.top = Math.min(y, innerHeight - 190) + 'px'; m.style.display = 'block';
+}
+document.addEventListener('click', () => { const m = $('#ctx'); if (m) m.style.display = 'none'; });
+function setPower(n, on) {
+  const d = L.dev[n]; d.on = on;
+  if (!on) { for (const k of Object.keys(wins)) if (wins[k].dn === n) closeWin(k); if (d.conns) { d.conns.length = 0; d.xlates.length = 0; } }
+  commit(); notice(d.label + (on ? ' powered on.' : ' powered off.'));
+}
+function closeWin(k) { const w = wins[k]; if (!w) return; w.el.remove(); delete wins[k]; $('#deskhint').style.display = Object.keys(wins).length ? 'none' : 'block'; }
+function front(w) { w.el.style.zIndex = ++zTop; }
+function fillWin(w) {
+  const d = L.dev[w.dn]; w.body.innerHTML = '';
+  if (w.kind === 'term') w.body.append(terminal(d));
+  else if (w.kind === 'browser') w.body.append(browser(d));
+  else if (w.kind === 'gui') w.body.append(d.type === 'asa' ? asdm(d) : fmc(d));
+  else w.body.append(infoView(d));
+}
+function openWin(n, kind) {
+  const d = L.dev[n]; if (d.on === false) { notice(d.label + ' is powered off - right-click > Power on', true); return; }
+  const k = n + ':' + kind; if (wins[k]) { front(wins[k]); return; }
+  const title = d.label + ' - ' + ({ term: 'Terminal', browser: 'Desktop', gui: guiKind(d) + ' GUI', info: 'Info' })[kind];
+  const body = h('div', { class: 'wbody' }); const cnt = Object.keys(wins).length;
+  const el = h('div', { class: 'win', style: 'left:' + (14 + (cnt % 6) * 30) + 'px;top:' + (14 + (cnt % 6) * 30) + 'px' }, h('div', { class: 'wbar' }, h('span', {}, title), h('button', { class: 'wx', onclick: () => closeWin(k) }, '✕')), body);
+  const w = wins[k] = { el, body, dn: n, kind }; fillWin(w); $('#desk').append(el); $('#deskhint').style.display = 'none'; front(w);
+  el.addEventListener('mousedown', () => front(w));
+  const bar = el.firstChild; let ox, oy, dragging = false;
+  bar.addEventListener('mousedown', ev => { if (ev.target.tagName === 'BUTTON') return; dragging = true; ox = ev.clientX - el.offsetLeft; oy = ev.clientY - el.offsetTop; ev.preventDefault(); });
+  document.addEventListener('mousemove', ev => { if (dragging) { el.style.left = Math.max(0, ev.clientX - ox) + 'px'; el.style.top = Math.max(0, ev.clientY - oy) + 'px'; } });
+  document.addEventListener('mouseup', () => dragging = false);
+  setTimeout(() => { if (kind === 'term' && terms[n]) terms[n]._inp.focus(); }, 0);
+}
+function refreshWins() { for (const k in wins) if (wins[k].kind === 'gui' || wins[k].kind === 'info') fillWin(wins[k]); }
+function renderPanel() { refreshWins(); }
+// ---------- start screen ----------
+const PRESETS = { 'Everything': null, 'Firewall lab (ASA)': ['FW1', 'R1', 'R2', 'SW1', 'Client', 'DMZ', 'Outside'], 'FTD lab': ['R2', 'Outside', 'FTD1', 'FTDClient'], 'Routers + ACLs': ['R1', 'R2', 'SW1', 'Client', 'Outside', 'FW1', 'DMZ'] };
+function startScreen() {
+  const m = $('#modal'); m.innerHTML = ''; m.style.display = 'flex';
+  const boxes = {}; const list = h('div', { class: 'dlist' });
+  for (const n in L.dev) { const cb = h('input', { type: 'checkbox' }); cb.checked = L.dev[n].on !== false; boxes[n] = cb; list.append(h('label', {}, cb, ' ' + L.dev[n].label, h('small', {}, ' ' + L.dev[n].type))); }
+  const preset = (names) => { for (const n in boxes) boxes[n].checked = !names || names.includes(n) || L.dev[n].type === 'switch'; };
+  m.append(h('div', { class: 'mbox' }, h('h2', {}, 'SCOR Lab Simulator'), h('p', { class: 'dim' }, 'Choose the devices to power on, then press Start. Later: right-click any device on the map to open its Terminal or GUI, or to power it on/off.'),
+    h('div', { class: 'presets' }, Object.keys(PRESETS).map(k => h('button', { onclick: () => preset(PRESETS[k]) }, k))), list,
+    h('div', { style: 'text-align:right;margin-top:12px' }, h('button', { class: 'primary', onclick: () => { for (const n in boxes) L.dev[n].on = boxes[n].checked; for (const k of Object.keys(wins)) closeWin(k); m.style.display = 'none'; commit(); notice('Lab started. Right-click a device for Terminal / GUI.'); } }, 'Start lab  ▶'))));
 }
 function terminal(d) {
   if (!terms[d.name]) {
@@ -131,13 +180,16 @@ function terminal(d) {
 }
 function refreshLive() { drawTopo(); }
 function browser(d) {
-  const url = h('input', { class: 'url', value: 'http://172.16.1.10', spellcheck: 'false' }); const page = h('div', { class: 'page' }, 'Enter an address and press Go.');
+  if (brs[d.name]) return brs[d.name];
+  const url = h('input', { class: 'url', value: 'http://172.16.1.10', spellcheck: 'false' }); const page = h('div', { class: 'page' }, 'Pick a bookmark below or type an address, then press Go.');
   const go = () => { lastAnim = null; const u = /^(?:https?:\/\/)?([\d.]+)(?::(\d+))?/.exec(url.value.trim()); if (!u) { page.textContent = 'Use an IP address, e.g. http://203.0.113.10'; return; }
     const port = u[2] ? +u[2] : /^https/.test(url.value) ? 443 : 80; const r = flow(L, d.name, { proto: 'tcp', dst: u[1], dport: port });
-    page.innerHTML = ''; if (r.ok) page.append(h('h2', {}, r.page || 'OK'), h('p', {}, '✔ HTTP 200 OK from ' + u[1] + ':' + port)); else page.append(h('h2', { class: 'bad' }, "This site can't be reached"), h('p', {}, r.kind === 'closed' ? 'Connection refused.' : r.kind === 'unreach' || r.kind === 'prohibited' ? 'No route to host / host prohibited.' : 'Connection timed out (something dropped the packet).'), h('p', { class: 'dim' }, r.why || ''));
+    page.innerHTML = ''; if (r.ok) page.append(h('h2', {}, r.page || 'OK'), h('p', {}, '✔ HTTP 200 OK from ' + u[1] + ':' + port)); else page.append(h('h2', { class: 'bad' }, "This site can't be reached"), h('p', {}, r.kind === 'closed' ? 'Connection refused (nothing listening on that port).' : r.kind === 'unreach' || r.kind === 'prohibited' ? 'No route to host.' : 'Connection timed out - something dropped the packet (firewall / ACL / missing NAT?).'), h('p', { class: 'dim' }, r.why || ''), h('p', { class: 'dim' }, 'Tip: use the firewall GUI > Packet Tracer, or the terminal, to see where it stops.'));
     save(); runChecks(); if (lastAnim) animate(lastAnim); drawTopo(); };
   url.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
-  return h('div', { class: 'browser' }, h('div', { class: 'bar' }, h('span', {}, '◀ ▶ ⟳'), url, h('button', { onclick: go }, 'Go')), page);
+  const bm = [['DMZ web', 'http://172.16.1.10'], ['Published DMZ', 'http://203.0.113.10'], ['Outside web', 'http://198.51.100.10'], ['FTD-Client web', 'http://10.2.1.10']];
+  const el = h('div', { class: 'browser' }, h('div', { class: 'bar' }, h('span', {}, '◀ ▶ ⟳'), url, h('button', { onclick: go }, 'Go')), h('div', { class: 'bms' }, bm.map(x => h('button', { onclick: () => { url.value = x[1]; go(); } }, x[0]))), page);
+  brs[d.name] = el; return el;
 }
 function infoView(d) {
   const rows = Object.values(d.ifs).map(x => h('tr', {}, h('td', {}, x.name), h('td', {}, x.nameif || ''), h('td', {}, x.ip ? x.ip + '/' + x.len : '-'), h('td', {}, x.up ? 'up' : 'down')));
@@ -191,25 +243,26 @@ function fmc(d) {
   return h('div', {}, h('div', { class: 'deploy' }, d.dirty ? h('span', { class: 'warn' }, '● Pending changes - not active until deployed') : h('span', { class: 'up' }, '✔ Policy deployed'), h('button', { class: 'primary', disabled: !d.dirty, onclick: () => { ftdDeploy(d); notice('Deployment to FTD1 complete.'); commit(); } }, 'Deploy')),
     sub(['Interfaces', 'Routing', 'NAT', 'Access Policy', 'Events'], 'fmc', t => {
       if (t === 'Interfaces') return h('div', {}, tbl(['Interface', 'Name', 'Security zone', 'IPv4 / len', 'Enabled', ''], Object.values(dr.ifs).map(x => { const z = inp_(x.zone, 'zone', '70px'), ip = inp_(x.ip, 'x.x.x.x', '110px'), ln = inp_(x.len, 'len', '40px'), en = h('input', { type: 'checkbox', checked: x.up });
-        return h('tr', {}, h('td', {}, x.name), h('td', {}, x.nameif), h('td', {}, z), h('td', {}, ip, '/', ln), h('td', {}, en), h('td', {}, h('button', { onclick: () => { x.zone = z.value.trim(); x.ip = ip.value.trim() || null; x.len = +ln.value || 24; x.up = en.checked; dirty(); } }, 'Save'))); })), h('p', { class: 'dim' }, 'Suggested: Gi0/0 zone OUT 192.0.2.1/24 (to R2), Gi0/1 zone IN 10.2.1.1/24 (to FTD-Client).'));
+        return h('tr', {}, h('td', {}, x.name), h('td', {}, x.nameif), h('td', {}, z), h('td', {}, ip, '/', ln), h('td', {}, en), h('td', {}, h('button', { onclick: () => { x.zone = z.value.trim(); x.ip = ip.value.trim() || null; x.len = +ln.value || 24; x.up = en.checked; dirty(); } }, 'Save'))); })), h('p', { class: 'dim' }, 'Pre-configured: Gi0/0 zone OUT 192.0.2.1/24 (to R2), Gi0/1 zone IN 10.2.1.1/24 (to FTD-Client). Edit, then press Deploy.'));
       if (t === 'Routing') { const f = { n: inp_('0.0.0.0/0', 'network/len', '120px'), g: inp_('192.0.2.2', 'gateway', '110px') };
         return h('div', {}, tbl(['Network', 'Gateway', ''], dr.routes.map((r, i) => h('tr', {}, h('td', {}, r.net + '/' + r.len), h('td', {}, r.nh), h('td', {}, h('button', { class: 'x', onclick: () => { dr.routes.splice(i, 1); dirty(); } }, '✕'))))), h('h4', {}, 'Add static route'), h('div', { class: 'frm' }, f.n, 'via', f.g, h('button', { onclick: () => { const [n, l] = f.n.value.split('/'); dr.routes.push({ net: n, len: +l || 0, nh: f.g.value }); dirty(); } }, 'Add'))); }
       if (t === 'NAT') { const f = { s: inp_('IN', 'src zone', '70px'), d: inp_('OUT', 'dst zone', '70px') };
         return h('div', {}, tbl(['Type', 'Source zone', 'Destination zone', ''], dr.nat.map((n, i) => h('tr', {}, h('td', {}, 'Dynamic PAT (interface)'), h('td', {}, n.srcZone), h('td', {}, n.dstZone), h('td', {}, h('button', { class: 'x', onclick: () => { dr.nat.splice(i, 1); dirty(); } }, '✕'))))), h('h4', {}, 'Add PAT rule'), h('div', { class: 'frm' }, f.s, '→', f.d, h('button', { onclick: () => { dr.nat.push({ srcZone: f.s.value.trim(), dstZone: f.d.value.trim() }); dirty(); } }, 'Add'))); }
-      if (t === 'Access Policy') { const f = { n: inp_('Allow-IN-OUT', 'name', '110px'), s: inp_('IN', 'src zone', '60px'), d: inp_('OUT', 'dst zone', '60px'), sn: inp_('any', 'src net', '100px'), dn: inp_('any', 'dst net', '100px'), p: sel_(['any', 'tcp', 'udp', 'icmp']), pt: inp_('', 'port', '55px'), a: sel_(['allow', 'block']), ips: h('input', { type: 'checkbox' }) };
+      if (t === 'Access Policy') { const f = { n: inp_('Allow-IN-OUT', 'name', '110px'), s: inp_('IN', 'src zone', '60px'), d: inp_('OUT', 'dst zone', '60px'), sn: inp_('any', 'src net', '100px'), dn: inp_('any', 'dst net', '100px'), p: sel_(['any', 'tcp', 'udp', 'icmp']), pt: inp_('', 'port', '55px'), a: sel_(['allow', 'block']), ips: h('input', { type: 'checkbox' }), pos: sel_(['top', 'bottom']) };
         const defSel = sel_(['block', 'allow'], dr.policy.defaultAction); defSel.addEventListener('change', () => { dr.policy.defaultAction = defSel.value; dirty(); });
         return h('div', {}, tbl(['#', 'Name', 'Src zone', 'Dst zone', 'Src net', 'Dst net', 'Proto/Port', 'Action', 'IPS', 'Hits', ''], dr.policy.rules.map((r, i) => { const ips = h('input', { type: 'checkbox', checked: r.ips }); ips.addEventListener('change', () => { r.ips = ips.checked; dirty(); });
-            return h('tr', {}, h('td', {}, i + 1), h('td', {}, r.name), h('td', {}, r.srcZone), h('td', {}, r.dstZone), h('td', {}, r.srcNet), h('td', {}, r.dstNet), h('td', {}, r.proto + (r.dport ? '/' + r.dport : '')), h('td', { class: r.action === 'allow' ? 'up' : 'dn' }, r.action), h('td', {}, ips), h('td', {}, r.hits || 0), h('td', {}, h('button', { class: 'x', onclick: () => { dr.policy.rules.splice(i, 1); dirty(); } }, '✕'))); })),
+            return h('tr', {}, h('td', {}, i + 1), h('td', {}, r.name), h('td', {}, r.srcZone), h('td', {}, r.dstZone), h('td', {}, r.srcNet), h('td', {}, r.dstNet), h('td', {}, r.proto + (r.dport ? '/' + r.dport : '')), h('td', { class: r.action === 'allow' ? 'up' : 'dn' }, r.action), h('td', {}, ips), h('td', {}, r.hits || 0), h('td', {}, h('button', { title: 'move up', disabled: i === 0, onclick: () => { const [x] = dr.policy.rules.splice(i, 1); dr.policy.rules.splice(i - 1, 0, x); dirty(); } }, '↑'), h('button', { class: 'x', onclick: () => { dr.policy.rules.splice(i, 1); dirty(); } }, '✕'))); })),
           h('p', {}, 'Default action: ', defSel, h('span', { class: 'dim' }, '  (Block All Traffic = anything not explicitly allowed is dropped)')),
-          h('h4', {}, 'Add access control rule'), h('div', { class: 'frm' }, f.n, f.s, '→', f.d, f.sn, f.dn, f.p, f.pt, f.a, h('label', {}, f.ips, ' IPS'), h('button', { onclick: () => { dr.policy.rules.push({ name: f.n.value, srcZone: f.s.value.trim() || 'any', dstZone: f.d.value.trim() || 'any', srcNet: f.sn.value || 'any', dstNet: f.dn.value || 'any', proto: f.p.value, dport: f.pt.value ? +f.pt.value : null, action: f.a.value, ips: f.ips.checked }); dirty(); } }, 'Add'))); }
+          h('h4', {}, 'Add access control rule'), h('div', { class: 'frm' }, f.n, f.s, '→', f.d, f.sn, f.dn, f.p, f.pt, f.a, h('label', {}, f.ips, ' IPS'), 'position', f.pos, h('button', { onclick: () => { dr.policy.rules[f.pos.value === 'top' ? 'unshift' : 'push']({ name: f.n.value, srcZone: f.s.value.trim() || 'any', dstZone: f.d.value.trim() || 'any', srcNet: f.sn.value || 'any', dstNet: f.dn.value || 'any', proto: f.p.value, dport: f.pt.value ? +f.pt.value : null, action: f.a.value, ips: f.ips.checked }); dirty(); } }, 'Add'))); }
       if (t === 'Events') return h('div', {}, h('button', { onclick: () => renderPanel() }, '⟳ Refresh'), tbl(['Action', 'Src', 'Dst', 'Proto', 'Port', 'Rule', 'Reason'], d.events.slice(0, 25).map(e => h('tr', {}, h('td', { class: e.action === 'Allow' ? 'up' : 'dn' }, e.action), h('td', {}, e.src), h('td', {}, e.dst), h('td', {}, e.proto), h('td', {}, e.dport), h('td', {}, e.rule), h('td', {}, e.why)))));
       return null; }));
 }
 
 // ---------- boot ----------
 function boot() {
-  load(); drawTopo(); renderPanel(); runChecks();
-  $('#reset').addEventListener('click', () => { if (confirm('Reset the whole lab to its starting state?')) { localStorage.removeItem(KEY); terms = {}; sessions = {}; L = newLab(); sel = 'Client'; commit(); notice('Lab reset.'); } });
+  load(); drawTopo(); runChecks(); startScreen();
+  $('#reset').addEventListener('click', () => { if (confirm('Reset the whole lab to its starting state?')) { try { localStorage.removeItem(KEY); } catch (e) {} terms = {}; sessions = {}; brs = {}; for (const k of Object.keys(wins)) closeWin(k); L = newLab(); commit(); startScreen(); } });
+  $('#devs').addEventListener('click', startScreen);
 }
 window.addEventListener('DOMContentLoaded', boot);
 })();

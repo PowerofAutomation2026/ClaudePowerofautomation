@@ -33,15 +33,28 @@ h3,h4{margin:8px 0 4px}.deploy{display:flex;justify-content:space-between;align-
 .ph{padding:5px 8px;border-left:3px solid var(--line);margin:4px 0;background:#0b1222}.ph.ok{border-color:var(--g)}.ph.drop{border-color:var(--r)}.phr{margin-top:8px;font-weight:700}
 .browser{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff;color:#111;height:100%;min-height:300px}.browser .bar{display:flex;gap:6px;padding:6px;background:#e5e7eb;align-items:center}.browser .url{flex:1;background:#fff;color:#111;border:1px solid #cbd5e1}.page{padding:20px}.bad{color:#b91c1c}
 #toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%) translateY(80px);background:#12351f;border:1px solid var(--g);padding:8px 16px;border-radius:10px;transition:.3s;opacity:0}#toast.show{transform:translateX(-50%);opacity:1}#toast.bad{background:#3a1218;border-color:var(--r)}
+
+#deskCard{flex:1;padding:0;overflow:hidden;position:relative}#desk{position:absolute;inset:0;overflow:hidden}
+#deskhint{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:var(--mut)}
+.win{position:absolute;width:min(620px,92%);height:480px;min-width:300px;min-height:200px;background:#0c1426;border:1px solid #2a3b63;border-radius:12px;box-shadow:0 14px 40px #000a;display:flex;flex-direction:column;resize:both;overflow:hidden}
+.wbar{display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:linear-gradient(90deg,#16213a,#1b2a4d);cursor:move;font-weight:600;user-select:none}
+.wx{padding:0 8px;color:var(--r);border:0;background:transparent}.wbody{flex:1;overflow:auto;padding:8px;min-height:0}
+.wbody>.term,.wbody>.browser{height:100%}
+#ctx{display:none;position:fixed;z-index:1000;min-width:220px;background:#0f1a30;border:1px solid #2a3b63;border-radius:10px;box-shadow:0 10px 30px #000b;padding:4px}
+.mh{padding:6px 10px;color:var(--mut);font-size:12px}.mi{padding:7px 12px;border-radius:7px;cursor:pointer}.mi:hover{background:#1c2c52}.mi.dis{opacity:.4;cursor:default}.ms{height:1px;background:var(--line);margin:4px 0}
+#modal{display:none;position:fixed;inset:0;z-index:2000;background:#000a;align-items:center;justify-content:center}.mbox{background:#0f1626;border:1px solid #2a3b63;border-radius:16px;padding:22px;width:min(560px,94%)}
+.mbox h2{margin:0 0 6px;background:linear-gradient(90deg,var(--a),var(--b));-webkit-background-clip:text;color:transparent}.presets{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+.dlist{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px}.dlist label{background:#0a1020;border:1px solid var(--line);border-radius:8px;padding:6px 9px;cursor:pointer}.dlist small{color:var(--mut)}
+.bms{display:flex;gap:6px;padding:6px;background:#f1f5f9;flex-wrap:wrap}.bms button{background:#fff;color:#111;border:1px solid #cbd5e1;padding:2px 9px}
 @media(max-width:1000px){main{grid-template-columns:1fr;height:auto}}
 </style></head><body>
-<header><h1>SCOR Lab Simulator</h1><span class="dim">simulated Cisco-style devices · no images required · CCNP Security 350-701 practice</span><span class="sp"></span><button id="reset">Reset lab</button></header>
+<header><h1>SCOR Lab Simulator</h1><span class="dim">simulated Cisco-style devices · no images required · CCNP Security 350-701 practice</span><span class="sp"></span><button id="devs">Devices…</button> <button id="reset">Reset lab</button></header>
 <main>
  <div class="col">
-  <div class="card" id="topoCard"><svg id="topo" viewBox="30 82 1000 448"></svg><div class="dim" style="font-size:12px">Click a device. Open its Console / GUI. Packets animate across the map when you ping, curl or browse (green = delivered, red = dropped).</div></div>
+  <div class="card" id="topoCard"><svg id="topo" viewBox="30 82 1000 448"></svg><div class="dim" style="font-size:12px">Right-click a device → Terminal / GUI / Power. Packets animate across the map when you ping, curl or browse (green = delivered, red = dropped).</div></div>
   <div class="card" id="tasksCard"><b>Lab tasks (auto-graded)</b> <span class="dim" id="progt"></span><div class="bar0"><i id="prog"></i></div><div id="tasks"></div></div>
  </div>
- <div class="col"><div class="card" id="panelCard"><div id="panel"></div></div></div>
-</main><div id="toast"></div>
+ <div class="col"><div class="card" id="deskCard"><div id="desk"><div id="deskhint"><h3>Right-click a device on the map</h3><p>→ <b>Open Terminal</b> or <b>Open GUI</b><br>Double-click a device to open its terminal / desktop.<br>Windows can be dragged, resized and closed.</p></div></div></div></div>
+</main><div id="toast"></div><div id="ctx"></div><div id="modal"></div>
 <script src="engine.js"></script><script src="cli.js"></script><script src="app.js"></script>
 </body></html>

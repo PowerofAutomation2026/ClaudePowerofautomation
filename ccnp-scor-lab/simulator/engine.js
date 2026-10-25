@@ -24,6 +24,7 @@ function newLab() {
   const r2 = D('router', 'R2', 'R2', 250, 120);
   addIf(r2, 'Gi0/1', '203.0.113.2', 24); addIf(r2, 'Gi0/2', '198.51.100.1', 24); addIf(r2, 'Gi0/3', '192.0.2.2', 24);
   r2.routes.push({ net: '10.2.1.0', len: 24, nh: '192.0.2.1' });
+  r2.routes.push({ net: '172.16.1.0', len: 24, nh: '203.0.113.1' });
   const fw = D('asa', 'FW1', 'FW1-ASA', 450, 120); fw.objects = {}; fw.nats = []; fw.conns = []; fw.xlates = [];
   addIf(fw, 'Gi0/0', '203.0.113.1', 24, { nameif: 'outside', sec: 0 });
   addIf(fw, 'Gi0/1', '10.1.1.1', 24, { nameif: 'inside', sec: 100 });
@@ -37,9 +38,10 @@ function newLab() {
   host('Client', 'Client (inside PC)', 920, 120, '10.1.10.10', 24, '10.1.10.1', { tcp: [22], udp: [], page: 'Client PC' });
   host('DMZ', 'DMZ-Server', 450, 290, '172.16.1.10', 24, '172.16.1.1', { tcp: [22, 80], udp: [], page: 'DMZ web server (172.16.1.10) - welcome!' });
   const ft = D('ftd', 'FTD1', 'FTD1', 250, 290); ft.conns = []; ft.xlates = []; ft.events = [];
-  addIf(ft, 'Gi0/0', null, 24, { zone: '', nameif: 'outside' }); addIf(ft, 'Gi0/1', null, 24, { zone: '', nameif: 'inside' });
-  ft.policy = { defaultAction: 'block', rules: [] }; ft.nat = []; ft.dirty = false;
-  host('FTDClient', 'FTD-Client', 250, 450, '10.2.1.10', 24, '10.2.1.1', { tcp: [22], udp: [], page: 'FTD-Client PC' });
+  addIf(ft, 'Gi0/0', '192.0.2.1', 24, { zone: 'OUT', nameif: 'outside' }); addIf(ft, 'Gi0/1', '10.2.1.1', 24, { zone: 'IN', nameif: 'inside' });
+  ft.routes.push({ net: '0.0.0.0', len: 0, nh: '192.0.2.2' });
+  ft.policy = { defaultAction: 'block', rules: [{ name: 'Allow-IN-OUT', srcZone: 'IN', dstZone: 'OUT', srcNet: 'any', dstNet: 'any', proto: 'any', dport: null, action: 'allow', ips: false, hits: 0 }] }; ft.nat = [{ srcZone: 'IN', dstZone: 'OUT' }]; ft.dirty = false;
+  host('FTDClient', 'FTD-Client', 250, 450, '10.2.1.10', 24, '10.2.1.1', { tcp: [22, 80], udp: [], page: 'FTD-Client internal web server (10.2.1.10)' });
   ft.draft = clone({ ifs: ft.ifs, routes: ft.routes, policy: ft.policy, nat: ft.nat });
   L.links = [['Outside:eth0', 'R2:Gi0/2'], ['R2:Gi0/1', 'FW1:Gi0/0'], ['FW1:Gi0/1', 'R1:Gi0/1'], ['FW1:Gi0/2', 'DMZ:eth0'], ['R1:Gi0/2', 'SW1:p1'],
     ['SW1:p2', 'Client:eth0'], ['R2:Gi0/3', 'FTD1:Gi0/0'], ['FTD1:Gi0/1', 'FTDClient:eth0']];
@@ -53,15 +55,15 @@ function segment(L, d, i) {
   (function walk(port) {
     const f = farEnd(L, port); if (!f || vis.has(f)) return; vis.add(f);
     const [fd, fi] = f.split(':');
-    if (L.dev[fd].type === 'switch') { sw.push(fd); for (const [a, b] of L.links) for (const e of [a, b]) if (e.split(':')[0] === fd && !vis.has(e)) { vis.add(e); walk(e); } }
+    if (L.dev[fd].type === 'switch') { if (L.dev[fd].on === false) return; sw.push(fd); for (const [a, b] of L.links) for (const e of [a, b]) if (e.split(':')[0] === fd && !vis.has(e)) { vis.add(e); walk(e); } }
     else out.push({ dev: fd, if: fi });
   })(d + ':' + i);
   return { eps: out, sw };
 }
 function arp(L, dn, ifn, ip) {
   const s = segment(L, dn, ifn);
-  for (const ep of s.eps) { const x = L.dev[ep.dev].ifs[ep.if]; if (x && x.up && x.ip === ip) return { dev: ep.dev, if: ep.if, sw: s.sw }; }
-  for (const ep of s.eps) { const fd = L.dev[ep.dev]; if (fd.type !== 'asa') continue;   // proxy-ARP for static-NAT mapped addresses
+  for (const ep of s.eps) { if (L.dev[ep.dev].on === false) continue; const x = L.dev[ep.dev].ifs[ep.if]; if (x && x.up && x.ip === ip) return { dev: ep.dev, if: ep.if, sw: s.sw }; }
+  for (const ep of s.eps) { const fd = L.dev[ep.dev]; if (fd.type !== 'asa' || fd.on === false) continue;   // proxy-ARP for static-NAT mapped addresses
     for (const n of fd.nats) if (n.kind === 'static' && n.mapped === ip && fd.ifs[ep.if].nameif === n.mappedIf) return { dev: ep.dev, if: ep.if, sw: s.sw }; }
   return null;
 }
@@ -259,6 +261,7 @@ function srcIpFor(d, dst) { const r = routeLookup(d, dst); return r ? d.ifs[r.if
 function flow(L, srcName, p) { const r = flow0(L, srcName, p); if (API.hook) API.hook(r, srcName, p); return r; }
 function flow0(L, srcName, p) {
   const ctx = { L, trace: [], path: [], now: Date.now() }; const d = L.dev[srcName];
+  if (d.on === false) return { ok: false, kind: 'off', why: srcName + ' is powered off', trace: ctx.trace, path: [srcName] };
   const sip = p.srcIp || srcIpFor(d, p.dst);
   if (!sip) return { ok: false, kind: 'noroute', why: 'no route to ' + p.dst, trace: ctx.trace, path: [srcName] };
   const id = 1000 + Math.floor(Math.random() * 60000);
