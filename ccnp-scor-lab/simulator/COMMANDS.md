@@ -202,6 +202,23 @@ Commands not listed here are rejected like a real device would (`% Invalid input
 | interface config | `switchport trunk <x ...>` | Set trunking characteristics (supports `no`) |
 | interface config | `spanning-tree <x ...>` | Spanning Tree Subsystem (supports `no`) |
 | interface config | `ip address <ip> <mask>` | Set the IP address of an SVI (supports `no`) |
+| global config | `aaa new-model` | Enable NEW access control commands and functions (supports `no`) |
+| global config | `dot1x system-auth-control` | Enable or disable 802.1X globally (supports `no`) |
+| global config | `radius server <name>` | Configure a RADIUS server |
+|  | `address ipv4 <ip> auth-port <p> acct-port <q>` | Specify the RADIUS server address (supports `no`) |
+|  | `address ipv4 <ip>` | Specify the RADIUS server address (supports `no`) |
+|  | `key <secret>` | Per-server encryption key (supports `no`) |
+| global config | `radius-server host <ip> key <secret>` | Specify a RADIUS server (legacy) (supports `no`) |
+| interface config | `authentication port-control <m>` | Set the port-control value (supports `no`) |
+| interface config | `dot1x pae authenticator` | Set the 802.1X port access entity (supports `no`) |
+| interface config | `mab` | MAC Authentication Bypass (supports `no`) |
+| interface config | `authentication order <x ...>` | Set the order of authentication methods (supports `no`) |
+| interface config | `authentication host-mode <x ...>` | Set the host mode (supports `no`) |
+| interface config | `authentication periodic` | Enable re-authentication (supports `no`) |
+| user EXEC (and priv) | `show authentication sessions` | Authentication Manager session information |
+| user EXEC (and priv) | `show authentication sessions interface <name ...>` | Session on one interface |
+| user EXEC (and priv) | `show dot1x all` | Show dot1x information for all interfaces |
+| user EXEC (and priv) | `show aaa servers` | Show AAA server status |
 | global config | `ip default-gateway <ip>` | Specify default gateway (supports `no`) |
 
 ## ASA-style firewall (FW1-ASA)

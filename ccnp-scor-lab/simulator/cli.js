@@ -53,10 +53,12 @@ function runCfg(d) {
   const asa = d.type === 'asa', sw = d.type === 'switch', o = [];
   if (asa) o.push(': Saved', 'ASA Version 9.20(1) (simulated)'); else o.push('Building configuration...', '', 'version 15.9 (simulated)');
   o.push('!', 'hostname ' + d.hostname, '!'); (d.extra || []).forEach(l => o.push(l)); if ((d.extra || []).length) o.push('!');
+  if (sw && d.aaa) o.push('aaa new-model'); if (sw && d.dot1xGlobal) o.push('dot1x system-auth-control'); if (sw && d.radius && d.radius.name && d.radius.name !== 'legacy') o.push('radius server ' + d.radius.name, ' address ipv4 ' + (d.radius.ip || '?') + ' auth-port 1812 acct-port 1813', ' key ' + (d.radius.key || '?'), '!');
   if (sw) for (const v of Object.keys(d.vlans || {})) if (+v !== 1) o.push('vlan ' + v, ' name ' + d.vlans[v], '!');
   for (const x of Object.values(d.ifs)) {
     o.push('interface ' + (x.svi ? x.name : LONG(x.name))); if (asa) o.push(' nameif ' + x.nameif, ' security-level ' + x.sec);
     if (x.desc) o.push(' description ' + x.desc);
+    if (sw && x.auth === 'auto') o.push(' authentication port-control auto');
     if (sw && !x.svi) { o.push(' switchport mode ' + (x.mode || 'access')); if ((x.mode || 'access') === 'access' && x.vlan && x.vlan !== 1) o.push(' switchport access vlan ' + x.vlan); }
     else o.push(x.ip ? ' ip address ' + x.ip + ' ' + lenToMask(x.len) : ' no ip address');
     if (!asa && x.aclIn) o.push(' ip access-group ' + x.aclIn + ' in'); if (!asa && x.aclOut) o.push(' ip access-group ' + x.aclOut + ' out');
@@ -126,7 +128,7 @@ function verText(d) {
   return 'Cisco IOS-style Software (SIMULATED), ' + (d.type === 'switch' ? 'IOSv-L2' : 'IOSv') + ' Software, Version 15.9(3)M6 (sim)\nTechnical Support: simulator - not real Cisco software\n\nROM: Bootstrap program is IOSv\n' + d.hostname + ' uptime is 2 hours, 14 minutes\nSystem returned to ROM by reload\nSystem image file is "flash0:/vios-adventerprisek9-m"\n\ncisco ' + (d.type === 'switch' ? 'IOSv-L2' : 'IOSv') + ' (revision 1.0) with 984K/62K bytes of memory.\nProcessor board ID 9SIM' + d.name.length + '00' + '\n' + Object.keys(d.ifs).filter(k => !d.ifs[k].svi).length + ' Gigabit Ethernet interfaces\nConfiguration register is 0x0';
 }
 // ---------- registry ----------
-const MODEL = { user: ['U'], priv: ['P', 'U'], config: ['C'], if: ['I', 'C'], acl: ['A', 'C'], line: ['L', 'C'], obj: ['O', 'C'], rtr: ['R', 'C'], vlan: ['V', 'C'], clish: ['K'], diag: ['D'], diagp: ['D'] };
+const MODEL = { user: ['U'], priv: ['P', 'U'], config: ['C'], if: ['I', 'C'], acl: ['A', 'C'], line: ['L', 'C'], obj: ['O', 'C'], rtr: ['R', 'C'], vlan: ['V', 'C'], clish: ['K'], diag: ['D'], diagp: ['D'], rad: ['X', 'C'] };
 function mkReg() { return []; }
 function def(reg, modes, pat, help, fn, noOK) { reg.push({ modes, pat, help, fn, noOK: !!noOK, toks: pat.trim().split(/\s+/).map(w => w[0] === '<' ? (w.endsWith('...>') ? { rest: w.slice(1, -4) } : { arg: w.slice(1, -1) }) : { lit: w.toLowerCase() }) }); }
 const REG = { router: mkReg(), switch: mkReg(), asa: mkReg(), ftd: mkReg() };
@@ -168,9 +170,10 @@ function pipeFilter(out, spec) {
 }
 function newSession(d) { return { mode: d.type === 'host' ? 'host' : d.type === 'ftd' ? 'clish' : 'user', ctx: null }; }
 function prompt(d, s) {
+  if (d.role === 'ise') return 'ise1/admin# '; if (d.role === 'fmc') return '> '; if (d.role === 'esa') return 'esa1.lab.local> '; if (d.role === 'wsa') return 'wsa1.lab.local> ';
   if (d.type === 'host') return 'lab@' + d.name.toLowerCase() + ':~$ ';
   if (d.type === 'ftd') return s.mode === 'diag' ? 'firepower> ' : s.mode === 'diagp' ? 'firepower# ' : '> ';
-  const suf = { user: '>', priv: '#', config: '(config)#', if: d.type === 'asa' ? '(config-if)#' : '(config-if)#', acl: '(config-ext-nacl)#', line: '(config-line)#', obj: '(config-network-object)#', rtr: '(config-router)#', vlan: '(config-vlan)#' }[s.mode];
+  const suf = { user: '>', priv: '#', config: '(config)#', if: d.type === 'asa' ? '(config-if)#' : '(config-if)#', acl: '(config-ext-nacl)#', line: '(config-line)#', obj: '(config-network-object)#', rtr: '(config-router)#', vlan: '(config-vlan)#', rad: '(config-radius-server)#' }[s.mode];
   return d.hostname + suf;
 }
 function exec(L, d, s, line) {
@@ -178,7 +181,7 @@ function exec(L, d, s, line) {
   let pipe = null; const pi = line.indexOf('|'); if (pi >= 0) { pipe = line.slice(pi + 1); line = line.slice(0, pi); }
   const out = execLine(L, d, s, line); return pipe ? pipeFilter(out, pipe) : out;
 }
-const CFGM = ['config', 'if', 'acl', 'line', 'obj', 'rtr', 'vlan'];
+const CFGM = ['config', 'if', 'acl', 'line', 'obj', 'rtr', 'vlan', 'rad'];
 function execLine(L, d, s, line) {
   const asa = d.type === 'asa', E = asa ? 'ERROR: ' : '';
   const { t: toks, p: pos } = splitTokens(line); if (!toks.length) return '';
@@ -188,7 +191,7 @@ function execLine(L, d, s, line) {
     if (['ex', 'exi', 'exit', 'logout', 'quit'].includes(w)) {
       if (s.mode === 'diag' || s.mode === 'diagp') { s.mode = 'clish'; return ''; }
       if (s.mode === 'clish') return 'Close this window to leave the FTD console.';
-      s.mode = ['if', 'acl', 'line', 'obj', 'rtr', 'vlan'].includes(s.mode) ? 'config' : s.mode === 'config' ? 'priv' : s.mode === 'priv' ? 'user' : s.mode; return ''; } }
+      s.mode = ['if', 'acl', 'line', 'obj', 'rtr', 'vlan', 'rad'].includes(s.mode) ? 'config' : s.mode === 'config' ? 'priv' : s.mode === 'priv' ? 'user' : s.mode; return ''; } }
   let rest = toks, rpos = pos, no = false, doMode = null;
   if (CFGM.includes(s.mode) && /^do$/i.test(toks[0]) && toks.length > 1) { rest = toks.slice(1); rpos = pos.slice(1); doMode = s.mode; s.mode = 'priv'; }
   if (/^no$/i.test(rest[0]) && rest.length > 1) { no = true; rest = rest.slice(1); rpos = rpos.slice(1); }
@@ -222,7 +225,7 @@ function nextOptions(L, d, s, line) {
   return { opts: [...opts.entries()], partial, toks };
 }
 function help(L, d, s, line) {
-  if (d.type === 'host') return 'ip addr | ip route | ping <ip> | traceroute <ip> | curl [-A agent] <url> | nmap [-Pn] [-p ports] <ip> | ifconfig | arp -n | ss -tln | hostname | clear';
+  if (d.type === 'host') return 'ip addr | ip route | ping <ip> | traceroute <ip> | curl [-A agent] [-x proxy:port] <url> | nmap [-Pn] [-p ports] <ip> | ifconfig | arp -n | ss -tln | hostname | clear';
   const r = nextOptions(L, d, s, line);
   if (!r.opts.length) return '% Unrecognized command';
   return r.opts.sort((a, b) => a[0] === '<cr>' ? 1 : b[0] === '<cr>' ? -1 : a[0].localeCompare(b[0])).map(([w, h]) => '  ' + pad(w, 24) + h).join('\n');
@@ -237,7 +240,10 @@ function complete(L, d, s, line) {
 }
 function suggest(d, s) {
   const t = d.type;
-  if (t === 'host') return ['ip addr', 'ip route', 'ping 198.51.100.10', 'curl http://172.16.1.10', 'traceroute 198.51.100.10', 'nmap -Pn 203.0.113.10', 'help'];
+  if (d.role === 'ise') return ['show version', 'show application status ise', 'ping 192.168.100.23', 'help'];
+  if (d.role === 'fmc') return ['show version', 'show managed-devices', 'help'];
+  if (d.role === 'esa' || d.role === 'wsa') return ['status', 'version', 'help'];
+  if (t === 'host') return ['ip addr', 'ip route', 'ping 198.51.100.10', 'curl http://172.16.1.10', 'curl -x 172.16.1.30:3128 http://www.facebook.com', 'traceroute 198.51.100.10', 'nmap -Pn 203.0.113.10', 'swaks --to alice@lab.local --from bob@partner.com --server 203.0.113.20 --header "Subject: hello" --body "hi"', 'help'];
   if (t === 'ftd') return s.mode.startsWith('diag') ? ['show interface ip brief', 'show route', 'show conn', 'show xlate', 'show access-list', 'exit'] : ['show version', 'show managers', 'show network', 'system support diagnostic-cli', '?'];
   const common = ['?'];
   if (s.mode === 'user') return ['enable', 'show version', t === 'asa' ? 'show interface ip brief' : 'show ip interface brief', t === 'switch' ? 'show vlan brief' : 'show ip route'].concat(common);
@@ -343,6 +349,21 @@ def(Sw, 'I', 'switchport mode <m>', 'Set trunking mode of the interface', (a, c)
 def(Sw, 'I', 'switchport access vlan <id>', 'Set VLAN when interface is in access mode', (a, c) => { if (!c.d.vlans[a[0]]) c.d.vlans[a[0]] = 'VLAN' + String(a[0]).padStart(4, '0'); c.d.ifs[c.s.ctx].vlan = c.no ? 1 : +a[0]; return ''; }, true);
 def(Sw, 'I', 'switchport trunk <x...>', 'Set trunking characteristics', (a, c) => store(c, 'switchport trunk ' + a[0]), true); def(Sw, 'I', 'spanning-tree <x...>', 'Spanning Tree Subsystem', (a, c) => store(c, 'spanning-tree ' + a[0]), true);
 def(Sw, 'I', 'ip address <ip> <mask>', 'Set the IP address of an SVI', (a, c) => { const x = c.d.ifs[c.s.ctx]; if (!x.svi) return '% Invalid input detected (L2 port: use "interface vlan <id>")'; if (c.no) { x.ip = null; return ''; } x.ip = a[0]; x.len = maskToLen(a[1]); return ''; }, true);
+def(Sw, 'C', 'aaa new-model', 'Enable NEW access control commands and functions', (a, c) => { c.d.aaa = !c.no; return ''; }, true);
+def(Sw, 'C', 'dot1x system-auth-control', 'Enable or disable 802.1X globally', (a, c) => { c.d.dot1xGlobal = !c.no; return ''; }, true);
+def(Sw, 'C', 'radius server <name>', 'Configure a RADIUS server', (a, c) => { c.d.radius = c.d.radius || {}; c.d.radius.name = a[0]; c.s.mode = 'rad'; c.s.ctx = 'radius server ' + a[0]; return ''; });
+def(Sw, 'X', 'address ipv4 <ip> auth-port <p> acct-port <q>', 'Specify the RADIUS server address', (a, c) => { c.d.radius.ip = a[0]; return ''; }, true); def(Sw, 'X', 'address ipv4 <ip>', 'Specify the RADIUS server address', (a, c) => { c.d.radius.ip = a[0]; return ''; }, true);
+def(Sw, 'X', 'key <secret>', 'Per-server encryption key', (a, c) => { c.d.radius.key = a[0]; return ''; }, true);
+def(Sw, 'C', 'radius-server host <ip> key <secret>', 'Specify a RADIUS server (legacy)', (a, c) => { c.d.radius = { name: 'legacy', ip: a[0], key: a[1] }; return ''; }, true);
+def(Sw, 'I', 'authentication port-control <m>', 'Set the port-control value', (a, c) => { const x = c.d.ifs[c.s.ctx]; if (/^a/i.test(a[0]) && !c.no) x.auth = 'auto'; else { x.auth = 'open'; x.state = 'authorized'; } return ''; }, true);
+def(Sw, 'I', 'dot1x pae authenticator', 'Set the 802.1X port access entity', (a, c) => store(c, 'dot1x pae authenticator'), true); def(Sw, 'I', 'mab', 'MAC Authentication Bypass', (a, c) => store(c, 'mab'), true);
+def(Sw, 'I', 'authentication order <x...>', 'Set the order of authentication methods', (a, c) => store(c, 'authentication order ' + a[0]), true); def(Sw, 'I', 'authentication host-mode <x...>', 'Set the host mode', (a, c) => store(c, 'authentication host-mode ' + a[0]), true);
+def(Sw, 'I', 'authentication periodic', 'Enable re-authentication', (a, c) => store(c, 'authentication periodic'), true);
+function nacRows(d) { return Object.values(d.ifs).filter(x => x.auth === 'auto').map(x => [x.name, x]); }
+def(Sw, 'U', 'show authentication sessions', 'Authentication Manager session information', (a, c) => { const r = nacRows(c.d); if (!r.length) return 'No sessions present'; return pad('Interface', 12) + pad('MAC Address', 16) + pad('Method', 8) + pad('Domain', 8) + pad('Status', 24) + 'User / Policy\n' + r.map(([n, x]) => pad(SHORT(n), 12) + pad('(client)', 16) + pad(x.user ? 'dot1x' : '-', 8) + pad('DATA', 8) + pad(x.state === 'authorized' ? 'Auth' : x.state === 'quarantine' ? 'Auth (quarantine)' : 'Unauth', 24) + (x.user || '') + (x.profile ? ' [' + x.profile + ']' : '')).join('\n'); });
+def(Sw, 'U', 'show authentication sessions interface <name...>', 'Session on one interface', (a, c) => { const n = normIf(c.d, a[0].replace(/\s+/g, '')); const x = n && c.d.ifs[n]; if (!x) return '% Invalid interface'; return 'Interface:  ' + LONG(n) + '\n  Status:  ' + (x.state === 'authorized' ? 'Authorized' : x.state === 'quarantine' ? 'Authorized (quarantine VLAN)' : x.auth === 'auto' ? 'Unauthorized' : 'port-control force-authorized') + '\n  User-Name: ' + (x.user || '-') + '\n  Policy: ' + (x.profile || '-') + '\n  ACS ACL: ' + (x.dacl ? 'xACSACLx-IP-dACL (' + x.dacl.length + ' ACEs)' : '-') + '\n  Vlan: ' + (x.vlan || 1); });
+def(Sw, 'U', 'show dot1x all', 'Show dot1x information for all interfaces', (a, c) => 'Sysauthcontrol              ' + (c.d.dot1xGlobal ? 'Enabled' : 'Disabled') + '\nDot1x Info for ' + (nacRows(c.d).map(([n]) => LONG(n)).join(', ') || '(no ports in auto mode)'));
+def(Sw, 'U', 'show aaa servers', 'Show AAA server status', (a, c) => c.d.radius && c.d.radius.ip ? 'RADIUS: id 1, priority 1, host ' + c.d.radius.ip + ', auth-port 1812, acct-port 1813\n     State: current UP' : 'No RADIUS servers configured');
 def(Sw, 'C', 'ip default-gateway <ip>', 'Specify default gateway', (a, c) => store(c, 'ip default-gateway ' + a[0]), true);
 // ---------- ASA ----------
 function asaShow(reg, U_) {
@@ -409,10 +430,28 @@ for (let i = Ft.length - 1; i >= 0; i--) if (Ft[i].pat === 'show access-list') F
 def(Ft, 'D', 'show access-list', 'Access control rules (compiled from FMC policy)', (a, c) => 'access-list CSM_FW_ACL_; ' + c.d.policy.rules.length + ' elements\n' + c.d.policy.rules.map((r, i) => 'access-list CSM_FW_ACL_ line ' + (i + 1) + ' extended ' + (r.action === 'allow' ? 'permit' : 'deny') + ' ' + (r.proto === 'any' ? 'ip' : r.proto) + ' ' + r.srcNet + ' ' + r.dstNet + (r.dport ? ' eq ' + r.dport : '') + ' (hitcnt=' + (r.hits || 0) + ')  [' + r.name + ']').join('\n'));
 // ---------- Linux host ----------
 function parseUrl(u) { const m = /^(?:(https?):\/\/)?([\d.]+)(?::(\d+))?(\/.*)?$/.exec(u); if (!m) return null; return { ip: m[2], port: m[3] ? +m[3] : m[1] === 'https' ? 443 : 80, path: m[4] || '/' }; }
+function tokQ(line) { const t = []; const re = /"([^"]*)"|'([^']*)'|(\S+)/g; let m; while ((m = re.exec(line))) t.push(m[1] !== undefined ? m[1] : m[2] !== undefined ? m[2] : m[3]); return t; }
+function execRole(L, d, t) {
+  const k = t.join(' ').toLowerCase();
+  if (d.role === 'ise') { if (/^show version/.test(k)) return 'Cisco Identity Services Engine (SIMULATED)\nVersion : 3.2.0.542 (sim)\nHostname: ise1\nPersonas: Administration, Monitoring, Policy Service'; if (/^show application status/.test(k)) return 'ISE PROCESS NAME                       STATE            PROCESS ID\nDatabase Listener                      running          2101\nApplication Server                     running          3344\nPSC (RADIUS/TACACS)                    running          3398\nM&T Session Database                   running          2155'; }
+  if (d.role === 'fmc') { if (/^show version/.test(k)) return '--------------[ fmc1 ]--------------\nModel: Cisco Secure Firewall Management Center (SIMULATED) Version 7.4.1 (sim)'; if (/^show (managed|devices)/.test(k)) return 'Managed devices: 1\n  FTD1  192.168.100.12  Status: Healthy  Policy: ' + (L.dev.FTD1.dirty ? 'OUT OF DATE (deploy pending)' : 'Up to date'); }
+  if (d.role === 'esa') { if (/^(status|version)/.test(k)) return 'Cisco Email Security Appliance (SIMULATED) esa1.lab.local\nMessages accepted: ' + L.esa.counters.accepted + '   spam: ' + L.esa.counters.spam + '   virus: ' + L.esa.counters.virus + '   blocked: ' + L.esa.counters.blocked; }
+  if (d.role === 'wsa') { if (/^(status|version)/.test(k)) return 'Cisco Secure Web Appliance (SIMULATED) wsa1.lab.local\nProxy: explicit, port 3128 | Requests: ' + L.wsa.counters.total + '  allowed: ' + L.wsa.counters.allowed + '  blocked: ' + L.wsa.counters.blocked + '  malware: ' + L.wsa.counters.malware; }
+  return null;
+}
 function execHost(L, d, s, line) {
-  let t = line.trim().split(/\s+/).filter(Boolean); if (!t.length) return ''; if (t[0] === 'sudo') t.shift(); let a; const x = d.ifs.eth0;
+  let t = tokQ(line); if (!t.length) return '';
+  if (d.role) { const r = execRole(L, d, t); if (r !== null) return r; if (t[0] === 'help' || t[0] === '?') return d.role === 'ise' ? 'show version | show application status ise | ping <ip>' : d.role === 'fmc' ? 'show version | show managed-devices | ping <ip>   (policy is configured in the GUI)' : 'status | version | ping <ip>   (policy is configured in the GUI)'; }
+  if (t[0] === 'swaks') { const g = k => { const i = t.indexOf(k); return i > 0 ? t[i + 1] : null; }; const to = g('--to'), from = g('--from') || ('user@' + d.name.toLowerCase() + '.example'), srv = g('--server') || g('-s');
+    if (!to || !srv) return 'usage: swaks --to rcpt@lab.local --from you@domain --server <esa-ip> [--header "Subject: hi"] [--body "text"] [--attach file.exe]';
+    const hdr = g('--header') || ''; const att = []; t.forEach((w, i) => { if (w === '--attach') att.push(t[i + 1]); });
+    const r = S.esaSend(L, d.name, { from, to, subject: hdr.replace(/^Subject:\s*/i, '') || '(no subject)', body: g('--body') || '', attach: att, server: srv });
+    const lines = ['=== Trying ' + srv + ':25...']; if (r.disp === 'not-connected') return lines.concat(['*** Error connecting to ' + srv + ':25: ' + (r.why || 'connection failed'), '   (the packet was dropped before reaching the ESA - check NAT + firewall policy)']).join('\n');
+    lines.push('=== Connected to ' + srv + '.', '<-  220 esa1.lab.local ESMTP', ' -> EHLO ' + d.name.toLowerCase(), ' -> MAIL FROM:<' + from + '>', ' -> RCPT TO:<' + to + '>'); r.steps.forEach(x => lines.push('    [ESA] ' + x.t));
+    lines.push(r.disp.startsWith('delivered') ? '<-  250 2.0.0 Message accepted for delivery (MID ' + r.mid + ')' : r.disp === 'rejected' ? '<** 550 5.7.1 ' + r.why : '<-  250 2.0.0 Message accepted (MID ' + r.mid + ') - ' + r.disp + ': ' + r.why, ' -> QUIT', '<-  221 Bye', '=== Connection closed. Final disposition: ' + r.disp.toUpperCase()); return lines.join('\n'); }
+  if (!t.length) return ''; if (t[0] === 'sudo') t.shift(); let a; const x = d.ifs.eth0;
   const M = (spec) => { const r = []; for (let i = 0; i < spec.length; i++) { const sp = spec[i], w = t[i]; if (sp === '*') { r.push(t.slice(i)); return r; } if (w === undefined) return null; if (sp[0] === '<') r.push(w); else if (sp !== w) return null; } return t.length > spec.length ? null : r; };
-  if (t[0] === 'help' || t[0] === '?') return 'ip addr | ip route | ping <ip> | traceroute <ip> | curl [-A agent] <url> | nmap [-Pn] [-p 22,80] <ip> | ifconfig | arp -n | ss -tln | hostname | uname -a | whoami | clear\nset address: ip addr add 10.1.10.10/24 dev eth0 ; ip route add default via 10.1.10.1';
+  if (!d.role && (t[0] === 'help' || t[0] === '?')) return 'swaks --to a@lab.local --server <ip> ... (send test email) | ip addr | ip route | ping <ip> | traceroute <ip> | curl [-A agent] [-x proxy:port] <url> | nmap [-Pn] [-p 22,80] <ip> | ifconfig | arp -n | ss -tln | hostname | uname -a | whoami | clear\nset address: ip addr add 10.1.10.10/24 dev eth0 ; ip route add default via 10.1.10.1';
   if (t[0] === 'hostname') return d.name.toLowerCase(); if (t[0] === 'whoami') return 'lab'; if (t[0] === 'uname') return 'Linux ' + d.name.toLowerCase() + ' 5.15.0-sim #1 SMP x86_64 GNU/Linux'; if (t[0] === 'date') return new Date().toString();
   if (t[0] === 'ifconfig' || (t[0] === 'ip' && /^a/.test(t[1] || '') && !t[2]) || (t[0] === 'ip' && t[1] === '-br')) return t[0] === 'ifconfig' ? 'eth0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500\n        ' + (x.ip ? 'inet ' + x.ip + '  netmask ' + lenToMask(x.len) : '(no address)') + '\n        ether ' + macOf(d.name, 'eth0').replace(/\./g, ':') : '1: lo: <LOOPBACK,UP> mtu 65536\n    inet 127.0.0.1/8 scope host lo\n2: eth0: <BROADCAST,MULTICAST,UP> mtu 1500\n    ' + (x.ip ? 'inet ' + x.ip + '/' + x.len + ' scope global eth0' : '(no address)');
   if ((t[0] === 'ip' && /^r/.test(t[1] || '') ) || t[0] === 'route') return (d.gw ? 'default via ' + d.gw + ' dev eth0\n' : '') + (x.ip ? n2ip((ip2n(x.ip) & ((0xFFFFFFFF << (32 - x.len)) >>> 0)) >>> 0) + '/' + x.len + ' dev eth0 proto kernel scope link src ' + x.ip : '');
@@ -426,8 +465,14 @@ function execHost(L, d, s, line) {
       else if (r.kind === 'unreach' || r.kind === 'prohibited') out.push('From ' + (r.hopIp || r.at || 'gateway') + ' icmp_seq=' + i + ' Destination ' + (r.kind === 'prohibited' ? 'Host Prohibited' : 'Host Unreachable')); }
     out.push('--- ' + ip + ' ping statistics ---', '4 packets transmitted, ' + ok + ' received, ' + (100 - ok * 25) + '% packet loss'); return out.join('\n'); }
   if (t[0] === 'traceroute') { if (!isIp(t[1] || '')) return 'Usage: traceroute <ip-address>'; return 'traceroute to ' + t[1] + ', 12 hops max\n' + traceroute(L, d.name, t[1]).map(h => ' ' + h.n + '  ' + (h.ip ? h.ip + '  1.2 ms' : '* * *')).join('\n'); }
-  if (t[0] === 'curl') { let ua = '', url = null; for (let i = 1; i < t.length; i++) { if (t[i] === '-A') ua = t[++i] || ''; else if (!t[i].startsWith('-')) url = t[i]; }
-    const u = url && parseUrl(url); if (!u) return 'curl: (6) Could not resolve host (use an IP address, e.g. curl http://203.0.113.10)';
+  if (t[0] === 'curl') { let ua = '', url = null, proxy = null; for (let i = 1; i < t.length; i++) { if (t[i] === '-A') ua = t[++i] || ''; else if (t[i] === '-x' || t[i] === '--proxy') proxy = t[++i]; else if (!t[i].startsWith('-')) url = t[i]; }
+    if (url && !/^https?:\/\//.test(url)) url = 'http://' + url;
+    const isIpUrl = url && /^https?:\/\/[\d.]+(:\d+)?(\/.*)?$/.test(url);
+    if (proxy || (url && !isIpUrl)) { if (proxy && !/:/.test(proxy)) proxy += ':3128'; const r = S.webGet(L, d.name, { url, proxy }); if (!r.ok && r.kind === 'dns') return 'curl: (6) ' + r.why;
+      if (r.ok) return '<html><body><h1>' + r.page + '</h1></body></html>\n[HTTP/1.1 200 OK' + (r.via ? ' via ' + r.via : '') + (r.cat ? ' | category: ' + r.cat : '') + ']';
+      if (r.kind === 'blocked' || r.kind === 'malware') return 'HTTP/1.1 403 Forbidden\n<html><body><h1>Access Denied</h1><p>' + r.why + '</p></body></html>';
+      if (r.status === 503) return 'HTTP/1.1 503 Service Unavailable  [' + r.why + ']'; return 'curl: (7) Failed to connect: ' + (r.why || 'error'); }
+    const u = url && parseUrl(url); if (!u) return 'curl: (6) Could not resolve host';
     const blob = (ua + ' ' + url).toLowerCase(); const sig = BAD.find(b => blob.includes(b)); const r = flow(L, d.name, { proto: 'tcp', dst: u.ip, dport: u.port, sig });
     if (r.ok) return '<html><body><h1>' + (r.page || 'OK') + '</h1></body></html>\n[HTTP/1.1 200 OK from ' + u.ip + ':' + u.port + ']';
     if (r.kind === 'closed') return 'curl: (7) Failed to connect to ' + u.ip + ' port ' + u.port + ': Connection refused';
@@ -440,6 +485,6 @@ function execHost(L, d, s, line) {
   return t[0] + ': command not found (type help)';
 }
 function runLines(L, d, lines) { const s = { mode: 'config', ctx: null }; const out = []; for (const l of lines) { const o = exec(L, d, s, l); if (o && /(^ERROR|^%|Invalid input)/m.test(o)) out.push(l + ' -> ' + o.replace(/\n/g, ' ')); } return out; }
-const API = { newSession, prompt, exec, runLines, normIf, help, complete, suggest, REG };
+const API = { newSession, prompt, exec, runLines, normIf, help, complete, suggest, REG, macOf };
 root.Cli = API; if (typeof module !== 'undefined' && module.exports) module.exports = API;
 })(typeof window !== 'undefined' ? window : globalThis);

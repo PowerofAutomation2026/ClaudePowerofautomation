@@ -17,10 +17,10 @@ const clone = o => JSON.parse(JSON.stringify(o));
 function mk(type, name, label, x, y) { return { type, name, label, x, y, ifs: {}, routes: [], acls: {}, hostname: label }; }
 function addIf(d, name, ip, len, extra) { d.ifs[name] = Object.assign({ name, ip: ip || null, len: len || 24, up: true }, extra || {}); }
 function newLab() {
-  const L = { dev: {}, links: [], conns: [], ver: 3 };
+  const L = { dev: {}, links: [], conns: [], ver: 4 };
   const D = (t, n, label, x, y) => (L.dev[n] = mk(t, n, label, x, y));
   const host = (n, label, x, y, ip, len, gw, listen) => { const d = D('host', n, label, x, y); addIf(d, 'eth0', ip, len); d.gw = gw; d.listen = listen; return d; };
-  host('Outside', 'Outside-Desktop', 70, 120, '198.51.100.10', 24, '198.51.100.1', { tcp: [22, 80], udp: [], page: 'Outside web server (198.51.100.10)' });
+  host('Outside', 'Outside-Desktop', 70, 120, '198.51.100.10', 24, '198.51.100.1', { tcp: [22, 80, 443], udp: [], page: 'Outside web server (198.51.100.10)' });
   const r2 = D('router', 'R2', 'R2', 250, 120);
   addIf(r2, 'Gi0/1', '203.0.113.2', 24); addIf(r2, 'Gi0/2', '198.51.100.1', 24); addIf(r2, 'Gi0/3', '192.0.2.2', 24);
   r2.routes.push({ net: '10.2.1.0', len: 24, nh: '192.0.2.1' });
@@ -37,14 +37,27 @@ function newLab() {
   const sw = D('switch', 'SW1', 'SW1', 790, 120); sw.vlans = { 1: 'default', 10: 'USERS' };
   addIf(sw, 'Gi0/1', null, 24, { mode: 'access', vlan: 1 }); addIf(sw, 'Gi0/2', null, 24, { mode: 'access', vlan: 1 }); addIf(sw, 'Gi0/3', null, 24, { mode: 'access', vlan: 1 });
   host('Client', 'Client (inside PC)', 920, 120, '10.1.10.10', 24, '10.1.10.1', { tcp: [22], udp: [], page: 'Client PC' });
-  host('DMZ', 'DMZ-Server', 450, 290, '172.16.1.10', 24, '172.16.1.1', { tcp: [22, 80], udp: [], page: 'DMZ web server (172.16.1.10) - welcome!' });
+  const dsw = D('switch', 'DMZ-SW', 'DMZ-SW', 450, 235); dsw.vlans = { 1: 'default' }; ['Gi0/1', 'Gi0/2', 'Gi0/3', 'Gi0/4'].forEach(p => addIf(dsw, p, null, 24, { mode: 'access', vlan: 1 }));
+  const wsa = host('WSA1', 'WSA1 (web proxy)', 455, 455, '172.16.1.30', 24, '172.16.1.1', { tcp: [3128, 443], udp: [], page: 'Secure Web Appliance (explicit proxy on tcp/3128)' }); wsa.role = 'wsa'; wsa.hostname = 'wsa1.lab.local';
+  host('DMZ', 'DMZ-Server', 370, 345, '172.16.1.10', 24, '172.16.1.1', { tcp: [22, 80], udp: [], page: 'DMZ web server (172.16.1.10) - welcome!' });
+  const esa = host('ESA1', 'ESA1 (email gw)', 540, 345, '172.16.1.20', 24, '172.16.1.1', { tcp: [25, 443], udp: [], page: 'ESA mail gateway (SMTP on tcp/25, GUI on tcp/443)' }); esa.role = 'esa'; esa.hostname = 'esa1.lab.local';
+  const msw = D('switch', 'MGMT-SW', 'MGMT-SW', 780, 235); msw.vlans = { 1: 'default' }; ['Gi0/1', 'Gi0/2', 'Gi0/3'].forEach(p => addIf(msw, p, null, 24, { mode: 'access', vlan: 1 }));
+  const fmc = host('FMC1', 'FMC1', 690, 345, '192.168.100.13', 24, '192.168.100.1', { tcp: [22, 443], udp: [], page: 'Firewall Management Center' }); fmc.role = 'fmc'; fmc.hostname = 'fmc1';
+  const ise = host('ISE1', 'ISE1', 850, 345, '192.168.100.14', 24, '192.168.100.1', { tcp: [22, 443], udp: [], page: 'Identity Services Engine' }); ise.role = 'ise'; ise.hostname = 'ise1';
   const ft = D('ftd', 'FTD1', 'FTD1', 250, 290); ft.conns = []; ft.xlates = []; ft.events = [];
   addIf(ft, 'Gi0/0', '192.0.2.1', 24, { zone: 'OUT', nameif: 'outside' }); addIf(ft, 'Gi0/1', '10.2.1.1', 24, { zone: 'IN', nameif: 'inside' });
   ft.routes.push({ net: '0.0.0.0', len: 0, nh: '192.0.2.2' });
   ft.policy = { defaultAction: 'block', rules: [{ name: 'Allow-IN-OUT', srcZone: 'IN', dstZone: 'OUT', srcNet: 'any', dstNet: 'any', proto: 'any', dport: null, action: 'allow', ips: false, hits: 0 }] }; ft.nat = [{ srcZone: 'IN', dstZone: 'OUT' }]; ft.dirty = false;
   host('FTDClient', 'FTD-Client', 250, 450, '10.2.1.10', 24, '10.2.1.1', { tcp: [22, 80], udp: [], page: 'FTD-Client internal web server (10.2.1.10)' });
+  L.ise = { allowDot1x: true, allowMab: true, devices: [],
+    users: [{ name: 'alice', pass: 'Cisco123!', group: 'Employees' }, { name: 'carl', pass: 'Cisco123!', group: 'Contractors' }], endpoints: [{ mac: 'aabb.cc00.0001', group: 'Printers' }],
+    profiles: { PermitAccess: { access: 'accept', vlan: 10, dacl: '' }, 'Contractor-Web': { access: 'accept', vlan: 10, dacl: 'permit tcp any any eq 80' }, Quarantine: { access: 'accept', vlan: 99, quarantine: true, dacl: '' }, DenyAccess: { access: 'reject' } },
+    authz: [{ name: 'Employees', group: 'Employees', method: 'any', profile: 'PermitAccess' }, { name: 'Contractors', group: 'Contractors', method: 'any', profile: 'PermitAccess' }, { name: 'Printers-MAB', group: 'Printers', method: 'mab', profile: 'PermitAccess' }], logs: [] };
+  L.wsa = { policy: { 'Social Networking': 'allow', Gambling: 'allow', 'Malware Sites': 'block', Business: 'allow', News: 'allow', 'Streaming Media': 'monitor', 'File Downloads': 'allow', Uncategorized: 'monitor' }, allowlist: [], blocklist: [], av: true, decrypt: false, log: [], counters: { total: 0, allowed: 0, blocked: 0, malware: 0 } };
+  L.esa = { domains: ['lab.local'], hat: [{ name: 'BLOCKLIST', policy: 'block', ips: [] }, { name: 'ALLOWLIST', policy: 'allow', ips: [] }], spfAction: 'tag', antispam: { on: true, threshold: 50, action: 'quarantine' }, antivirus: true, dlp: false, filters: [],
+    dns: { 'partner.com': { spf: ['198.51.100.10'] }, 'example.org': { spf: ['198.51.100.99'] }, 'lab.local': { spf: ['203.0.113.1'] } }, tracking: [], quarantine: [], mailboxes: {}, counters: { accepted: 0, spam: 0, virus: 0, blocked: 0, dlp: 0 } };
   ft.draft = clone({ ifs: ft.ifs, routes: ft.routes, policy: ft.policy, nat: ft.nat });
-  L.links = [['Outside:eth0', 'R2:Gi0/2'], ['R2:Gi0/1', 'FW1:Gi0/0'], ['FW1:Gi0/1', 'R1:Gi0/1'], ['FW1:Gi0/2', 'DMZ:eth0'], ['R1:Gi0/2', 'SW1:Gi0/1'],
+  L.links = [['Outside:eth0', 'R2:Gi0/2'], ['R2:Gi0/1', 'FW1:Gi0/0'], ['FW1:Gi0/1', 'R1:Gi0/1'], ['FW1:Gi0/2', 'DMZ-SW:Gi0/1'], ['DMZ-SW:Gi0/2', 'DMZ:eth0'], ['DMZ-SW:Gi0/3', 'ESA1:eth0'], ['DMZ-SW:Gi0/4', 'WSA1:eth0'], ['SW1:Gi0/3', 'MGMT-SW:Gi0/1'], ['MGMT-SW:Gi0/2', 'FMC1:eth0'], ['MGMT-SW:Gi0/3', 'ISE1:eth0'], ['R1:Gi0/2', 'SW1:Gi0/1'],
     ['SW1:Gi0/2', 'Client:eth0'], ['R2:Gi0/3', 'FTD1:Gi0/0'], ['FTD1:Gi0/1', 'FTDClient:eth0']];
   return L;
 }
@@ -63,7 +76,7 @@ function segment(L, d, i) {
 }
 function arp(L, dn, ifn, ip) {
   const s = segment(L, dn, ifn);
-  for (const ep of s.eps) { if (L.dev[ep.dev].on === false) continue; const x = L.dev[ep.dev].ifs[ep.if]; if (x && x.up && x.ip === ip) return { dev: ep.dev, if: ep.if, sw: s.sw }; }
+  for (const ep of s.eps) { if (L.dev[ep.dev].on === false) continue; if (L.dev[ep.dev].type === 'host' && nacBlocked(L, ep.dev)) continue; const x = L.dev[ep.dev].ifs[ep.if]; if (x && x.up && x.ip === ip) return { dev: ep.dev, if: ep.if, sw: s.sw }; }
   for (const ep of s.eps) { const fd = L.dev[ep.dev]; if (fd.type !== 'asa' || fd.on === false) continue;   // proxy-ARP for static-NAT mapped addresses
     for (const n of fd.nats) if (n.kind === 'static' && n.mapped === ip && fd.ifs[ep.if].nameif === n.mappedIf) return { dev: ep.dev, if: ep.if, sw: s.sw }; }
   return null;
@@ -249,6 +262,87 @@ function ftdNew(ctx, d, inIf, inI, inName, pkt, depth) {
   return forward(ctx, d, r, Object.assign({}, pkt, { src: ns }), depth);
 }
 
+// ---------- 802.1X / ISE ----------
+function portOf(L, hn) { const f = farEnd(L, hn + ':eth0'); if (!f) return null; const [sd, sp] = f.split(':'); const sw = L.dev[sd]; return sw && sw.type === 'switch' && sw.ifs[sp] ? { sw, port: sw.ifs[sp], name: sp } : null; }
+function nacBlocked(L, hn) { const p = portOf(L, hn); return !!(p && p.port.auth === 'auto' && p.port.state !== 'authorized'); }
+function parseDacl(txt) { const out = []; for (const l of (txt || '').split(/\n/)) { const t = l.trim().split(/\s+/).filter(Boolean); if (t.length < 2) continue; try { const en = parseAclTokens(t.slice(1), 'ios'); en.action = t[0]; en.hits = 0; out.push(en); } catch (x) { } } return out; }
+const hhmm = () => new Date().toTimeString().slice(0, 8);
+function iseAuth(L, rq) {
+  const I = L.ise, sw = L.dev[rq.nas], port = sw && sw.ifs[rq.port]; const log = (res, why, prof, extra) => { I.logs.unshift(Object.assign({ t: hhmm(), user: rq.user || '(mab)', mac: rq.mac, nas: rq.nas + ' ' + rq.port, method: rq.method, result: res, profile: prof || '', why }, extra || {})); I.logs.length = Math.min(I.logs.length, 60); return { ok: res === 'Pass', why, profile: prof }; };
+  const fail = (why, st) => { if (port) { port.state = st || 'unauth'; port.user = ''; port.dacl = null; } return log('Fail', why); };
+  if (!sw || !port) return fail('Unknown switch/port');
+  if (L.dev.ISE1.on === false || (L.dev['MGMT-SW'] && L.dev['MGMT-SW'].on === false)) return fail('RADIUS timeout: ISE1 is powered off or unreachable');
+  if (!sw.aaa) return fail('Switch: "aaa new-model" is not configured - the switch never sent a RADIUS request');
+  if (!sw.dot1xGlobal) return fail('Switch: "dot1x system-auth-control" is missing');
+  if (port.auth !== 'auto') return fail('Switch port ' + rq.port + ' is not in "authentication port-control auto"');
+  if (!sw.radius || !sw.radius.ip) return fail('Switch: no RADIUS server configured (radius server ... address ipv4 <ISE ip>)');
+  if (sw.radius.ip !== '192.168.100.14') return fail('Switch: RADIUS server ' + sw.radius.ip + ' is not ISE (192.168.100.14) - request timed out');
+  const nad = I.devices.find(d => d.name === rq.nas); if (!nad) return fail('ISE: 5405 RADIUS request dropped - unknown Network Access Device (add ' + rq.nas + ' under Network Devices)');
+  if (nad.ip && sw.radius && nad.secret !== sw.radius.key) return fail('ISE: 5400 Authentication failed - invalid RADIUS shared secret (switch key does not match the Network Device secret)');
+  let group = 'Unknown';
+  if (rq.method === 'dot1x') { if (!I.allowDot1x) return fail('ISE: 802.1X (PEAP) is not allowed in Allowed Protocols'); const u = I.users.find(x => x.name === rq.user); if (!u) return fail('ISE: 22056 Subject not found in the applicable identity store(s)'); if (u.pass !== rq.pass) return fail('ISE: 22040 Wrong password or invalid shared secret'); group = u.group; }
+  else { if (!I.allowMab) return fail('ISE: MAB is not allowed in Allowed Protocols'); const en = I.endpoints.find(x => x.mac.toLowerCase() === (rq.mac || '').toLowerCase()); group = en ? en.group : 'Unknown'; }
+  const rule = I.authz.find(r => (r.group === 'any' || r.group === group) && (r.method === 'any' || r.method === rq.method));
+  const pname = rule ? rule.profile : 'DenyAccess', prof = I.profiles[pname] || { access: 'reject' };
+  if (prof.access === 'reject') return fail('Authorization: ' + (rule ? 'rule "' + rule.name + '"' : 'Default rule') + ' -> ' + pname, 'unauth');
+  port.state = prof.quarantine ? 'quarantine' : 'authorized'; port.user = rq.user || rq.mac; port.profile = pname; port.vlan = prof.vlan; port.dacl = parseDacl(prof.dacl).length ? parseDacl(prof.dacl) : null;
+  if (prof.quarantine) return log('Pass', 'Authorized into quarantine VLAN ' + prof.vlan + ' (no network access)', pname, { group });
+  return log('Pass', 'Authorization rule "' + rule.name + '" -> ' + pname + (port.dacl ? ' (+ dACL)' : '') + ' [' + group + ']', pname, { group });
+}
+function iseLogoff(L, hn) { const p = portOf(L, hn); if (p) { p.port.state = 'unauth'; p.port.user = ''; p.port.dacl = null; p.port.profile = ''; } }
+// ---------- ESA ----------
+function ipIn(ip, list) { return list.some(x => { const [n, l] = x.split('/'); return inNet(ip, n, l === undefined ? 32 : +l); }); }
+function esaSend(L, from, m) {
+  const E = L.esa, esa = L.dev.ESA1, steps = [], mid = 1000 + E.tracking.length + 1;
+  const done = (disp, ok, why) => { E.tracking.unshift({ t: hhmm(), mid, from: m.from, to: m.to, subject: m.subject, attach: (m.attach || []).join(','), src: seen || '', disp, why }); E.tracking.length = Math.min(E.tracking.length, 60); return { ok, disp, why, steps, mid }; };
+  let seen = null;
+  const net = flow(L, from, { proto: 'tcp', dst: m.server || '203.0.113.20', dport: 25 });
+  if (!net.ok) { steps.push({ k: 'drop', t: 'SMTP connection to ' + (m.server || '203.0.113.20') + ':25 failed - ' + (net.kind === 'closed' ? 'connection refused' : (net.why || net.kind)) }); return { ok: false, disp: 'not-connected', why: net.why || net.kind, steps, net, mid }; }
+  seen = net.seenSrc; steps.push({ k: 'ok', t: 'TCP/25 connected (ESA sees sender IP ' + seen + ')' });
+  if (esa.on === false) return { ok: false, disp: 'not-connected', why: 'ESA is powered off', steps, mid };
+  for (const g of E.hat) { if (ipIn(seen, g.ips)) { if (g.policy === 'block') { E.counters.blocked++; steps.push({ k: 'drop', t: 'HAT: sender ' + seen + ' is in group ' + g.name + ' -> REJECT (554 connection refused)' }); return done('rejected', false, 'HAT group ' + g.name); } if (g.policy === 'allow') steps.push({ k: 'ok', t: 'HAT: sender in ' + g.name + ' -> trusted (skips spam scoring)' }); m._trusted = g.policy === 'allow'; } }
+  const rd = (m.to.split('@')[1] || '').toLowerCase();
+  if (!E.domains.includes(rd)) { steps.push({ k: 'drop', t: 'RAT: recipient domain "' + rd + '" is not a Public Listener accepted domain -> 550 relaying denied' }); return done('rejected', false, 'relay denied for ' + rd); }
+  steps.push({ k: 'ok', t: 'RAT: recipient domain ' + rd + ' accepted' });
+  const sd = (m.from.split('@')[1] || '').toLowerCase(), rec = E.dns[sd]; let spf = 'none'; if (rec) spf = ipIn(seen, rec.spf || []) ? 'pass' : 'fail';
+  steps.push({ k: spf === 'fail' ? 'warn' : 'ok', t: 'SPF check for ' + sd + ' from ' + seen + ': ' + spf.toUpperCase() });
+  let tag = '';
+  if (spf === 'fail') { if (E.spfAction === 'reject') { steps.push({ k: 'drop', t: 'Policy: SPF fail -> REJECT (550 5.7.1 sender not authorized)' }); E.counters.blocked++; return done('rejected', false, 'SPF fail'); } if (E.spfAction === 'quarantine') { steps.push({ k: 'drop', t: 'Policy: SPF fail -> QUARANTINE' }); E.quarantine.push(m); return done('quarantined', false, 'SPF fail'); } tag = '[SPF-FAIL] '; steps.push({ k: 'warn', t: 'Policy: SPF fail -> deliver but tag subject' }); }
+  if (E.antispam.on && !m._trusted) { let score = 0; const txt = (m.subject + ' ' + m.body).toLowerCase(); for (const w of ['free money', 'winner', 'viagra', 'click here', 'wire transfer', 'lottery', 'urgent']) if (txt.includes(w)) score += 30; if (m.subject && m.subject === m.subject.toUpperCase() && /[A-Z]/.test(m.subject)) score += 15; if (spf === 'fail') score += 20;
+    steps.push({ k: score >= E.antispam.threshold ? 'drop' : 'ok', t: 'Anti-Spam score ' + score + ' (threshold ' + E.antispam.threshold + ')' }); if (score >= E.antispam.threshold) { E.counters.spam++; if (E.antispam.action === 'drop') { steps.push({ k: 'drop', t: 'Anti-Spam: positively identified spam -> DROP' }); return done('dropped', false, 'spam'); } steps.push({ k: 'drop', t: 'Anti-Spam: spam -> QUARANTINE' }); E.quarantine.push(m); return done('quarantined', false, 'spam score ' + score); } }
+  if (E.antivirus) { const v = (m.attach || []).find(a => /eicar/i.test(a)); if (v) { E.counters.virus++; steps.push({ k: 'drop', t: 'Anti-Virus: "' + v + '" infected (EICAR-Test-File) -> DROP attachment+message' }); return done('dropped', false, 'virus in ' + v); } steps.push({ k: 'ok', t: 'Anti-Virus: clean' }); }
+  for (const f of E.filters) { let hit = false; const ext = a => (a.split('.').pop() || '').toLowerCase();
+    if (f.cond === 'attachment-ext') hit = (m.attach || []).some(a => ext(a) === f.value.toLowerCase().replace('.', '')); else if (f.cond === 'subject-contains') hit = (m.subject || '').toLowerCase().includes(f.value.toLowerCase()); else if (f.cond === 'body-contains') hit = (m.body || '').toLowerCase().includes(f.value.toLowerCase());
+    if (hit) { steps.push({ k: f.action === 'tag' ? 'warn' : 'drop', t: 'Content filter "' + f.name + '" matched (' + f.cond + ' ' + f.value + ') -> ' + f.action.toUpperCase() }); if (f.action === 'drop') return done('dropped', false, 'filter ' + f.name); if (f.action === 'quarantine') { E.quarantine.push(m); return done('quarantined', false, 'filter ' + f.name); } if (f.action === 'tag') tag += '[' + f.name + '] '; } }
+  if (E.dlp && /\b\d{3}-\d{2}-\d{4}\b/.test(m.body || '')) { E.counters.dlp++; steps.push({ k: 'drop', t: 'DLP: US Social Security Number pattern detected -> QUARANTINE' }); E.quarantine.push(m); return done('quarantined', false, 'DLP: SSN'); }
+  const user = m.to.split('@')[0].toLowerCase(); (E.mailboxes[user] = E.mailboxes[user] || []).unshift({ from: m.from, subject: tag + m.subject, t: hhmm() }); E.counters.accepted++;
+  steps.push({ k: 'ok', t: 'Delivered to mailbox ' + m.to + (tag ? ' (tagged ' + tag.trim() + ')' : '') }); return done(tag ? 'delivered (tagged)' : 'delivered', true, '');
+}
+// ---------- web (simulated Internet + WSA proxy) ----------
+const WEB = { 'www.facebook.com': { cat: 'Social Networking', page: 'Facebook (simulated social network)' }, 'www.casino-royal.com': { cat: 'Gambling', page: 'Casino Royal - place your bets' }, 'www.cisco.com': { cat: 'Business', page: 'Cisco - business site (simulated)' },
+  'news.example.org': { cat: 'News', page: 'Example News - today' }, 'www.youtube.com': { cat: 'Streaming Media', page: 'Video streaming (simulated)' }, 'www.malware-test.net': { cat: 'Malware Sites', page: 'Malware distribution site (simulated)' }, 'downloads.example.org': { cat: 'File Downloads', page: 'Example downloads - files' } };
+function webGet(L, host, rq) {
+  const m = /^(https?):\/\/([^\/:]+)(?::(\d+))?(\/.*)?$/i.exec(rq.url || ''); if (!m) return { ok: false, kind: 'bad', why: 'Invalid URL (use http://name or https://name)', steps: [] };
+  const https = m[1].toLowerCase() === 'https', name = m[2].toLowerCase(), port = m[3] ? +m[3] : https ? 443 : 80, path = m[4] || '/', steps = [], isIpN = /^\d+(\.\d+){3}$/.test(name);
+  const site = WEB[name], dst = isIpN ? name : site ? '198.51.100.10' : null;
+  if (!dst) return { ok: false, kind: 'dns', why: 'DNS: ' + name + ' could not be resolved (not in the simulated Internet: try www.facebook.com, www.cisco.com, www.casino-royal.com, www.youtube.com, downloads.example.org)', steps };
+  steps.push({ k: 'ok', t: 'DNS: ' + name + ' -> ' + dst });
+  if (!rq.proxy) { const r = flow(L, host, { proto: 'tcp', dst, dport: port }); steps.push({ k: r.ok ? 'ok' : 'drop', t: 'Direct connection to ' + dst + ':' + port + (r.ok ? ' succeeded' : ' failed: ' + (r.why || r.kind)) });
+    return { ok: r.ok, kind: r.kind, status: r.ok ? 200 : 0, page: site ? site.page : r.page, cat: site ? site.cat : '', why: r.why, steps, net: r }; }
+  const [pip, pp] = rq.proxy.split(':'), pr = flow(L, host, { proto: 'tcp', dst: pip, dport: +pp || 3128 });
+  steps.push({ k: pr.ok ? 'ok' : 'drop', t: 'Connect to proxy ' + rq.proxy + (pr.ok ? ' OK' : ' failed: ' + (pr.why || pr.kind)) });
+  if (!pr.ok) return { ok: false, kind: 'proxy', why: 'Proxy ' + rq.proxy + ' unreachable: ' + (pr.why || pr.kind), steps, net: pr };
+  const W = L.wsa; W.counters.total++; const cat = site ? site.cat : 'Uncategorized'; let act = W.policy[cat] || 'allow';
+  if (W.blocklist.includes(name)) { act = 'block'; steps.push({ k: 'warn', t: 'Custom URL list: ' + name + ' is in the Block list' }); } if (W.allowlist.includes(name)) { act = 'allow'; steps.push({ k: 'ok', t: 'Custom URL list: ' + name + ' is in the Allow list' }); }
+  const lg = (a, why) => { W.log.unshift({ t: hhmm(), client: host, url: rq.url, cat, act: a, why: why || '' }); W.log.length = Math.min(W.log.length, 60); };
+  steps.push({ k: 'ok', t: 'WSA: ' + (https ? 'HTTPS CONNECT (' + (W.decrypt ? 'DECRYPTED - full inspection' : 'tunnelled - only the host name is visible') + ')' : 'HTTP request') + ', category "' + cat + '", policy action ' + act.toUpperCase() });
+  if (act === 'block') { W.counters.blocked++; lg('Blocked', 'category ' + cat); steps.push({ k: 'drop', t: 'WSA: BLOCKED by Access Policy (category ' + cat + ') - block page returned' }); return { ok: false, kind: 'blocked', status: 403, cat, why: 'Blocked by WSA: URL category "' + cat + '"', steps, net: pr }; }
+  if (/eicar|malware|\.exe$/i.test(path)) { if (W.av && (!https || W.decrypt)) { W.counters.malware++; W.counters.blocked++; lg('Blocked', 'malware: ' + path); steps.push({ k: 'drop', t: 'WSA Anti-Malware: "' + path + '" is malicious (EICAR) -> BLOCKED' }); return { ok: false, kind: 'malware', status: 403, cat, why: 'Blocked by WSA: malware detected in download', steps, net: pr }; }
+    steps.push({ k: 'warn', t: W.av ? 'WSA cannot scan inside the encrypted HTTPS tunnel - malware passes! (enable HTTPS decryption)' : 'Anti-Malware scanning is disabled' }); }
+  const up = flow(L, 'WSA1', { proto: 'tcp', dst, dport: port }); steps.push({ k: up.ok ? 'ok' : 'drop', t: 'WSA fetches from the Internet ' + dst + ':' + port + (up.ok ? ' - OK' : ' - FAILED: ' + (up.why || up.kind)) });
+  if (!up.ok) { lg('Error', 'upstream ' + (up.why || up.kind)); return { ok: false, kind: 'upstream', status: 503, cat, why: 'WSA could not reach the Internet: ' + (up.why || up.kind) + ' (check the firewall for DMZ -> outside)', steps, net: pr }; }
+  W.counters.allowed++; lg(act === 'monitor' ? 'Monitored' : 'Allowed', ''); return { ok: true, status: 200, cat, page: site ? site.page : 'OK', via: 'WSA', steps, net: pr };
+}
 // ---------- flows ----------
 function originate(ctx, dn, pkt) {
   const d = ctx.L.dev[dn]; pushPath(ctx, dn);
@@ -265,8 +359,10 @@ function flow0(L, srcName, p) {
   if (d.on === false) return { ok: false, kind: 'off', why: srcName + ' is powered off', trace: ctx.trace, path: [srcName] };
   const sip = p.srcIp || srcIpFor(d, p.dst);
   if (!sip) return { ok: false, kind: 'noroute', why: 'no route to ' + p.dst, trace: ctx.trace, path: [srcName] };
+  if (d.type === 'host' && nacBlocked(L, srcName)) { const pp = portOf(L, srcName); return { ok: false, kind: 'unauth', why: '802.1X: port ' + pp.name + ' on ' + pp.sw.name + ' is ' + (pp.port.state === 'quarantine' ? 'in the quarantine VLAN (no access)' : 'not authenticated') + ' - authenticate with ISE first', at: pp.sw.name, trace: ctx.trace, path: [srcName, pp.sw.name] }; }
   const id = 1000 + Math.floor(Math.random() * 60000);
   const pkt = { proto: p.proto, src: sip, dst: p.dst, sport: p.proto === 'icmp' ? id : (p.sport || 40000 + Math.floor(Math.random() * 20000)), dport: p.proto === 'icmp' ? id : p.dport, ttl: p.ttl || 64, type: 'echo', sig: p.sig };
+  if (d.type === 'host') { const pp = portOf(L, srcName); if (pp && pp.port.dacl) { const r = evalAcl({ acls: { D: pp.port.dacl }, objects: {} }, 'D', pkt); if (r.action === 'deny') { T(ctx, pp.sw.name, 'dACL from ISE denied ' + pstr(pkt), 'drop'); return { ok: false, kind: 'prohibited', why: 'downloadable ACL (dACL) assigned by ISE on ' + pp.sw.name + ' ' + pp.name + ' denied this traffic', at: pp.sw.name, trace: ctx.trace, path: [srcName, pp.sw.name] }; } } }
   const o = originate(ctx, srcName, pkt);
   if (o.st !== 'delivered') return { ok: false, kind: o.kind === 'prohibited' ? 'prohibited' : o.kind === 'noroute' || o.kind === 'unreach' ? 'unreach' : o.kind === 'ttl' ? 'ttl' : o.silent ? 'timeout' : 'timeout', why: o.why, at: o.dev, hopIp: o.hopIp, trace: ctx.trace, path: ctx.path };
   const dd = L.dev[o.dev], fp = o.pkt; let kind, rp;
@@ -278,7 +374,7 @@ function flow0(L, srcName, p) {
   const reply = { proto: fp.proto === 'icmp' ? 'icmp' : fp.proto, type: rp.type, src: fp.dst, dst: fp.src, sport: fp.dport, dport: fp.sport, ttl: 64 };
   const o2 = originate(ctx, o.dev, reply);
   if (o2.st !== 'delivered' || o2.dev !== srcName) return { ok: false, kind: 'timeout', why: 'return traffic failed: ' + (o2.why || 'not delivered to source'), at: o2.dev, trace: ctx.trace, path: ctx.path };
-  return { ok: kind === 'open', kind, page: kind === 'open' && dd.listen && p.dport === 80 ? dd.listen.page : null, trace: ctx.trace, path: ctx.path, dstDev: o.dev };
+  return { seenSrc: fp.src, ok: kind === 'open', kind, page: kind === 'open' && dd.listen && p.dport === 80 ? dd.listen.page : null, trace: ctx.trace, path: ctx.path, dstDev: o.dev };
 }
 function traceroute(L, srcName, dst, max) {
   const hops = [];
@@ -301,6 +397,6 @@ function packetTracer(L, dn, nameif, p) {
   d.conns.length = nc; d.xlates.length = nx; d.connSeq = seq; if (d.events) d.events.splice(0, d.events.length - evn);
   return { o, trace: ctx.trace, path: ctx.path };
 }
-const API = { packetTracer,  ip2n, n2ip, inNet, maskToLen, lenToMask, wildToLen, isIp, portNum, clone, newLab, flow, traceroute, routeLookup, ownsIp, evalAcl, parseAclTokens, aclText, fmtAddr, ifByNameif, ftdDeploy, segment };
+const API = { webGet, packetTracer, iseAuth, iseLogoff, esaSend, portOf, nacBlocked,  ip2n, n2ip, inNet, maskToLen, lenToMask, wildToLen, isIp, portNum, clone, newLab, flow, traceroute, routeLookup, ownsIp, evalAcl, parseAclTokens, aclText, fmtAddr, ifByNameif, ftdDeploy, segment };
 root.Sim = API; if (typeof module !== 'undefined' && module.exports) module.exports = API;
 })(typeof window !== 'undefined' ? window : globalThis);
