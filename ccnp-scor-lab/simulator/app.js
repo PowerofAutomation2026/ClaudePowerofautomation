@@ -2,9 +2,13 @@
 (function () {
 'use strict';
 const { flow, packetTracer, clone, newLab, ftdDeploy } = Sim;
-const KEY = 'scor-sim-v1';
+const KEY = 'scor-sim-v' + Sim.VERSION;
 let L = null, sel = 'Client', tabs = {}, lastAnim = null, sessions = {}, terms = {}, hist = {};
 const $ = s => document.querySelector(s);
+function showErr(msg) { const b = $('#errbar'); if (!b) return; b.innerHTML = ''; b.append(h('b', {}, 'Something went wrong: '), String(msg), ' ', h('button', { onclick: () => { b.style.display = 'none'; } }, 'Dismiss'), h('button', { onclick: () => hardReset() }, 'Reset lab (fixes most problems)')); b.style.display = 'block'; }
+function safe(f) { return function () { try { const r = f.apply(this, arguments); if (r && r.catch) r.catch(showErr); return r; } catch (e) { showErr(e.message); } }; }
+function hardReset() { try { for (const k of Object.keys(localStorage)) if (/^scor-sim/.test(k)) localStorage.removeItem(k); } catch (e) { } location.reload(); }
+window.addEventListener('error', e => showErr(e.message)); window.addEventListener('unhandledrejection', e => showErr(e.reason && e.reason.message || e.reason));
 function h(tag, attrs, ...kids) {
   const e = document.createElement(tag);
   for (const k in (attrs || {})) { if (k === 'class') e.className = attrs[k]; else if (k.startsWith('on')) e.addEventListener(k.slice(2), attrs[k]); else if (k === 'html') e.innerHTML = attrs[k]; else if (attrs[k] !== false && attrs[k] != null) e.setAttribute(k, attrs[k] === true ? '' : attrs[k]); }
@@ -14,7 +18,8 @@ function h(tag, attrs, ...kids) {
 const svgNS = 'http://www.w3.org/2000/svg';
 function sv(tag, attrs, ...kids) { const e = document.createElementNS(svgNS, tag); for (const k in attrs || {}) e.setAttribute(k, attrs[k]); for (const c of kids) if (c != null) e.append(c.nodeType ? c : document.createTextNode(c)); return e; }
 
-function load() { try { const j = localStorage.getItem(KEY); if (j) { L = JSON.parse(j); if (L.ver === 3) return; } } catch (e) {} L = newLab(); }
+function valid(x) { try { return x && x.ver === Sim.VERSION && x.dev && x.dev.FMC1 && x.dev.ISE1 && x.dev.ESA1 && x.dev.WSA1 && x.dev.FTD1 && x.dev.FTD1.draft && x.ise && x.esa && x.wsa; } catch (e) { return false; } }
+function load() { try { for (const k of Object.keys(localStorage)) if (/^scor-sim-v/.test(k) && k !== KEY) localStorage.removeItem(k); const j = localStorage.getItem(KEY); if (j) { const x = JSON.parse(j); if (valid(x)) { L = x; return; } } } catch (e) { } L = newLab(); }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(L)); } catch (e) {} }
 
 // ---------- tasks ----------
@@ -89,7 +94,18 @@ function icon(type, c) {
 const COL = { host: '#3b82f6', router: '#22d3ee', switch: '#a78bfa', asa: '#f97316', ftd: '#ef4444', fmc: '#f43f5e', ise: '#10b981', esa: '#eab308', wsa: '#38bdf8' };
 const tyOf = d => d.role || d.type;
 function center(d) { return [d.x + 55, d.y + 28]; }
+function actionBar() {
+  const bar = $('#abar'); if (!bar) return; bar.innerHTML = ''; const d = L.dev[sel]; if (!d) return; const on = d.on !== false;
+  bar.append(h('b', {}, d.label + ':'));
+  const B = (t, f, cls) => bar.append(h('button', { class: cls || '', onclick: safe(f) }, t));
+  if (d.role) { B('Open GUI (' + guiKind(d) + ')', () => openWin(sel, 'gui'), 'pri'); B('Terminal', () => openWin(sel, 'term')); }
+  else if (d.type === 'host') { B('Desktop (browser)', () => openWin(sel, 'browser'), 'pri'); B('Terminal', () => openWin(sel, 'term')); B('Mail', () => openWin(sel, 'mail')); if (Sim.portOf(L, sel)) B('802.1X login', () => openWin(sel, 'nac')); }
+  else { B('Terminal', () => openWin(sel, 'term'), 'pri'); B('Open GUI (' + guiKind(d) + (d.type === 'ftd' ? ' - FMC1' : '') + ')', () => openWin(sel, 'gui')); }
+  B(on ? '⏻ Power off' : '⏻ Power on', () => setPower(sel, !on), on ? 'off' : 'onb');
+  bar.append(h('span', { class: 'dim' }, ' (or right-click / double-click the device)'));
+}
 function drawTopo() {
+  actionBar();
   const svg = $('#topo'); svg.innerHTML = '';
   for (const [a, b] of L.links) {
     const [da, ia] = a.split(':'), [db, ib] = b.split(':'); const A = center(L.dev[da]), B = center(L.dev[db]);
@@ -107,9 +123,9 @@ function drawTopo() {
     g.append(icon(tyOf(d), c));
     g.append(sv('text', { x: 55, y: 46, class: 'nm', 'text-anchor': 'middle' }, d.label));
     if (d.type === 'ftd' && d.dirty) g.append(sv('circle', { cx: 104, cy: 6, r: 5, fill: '#facc15' }));
-    g.addEventListener('click', () => { sel = n; drawTopo(); });
-    g.addEventListener('dblclick', () => openWin(n, d.type === 'host' ? 'browser' : 'term'));
-    g.addEventListener('contextmenu', ev => { ev.preventDefault(); sel = n; drawTopo(); showMenu(n, ev.clientX, ev.clientY); });
+    g.addEventListener('click', safe(() => { sel = n; drawTopo(); }));
+    g.addEventListener('dblclick', safe(() => openWin(n, d.type === 'host' ? 'browser' : 'term')));
+    g.addEventListener('contextmenu', safe(ev => { ev.preventDefault(); sel = n; drawTopo(); showMenu(n, ev.clientX, ev.clientY); }));
     svg.append(g);
   }
 }
@@ -129,7 +145,7 @@ let wins = {}, zTop = 10, brs = {};
 function guiKind(d) { return d.type === 'asa' ? 'ASDM' : d.type === 'ftd' || d.role === 'fmc' ? 'FMC' : d.role === 'ise' ? 'ISE' : d.role === 'esa' ? 'ESA' : d.role === 'wsa' ? 'WSA' : d.type === 'router' ? 'Router' : d.type === 'switch' ? 'Switch' : null; }
 function showMenu(n, x, y) {
   const d = L.dev[n], m = $('#ctx'); m.innerHTML = ''; const on = d.on !== false;
-  const item = (t, f, dis) => m.append(h('div', { class: 'mi' + (dis ? ' dis' : ''), onclick: () => { m.style.display = 'none'; if (!dis) f(); } }, t));
+  const item = (t, f, dis) => m.append(h('div', { class: 'mi' + (dis ? ' dis' : ''), onclick: safe(() => { m.style.display = 'none'; if (!dis) f(); }) }, t));
   m.append(h('div', { class: 'mh' }, d.label + (on ? '' : '  (powered off)')));
   if (d.role) { item('Open GUI (' + guiKind(d) + ')', () => openWin(n, 'gui'), !on); item('Open Terminal / CLI', () => openWin(n, 'term'), !on); }
   else if (d.type === 'host') { item('Open Desktop (browser)', () => openWin(n, 'browser'), !on); item('Open Terminal', () => openWin(n, 'term'), !on); item('Open Mail client', () => openWin(n, 'mail'), !on); if (Sim.portOf(L, n)) item('Network login (802.1X)', () => openWin(n, 'nac'), !on); }
@@ -138,19 +154,20 @@ function showMenu(n, x, y) {
   m.append(h('div', { class: 'ms' })); item(on ? 'Power off' : 'Power on', () => setPower(n, !on));
   m.style.left = Math.min(x, innerWidth - 230) + 'px'; m.style.top = Math.min(y, innerHeight - 190) + 'px'; m.style.display = 'block';
 }
-document.addEventListener('click', () => { const m = $('#ctx'); if (m) m.style.display = 'none'; });
+document.addEventListener('mousedown', ev => { const m = $('#ctx'); if (m && m.style.display === 'block' && !m.contains(ev.target)) m.style.display = 'none'; });
 function setPower(n, on) {
   const d = L.dev[n]; d.on = on;
   if (!on) { for (const k of Object.keys(wins)) if (wins[k].dn === n) closeWin(k); if (d.conns) { d.conns.length = 0; d.xlates.length = 0; } }
   commit(); notice(d.label + (on ? ' powered on.' : ' powered off.'));
 }
-function closeWin(k) { const w = wins[k]; if (!w) return; w.el.remove(); delete wins[k]; $('#deskhint').style.display = Object.keys(wins).length ? 'none' : 'block'; }
-function front(w) { w.el.style.zIndex = ++zTop; }
+function closeWin(k) { const w = wins[k]; if (!w) return; w.el.remove(); delete wins[k]; $('#deskhint').style.display = Object.keys(wins).length ? 'none' : 'block'; renderWtabs(); }
+function renderWtabs() { const t = $('#wtabs'); if (!t) return; t.innerHTML = ''; for (const k of Object.keys(wins)) { const w = wins[k]; t.append(h('button', { class: 'wtab' + (w.el.style.display === 'none' ? ' min' : ''), title: 'show / bring to front', onclick: safe(() => { w.el.style.display = ''; front(w); renderWtabs(); }) }, w.title.replace(' - ', ': '))); } }
+function front(w) { w.el.style.zIndex = ++zTop; if (w.el.style.display === 'none') w.el.style.display = ''; }
 function fillWin(w) {
   const d = L.dev[w.dn]; w.body.innerHTML = '';
   if (w.kind === 'term') w.body.append(terminal(d));
   else if (w.kind === 'browser') w.body.append(browser(d));
-  else if (w.kind === 'gui') w.body.append(d.type === 'asa' ? asdm(d) : d.type === 'router' ? routerGui(d) : d.type === 'switch' ? switchGui(d) : d.role === 'ise' ? iseGui(d) : d.role === 'esa' ? esaGui(d) : d.role === 'wsa' ? wsaGui(d) : fmc(L.dev.FTD1));
+  else if (w.kind === 'gui') w.body.append(d.type === 'asa' ? GUI.asdm(d) : d.type === 'router' ? GUI.iosRouter(d) : d.type === 'switch' ? GUI.iosSwitch(d) : d.role === 'ise' ? GUI.ise(d) : d.role === 'esa' ? GUI.esa(d) : d.role === 'wsa' ? GUI.wsa(d) : GUI.fmc(L.dev.FTD1));
   else if (w.kind === 'mail') w.body.append(mailApp(d));
   else if (w.kind === 'nac') w.body.append(nacApp(d));
   else w.body.append(infoView(d));
@@ -161,10 +178,11 @@ function openWin(n, kind) {
   const k = n + ':' + kind; if (wins[k]) { front(wins[k]); return; }
   const title = d.label + ' - ' + ({ term: 'Terminal', browser: 'Desktop', gui: guiKind(d) + ' GUI', info: 'Info', mail: 'Mail client', nac: 'Network login (802.1X)' })[kind];
   const body = h('div', { class: 'wbody' }); const cnt = Object.keys(wins).length;
-  const el = h('div', { class: 'win', style: 'left:' + (14 + (cnt % 6) * 30) + 'px;top:' + (14 + (cnt % 6) * 30) + 'px' }, h('div', { class: 'wbar' }, h('span', {}, title), h('button', { class: 'wx', onclick: () => closeWin(k) }, '✕')), body);
-  const w = wins[k] = { el, body, dn: n, kind }; fillWin(w); $('#desk').append(el); $('#deskhint').style.display = 'none'; front(w);
+  const el = h('div', { class: 'win', style: 'left:' + (14 + (cnt % 6) * 30) + 'px;top:' + (14 + (cnt % 6) * 30) + 'px' }, h('div', { class: 'wbar' }, h('span', {}, title), h('span', {}, h('button', { class: 'wx wm', title: 'minimize (reopen from the taskbar at the top)', onclick: () => { el.style.display = 'none'; renderWtabs(); } }, '—'), h('button', { class: 'wx wm', title: 'full screen / restore', onclick: () => { el.classList.toggle('fs'); front(wins[k]); } }, '▢'), h('button', { class: 'wx', title: 'close', onclick: () => closeWin(k) }, '✕'))), body);
+  const w = wins[k] = { el, body, dn: n, kind, title }; if (['gui', 'mail', 'nac'].includes(kind)) el.classList.add('fs'); fillWin(w); $('#desk').append(el); $('#deskhint').style.display = 'none'; front(w); renderWtabs();
   el.addEventListener('mousedown', () => front(w));
   const bar = el.firstChild; let ox, oy, dragging = false;
+  bar.addEventListener('dblclick', ev => { if (ev.target.tagName !== 'BUTTON') el.classList.toggle('fs'); });
   bar.addEventListener('mousedown', ev => { if (ev.target.tagName === 'BUTTON') return; dragging = true; ox = ev.clientX - el.offsetLeft; oy = ev.clientY - el.offsetTop; ev.preventDefault(); });
   document.addEventListener('mousemove', ev => { if (dragging) { el.style.left = Math.max(0, ev.clientX - ox) + 'px'; el.style.top = Math.max(0, ev.clientY - oy) + 'px'; } });
   document.addEventListener('mouseup', () => dragging = false);
@@ -235,10 +253,6 @@ function infoView(d) {
 }
 
 // ---------- GUI helpers ----------
-function sub(names, key, render) {
-  const k = 'sub:' + key; tabs[k] = names.includes(tabs[k]) ? tabs[k] : names[0];
-  return h('div', {}, h('div', { class: 'subnav' }, names.map(n => h('button', { class: tabs[k] === n ? 'on' : '', onclick: () => { tabs[k] = n; renderPanel(); } }, n))), h('div', { class: 'subbody' }, render(tabs[k])));
-}
 const sel_ = (opts, v) => h('select', {}, opts.map(o => h('option', { value: o, selected: o === v }, o)));
 const inp_ = (v, ph, w) => h('input', { value: v || '', placeholder: ph || '', style: w ? 'width:' + w : '' });
 function tbl(head, rows) { return h('table', { class: 'tbl' }, h('tr', {}, head.map(x => h('th', {}, x))), rows); }
@@ -246,105 +260,10 @@ function notice(msg, bad) { const n = $('#toast'); n.textContent = msg; n.classN
 function apply(d, lines) { const err = Cli.runLines(L, d, lines); if (err.length) notice(err.join(' | '), true); else notice('Applied.'); commit(); }
 
 // ---------- ASDM-like ----------
-function asdm(d) {
-  const nameifs = Object.values(d.ifs).map(x => x.nameif);
-  return sub(['Home', 'Interfaces', 'Access Rules', 'NAT Rules', 'Routing', 'Packet Tracer', 'Monitoring', 'Tools', 'Config'], 'asdm', t => {
-    if (t === 'Tools') return toolsPane(d);
-    if (t === 'Config') return h('pre', { class: 'cfgpre' }, cliOut(d, 'show running-config'));
-    if (t === 'Home') return h('div', {}, h('h3', {}, 'Device Dashboard - ' + d.hostname), tbl(['Interface', 'Name', 'IP / mask', 'Security', 'Status'], Object.values(d.ifs).map(x => h('tr', {}, h('td', {}, x.name), h('td', {}, x.nameif), h('td', {}, x.ip + '/' + x.len), h('td', {}, x.sec), h('td', { class: x.up ? 'up' : 'dn' }, x.up ? '● up' : '● down')))), h('p', {}, 'Connections: ' + d.conns.length + '   |   NAT rules: ' + d.nats.length + '   |   ACLs: ' + Object.keys(d.acls).length));
-    if (t === 'Interfaces') { const f = { n: sel_(Object.keys(d.ifs)), nm: inp_('', 'nameif', '80px'), ip: inp_('', 'IP', '110px'), m: inp_('255.255.255.0', 'mask', '110px'), sec: inp_('', 'sec', '45px') };
-      return h('div', {}, tbl(['Interface', 'Name', 'IP', 'Mask', 'Level'], Object.values(d.ifs).map(x => h('tr', {}, h('td', {}, x.name), h('td', {}, x.nameif), h('td', {}, x.ip), h('td', {}, Cli.exec ? Sim.lenToMask(x.len) : ''), h('td', {}, x.sec)))), h('h4', {}, 'Edit interface'), h('div', { class: 'frm' }, f.n, f.nm, f.ip, f.m, f.sec, h('button', { onclick: () => apply(d, ['interface ' + f.n.value, f.nm.value ? 'nameif ' + f.nm.value : '', f.sec.value ? 'security-level ' + f.sec.value : '', f.ip.value ? 'ip address ' + f.ip.value + ' ' + f.m.value : ''].filter(Boolean)) }, 'Apply'))); }
-    if (t === 'Access Rules') { const f = { acl: inp_('OUT-IN', 'ACL name', '90px'), act: sel_(['permit', 'deny']), pr: sel_(['tcp', 'udp', 'icmp', 'ip']), st: sel_(['any', 'host', 'network']), sv: inp_('', 'src ip/obj', '110px'), dt: sel_(['host', 'any', 'object', 'network']), dv: inp_('172.16.1.10', 'dst ip/obj', '110px'), op: inp_('80', 'port', '55px'), ifc: sel_(['(none)'].concat(nameifs), 'outside') };
-      const addr = (t, v) => t === 'any' ? 'any' : t === 'host' ? 'host ' + v : t === 'object' ? 'object ' + v : v.replace('/', ' ').replace(/\/(\d+)/, ''); 
-      const rows = []; for (const [n, es] of Object.entries(d.acls)) es.forEach((e, i) => rows.push(h('tr', {}, h('td', {}, n), h('td', {}, i + 1), h('td', { class: e.action === 'permit' ? 'up' : 'dn' }, e.action), h('td', {}, Sim.aclText(e, 'asa').replace(/^(permit|deny) /, '')), h('td', {}, e.hits || 0), h('td', {}, h('button', { class: 'x', onclick: () => apply(d, ['no access-list ' + n + ' extended ' + Sim.aclText(e, 'asa')]) }, '✕')))));
-      return h('div', {}, tbl(['ACL', '#', 'Action', 'Rule', 'Hits', ''], rows), h('p', { class: 'dim' }, 'ACLs match the REAL (un-NATed) destination address. Applied inbound on an interface; no ACL = security-level default.'), h('h4', {}, 'Add rule'),
-        h('div', { class: 'frm' }, f.acl, f.act, f.pr, 'src', f.st, f.sv, 'dst', f.dt, f.dv, 'port', f.op, 'apply on', f.ifc, h('button', { onclick: () => { let sv_ = f.st.value === 'network' ? f.sv.value.split('/') : [f.sv.value]; const src = f.st.value === 'any' ? 'any' : f.st.value === 'host' ? 'host ' + f.sv.value : sv_[0] + ' ' + Sim.lenToMask(+sv_[1] || 24); const dd = f.dt.value === 'network' ? f.dv.value.split('/') : [f.dv.value]; const dst = f.dt.value === 'any' ? 'any' : f.dt.value === 'host' ? 'host ' + f.dv.value : f.dt.value === 'object' ? 'object ' + f.dv.value : dd[0] + ' ' + Sim.lenToMask(+dd[1] || 24);
-          const port = (f.pr.value === 'tcp' || f.pr.value === 'udp') && f.op.value ? ' eq ' + f.op.value : ''; const ln = ['access-list ' + f.acl.value + ' extended ' + f.act.value + ' ' + f.pr.value + ' ' + src + ' ' + dst + port]; if (f.ifc.value !== '(none)') ln.push('access-group ' + f.acl.value + ' in interface ' + f.ifc.value); apply(d, ln); } }, 'Add')));
-    }
-    if (t === 'NAT Rules') { const s = { ip: inp_('172.16.1.10', 'real host', '110px'), ri: sel_(nameifs, 'dmz'), mi: sel_(nameifs, 'outside'), mp: inp_('203.0.113.10', 'mapped IP', '110px') }; const p = { net: inp_('10.1.0.0/16', 'network/len', '120px'), ri: sel_(nameifs, 'inside'), mi: sel_(nameifs, 'outside') };
-      return h('div', {}, tbl(['#', 'Type', 'Object', 'Real if', 'Mapped if', 'Mapped', ''], d.nats.map((n, i) => h('tr', {}, h('td', {}, i + 1), h('td', {}, n.kind), h('td', {}, n.obj), h('td', {}, n.realIf), h('td', {}, n.mappedIf), h('td', {}, n.mapped), h('td', {}, h('button', { class: 'x', onclick: () => apply(d, ['no object network ' + n.obj]) }, '✕'))))),
-        h('h4', {}, 'Add static NAT (publish a server)'), h('div', { class: 'frm' }, 'real', s.ip, s.ri, '→ mapped', s.mp, s.mi, h('button', { onclick: () => apply(d, ['object network OBJ-' + s.ip.value, 'host ' + s.ip.value, 'nat (' + s.ri.value + ',' + s.mi.value + ') static ' + s.mp.value]) }, 'Add')),
-        h('h4', {}, 'Add dynamic PAT (interface)'), h('div', { class: 'frm' }, p.net, p.ri, '→', p.mi, h('button', { onclick: () => { const [n, l] = p.net.value.split('/'); apply(d, ['object network NET-' + n, 'subnet ' + n + ' ' + Sim.lenToMask(+l || 24), 'nat (' + p.ri.value + ',' + p.mi.value + ') dynamic interface']); } }, 'Add'))); }
-    if (t === 'Routing') { const f = { i: sel_(nameifs, 'outside'), n: inp_('0.0.0.0/0', 'network/len', '120px'), g: inp_('', 'gateway', '110px') };
-      return h('div', {}, tbl(['Network', 'Gateway', 'Interface', ''], d.routes.map(r => h('tr', {}, h('td', {}, r.net + '/' + r.len), h('td', {}, r.nh), h('td', {}, r.nameif), h('td', {}, h('button', { class: 'x', onclick: () => apply(d, ['no route ' + r.nameif + ' ' + r.net + ' ' + Sim.lenToMask(r.len) + ' ' + r.nh]) }, '✕'))))), h('h4', {}, 'Add static route'), h('div', { class: 'frm' }, f.i, f.n, 'via', f.g, h('button', { onclick: () => { const [n, l] = f.n.value.split('/'); apply(d, ['route ' + f.i.value + ' ' + n + ' ' + Sim.lenToMask(+l || 0) + ' ' + f.g.value]); } }, 'Add'))); }
-    if (t === 'Packet Tracer') { const f = { i: sel_(nameifs, 'outside'), p: sel_(['tcp', 'udp', 'icmp']), s: inp_('198.51.100.10', 'src ip', '110px'), sp: inp_('1234', 'sport', '55px'), d: inp_('203.0.113.10', 'dst ip', '110px'), dp: inp_('80', 'dport', '55px') }; const res = h('div', {});
-      return h('div', {}, h('div', { class: 'frm' }, 'ingress', f.i, f.p, f.s, f.sp, '→', f.d, f.dp, h('button', { onclick: () => { const r = packetTracer(L, d.name, f.i.value, { proto: f.p.value, src: f.s.value, sport: +f.sp.value, dst: f.d.value, dport: +f.dp.value }); res.innerHTML = ''; r.trace.forEach((x, i) => res.append(h('div', { class: 'ph ' + x.kind }, h('b', {}, 'Phase ' + (i + 1) + ': '), x.t)));
-        const bad = r.o.st === 'drop' || r.o.st === 'noroute'; res.append(h('div', { class: 'phr ' + (bad ? 'dn' : 'up') }, bad ? '✖ Result: DROP - ' + r.o.why : '✔ Result: ALLOW')); } }, 'Start')), res); }
-    if (t === 'Monitoring') return h('div', {}, h('button', { onclick: () => renderPanel() }, '⟳ Refresh'), h('button', { onclick: () => { d.conns.length = 0; d.xlates.length = 0; commit(); } }, 'Clear conns'), h('h4', {}, 'Connections (' + d.conns.length + ')'), tbl(['Proto', 'Initiator', 'Responder', 'In', 'Out', 'Hits'], d.conns.slice(-12).map(c => h('tr', {}, h('td', {}, c.proto), h('td', {}, c.in.src + ':' + c.in.sport), h('td', {}, c.in.dst + ':' + c.in.dport), h('td', {}, d.ifs[c.in.if].nameif), h('td', {}, d.ifs[c.out.if].nameif), h('td', {}, c.hits)))));
-    return null;
-  });
-}
 
 // ---------- FMC-like (FTD) ----------
-function fmcOverview(d) {
-  const ev = d.events, al = ev.filter(e => e.action === 'Allow').length, bl = ev.length - al; const srcs = {}; ev.filter(e => e.action === 'Block').forEach(e => srcs[e.src] = (srcs[e.src] || 0) + 1);
-  return h('div', {}, h('h3', {}, 'Firepower Management Center (FMC1) - Overview'), tbl(['Device', 'Mgmt IP', 'Model', 'Health', 'Access policy', 'Deployment'], [h('tr', {}, h('td', {}, 'FTD1'), h('td', {}, '192.168.100.12'), h('td', {}, 'Secure Firewall Threat Defense (virtual)'), h('td', { class: 'up' }, '● Healthy'), h('td', {}, 'Initial_Access_Policy (' + d.policy.rules.length + ' rules)'), h('td', { class: d.dirty ? 'warn' : 'up' }, d.dirty ? 'Pending changes' : 'Up to date'))]),
-    h('div', { class: 'tiles' }, [['Allowed', al], ['Blocked', bl], ['Connections', d.conns.length], ['Rules', d.policy.rules.length]].map(([k, v]) => h('div', { class: 'tile' }, h('b', {}, v), h('span', {}, k)))),
-    h('h4', {}, 'Top blocked sources'), tbl(['Source IP', 'Blocks'], Object.entries(srcs).sort((x, y) => y[1] - x[1]).slice(0, 5).map(([k, v]) => h('tr', {}, h('td', {}, k), h('td', {}, v)))), h('p', { class: 'dim' }, 'Configure under Interfaces / Routing / NAT / Access Policy, then press Deploy (top right). Events shows every allow/block decision.'));
-}
-function fmc(d) {
-  const dr = d.draft, zones = ['any'].concat([...new Set(Object.values(dr.ifs).map(x => x.zone).filter(Boolean))]);
-  const dirty = () => { d.dirty = true; save(); drawTopo(); renderPanel(); };
-  return h('div', {}, h('div', { class: 'deploy' }, d.dirty ? h('span', { class: 'warn' }, '● Pending changes - not active until deployed') : h('span', { class: 'up' }, '✔ Policy deployed'), h('button', { class: 'primary', disabled: !d.dirty, onclick: () => { ftdDeploy(d); notice('Deployment to FTD1 complete.'); commit(); } }, 'Deploy')),
-    sub(['Overview', 'Interfaces', 'Routing', 'NAT', 'Access Policy', 'Events'], 'fmc', t => {
-      if (t === 'Overview') return fmcOverview(d);
-      if (t === 'Interfaces') return h('div', {}, tbl(['Interface', 'Name', 'Security zone', 'IPv4 / len', 'Enabled', ''], Object.values(dr.ifs).map(x => { const z = inp_(x.zone, 'zone', '70px'), ip = inp_(x.ip, 'x.x.x.x', '110px'), ln = inp_(x.len, 'len', '40px'), en = h('input', { type: 'checkbox', checked: x.up });
-        return h('tr', {}, h('td', {}, x.name), h('td', {}, x.nameif), h('td', {}, z), h('td', {}, ip, '/', ln), h('td', {}, en), h('td', {}, h('button', { onclick: () => { x.zone = z.value.trim(); x.ip = ip.value.trim() || null; x.len = +ln.value || 24; x.up = en.checked; dirty(); } }, 'Save'))); })), h('p', { class: 'dim' }, 'Pre-configured: Gi0/0 zone OUT 192.0.2.1/24 (to R2), Gi0/1 zone IN 10.2.1.1/24 (to FTD-Client). Edit, then press Deploy.'));
-      if (t === 'Routing') { const f = { n: inp_('0.0.0.0/0', 'network/len', '120px'), g: inp_('192.0.2.2', 'gateway', '110px') };
-        return h('div', {}, tbl(['Network', 'Gateway', ''], dr.routes.map((r, i) => h('tr', {}, h('td', {}, r.net + '/' + r.len), h('td', {}, r.nh), h('td', {}, h('button', { class: 'x', onclick: () => { dr.routes.splice(i, 1); dirty(); } }, '✕'))))), h('h4', {}, 'Add static route'), h('div', { class: 'frm' }, f.n, 'via', f.g, h('button', { onclick: () => { const [n, l] = f.n.value.split('/'); dr.routes.push({ net: n, len: +l || 0, nh: f.g.value }); dirty(); } }, 'Add'))); }
-      if (t === 'NAT') { const f = { s: inp_('IN', 'src zone', '70px'), d: inp_('OUT', 'dst zone', '70px') };
-        return h('div', {}, tbl(['Type', 'Source zone', 'Destination zone', ''], dr.nat.map((n, i) => h('tr', {}, h('td', {}, 'Dynamic PAT (interface)'), h('td', {}, n.srcZone), h('td', {}, n.dstZone), h('td', {}, h('button', { class: 'x', onclick: () => { dr.nat.splice(i, 1); dirty(); } }, '✕'))))), h('h4', {}, 'Add PAT rule'), h('div', { class: 'frm' }, f.s, '→', f.d, h('button', { onclick: () => { dr.nat.push({ srcZone: f.s.value.trim(), dstZone: f.d.value.trim() }); dirty(); } }, 'Add'))); }
-      if (t === 'Access Policy') { const f = { n: inp_('Allow-IN-OUT', 'name', '110px'), s: inp_('IN', 'src zone', '60px'), d: inp_('OUT', 'dst zone', '60px'), sn: inp_('any', 'src net', '100px'), dn: inp_('any', 'dst net', '100px'), p: sel_(['any', 'tcp', 'udp', 'icmp']), pt: inp_('', 'port', '55px'), a: sel_(['allow', 'block']), ips: h('input', { type: 'checkbox' }), pos: sel_(['top', 'bottom']) };
-        const defSel = sel_(['block', 'allow'], dr.policy.defaultAction); defSel.addEventListener('change', () => { dr.policy.defaultAction = defSel.value; dirty(); });
-        return h('div', {}, tbl(['#', 'Name', 'Src zone', 'Dst zone', 'Src net', 'Dst net', 'Proto/Port', 'Action', 'IPS', 'Hits', ''], dr.policy.rules.map((r, i) => { const ips = h('input', { type: 'checkbox', checked: r.ips }); ips.addEventListener('change', () => { r.ips = ips.checked; dirty(); });
-            return h('tr', {}, h('td', {}, i + 1), h('td', {}, r.name), h('td', {}, r.srcZone), h('td', {}, r.dstZone), h('td', {}, r.srcNet), h('td', {}, r.dstNet), h('td', {}, r.proto + (r.dport ? '/' + r.dport : '')), h('td', { class: r.action === 'allow' ? 'up' : 'dn' }, r.action), h('td', {}, ips), h('td', {}, r.hits || 0), h('td', {}, h('button', { title: 'move up', disabled: i === 0, onclick: () => { const [x] = dr.policy.rules.splice(i, 1); dr.policy.rules.splice(i - 1, 0, x); dirty(); } }, '↑'), h('button', { class: 'x', onclick: () => { dr.policy.rules.splice(i, 1); dirty(); } }, '✕'))); })),
-          h('p', {}, 'Default action: ', defSel, h('span', { class: 'dim' }, '  (Block All Traffic = anything not explicitly allowed is dropped)')),
-          h('h4', {}, 'Add access control rule'), h('div', { class: 'frm' }, f.n, f.s, '→', f.d, f.sn, f.dn, f.p, f.pt, f.a, h('label', {}, f.ips, ' IPS'), 'position', f.pos, h('button', { onclick: () => { dr.policy.rules[f.pos.value === 'top' ? 'unshift' : 'push']({ name: f.n.value, srcZone: f.s.value.trim() || 'any', dstZone: f.d.value.trim() || 'any', srcNet: f.sn.value || 'any', dstNet: f.dn.value || 'any', proto: f.p.value, dport: f.pt.value ? +f.pt.value : null, action: f.a.value, ips: f.ips.checked }); dirty(); } }, 'Add'))); }
-      if (t === 'Events') return h('div', {}, h('button', { onclick: () => renderPanel() }, '⟳ Refresh'), tbl(['Action', 'Src', 'Dst', 'Proto', 'Port', 'Rule', 'Reason'], d.events.slice(0, 25).map(e => h('tr', {}, h('td', { class: e.action === 'Allow' ? 'up' : 'dn' }, e.action), h('td', {}, e.src), h('td', {}, e.dst), h('td', {}, e.proto), h('td', {}, e.dport), h('td', {}, e.rule), h('td', {}, e.why)))));
-      return null; }));
-}
 
 function cliOut(d, cmd) { const s = Cli.newSession(d); s.mode = 'priv'; return Cli.exec(L, d, s, cmd); }
-function toolsPane(d) {
-  const t = inp_('10.1.1.1', 'target ip', '130px'), out = h('pre', { class: 'cfgpre' }, 'Run ping / traceroute from this device.');
-  const run = c => { lastAnim = null; out.textContent = cliOut(d, c + ' ' + t.value); save(); runChecks(); if (lastAnim) animate(lastAnim); drawTopo(); };
-  return h('div', {}, h('div', { class: 'frm' }, 'Target', t, h('button', { onclick: () => run('ping') }, 'Ping'), h('button', { onclick: () => run('traceroute') }, 'Traceroute')), out);
-}
-const wild = len => Sim.n2ip((~Sim.ip2n(Sim.lenToMask(len))) >>> 0);
-function iosAddr(type, v) { if (type === 'any') return 'any'; if (type === 'host') return 'host ' + v; const [n, l] = v.split('/'); return n + ' ' + wild(+l || 24); }
-function routerGui(d) {
-  const acls = Object.keys(d.acls), ifs = Object.keys(d.ifs);
-  return sub(['Dashboard', 'Interfaces', 'Routing', 'ACLs', 'Tools', 'Running config'], 'rtr' + d.name, t => {
-    if (t === 'Dashboard') return h('div', {}, h('h3', {}, d.hostname + ' - Router web manager (simulated)'), tbl(['Interface', 'IP / mask', 'Status', 'ACL in', 'ACL out'], Object.values(d.ifs).map(x => h('tr', {}, h('td', {}, x.name), h('td', {}, x.ip ? x.ip + '/' + x.len : '-'), h('td', { class: x.up ? 'up' : 'dn' }, x.up ? '● up' : '● down'), h('td', {}, x.aclIn || '-'), h('td', {}, x.aclOut || '-')))), h('p', {}, 'Static routes: ' + d.routes.length + '   |   ACLs: ' + acls.length));
-    if (t === 'Interfaces') { const f = { n: sel_(ifs), ip: inp_('', 'IP address', '120px'), m: inp_('255.255.255.0', 'mask', '120px'), en: h('input', { type: 'checkbox', checked: true }), ai: sel_(['(none)'].concat(acls)), ao: sel_(['(none)'].concat(acls)) };
-      return h('div', {}, tbl(['Interface', 'IP / mask', 'State'], Object.values(d.ifs).map(x => h('tr', {}, h('td', {}, x.name), h('td', {}, x.ip ? x.ip + '/' + x.len : '-'), h('td', {}, x.up ? 'up' : 'down')))), h('h4', {}, 'Edit interface'), h('div', { class: 'frm' }, f.n, f.ip, f.m, h('label', {}, f.en, ' enabled'), 'ACL in', f.ai, 'ACL out', f.ao, h('button', { onclick: () => { const x = d.ifs[f.n.value]; const ln = ['interface ' + x.name]; if (f.ip.value) ln.push('ip address ' + f.ip.value + ' ' + f.m.value); ln.push(f.en.checked ? 'no shutdown' : 'shutdown');
-        if (x.aclIn && f.ai.value === '(none)') ln.push('no ip access-group ' + x.aclIn + ' in'); else if (f.ai.value !== '(none)') ln.push('ip access-group ' + f.ai.value + ' in'); if (x.aclOut && f.ao.value === '(none)') ln.push('no ip access-group ' + x.aclOut + ' out'); else if (f.ao.value !== '(none)') ln.push('ip access-group ' + f.ao.value + ' out'); apply(d, ln); } }, 'Apply'))); }
-    if (t === 'Routing') { const f = { n: inp_('0.0.0.0/0', 'network/len', '120px'), g: inp_('', 'next hop', '110px') };
-      return h('div', {}, tbl(['Type', 'Network', 'Next hop / interface', ''], Object.values(d.ifs).filter(x => x.up && x.ip).map(x => h('tr', {}, h('td', {}, 'connected'), h('td', {}, Sim.n2ip((Sim.ip2n(x.ip) & Sim.ip2n(Sim.lenToMask(x.len))) >>> 0) + '/' + x.len), h('td', {}, x.name), h('td', {}))).concat(d.routes.map(r => h('tr', {}, h('td', {}, 'static'), h('td', {}, r.net + '/' + r.len), h('td', {}, r.nh), h('td', {}, h('button', { class: 'x', onclick: () => apply(d, ['no ip route ' + r.net + ' ' + Sim.lenToMask(r.len) + ' ' + r.nh]) }, '✕')))))), h('h4', {}, 'Add static route'), h('div', { class: 'frm' }, f.n, 'via', f.g, h('button', { onclick: () => { const [n, l] = f.n.value.split('/'); apply(d, ['ip route ' + n + ' ' + Sim.lenToMask(+l || 0) + ' ' + f.g.value]); } }, 'Add'))); }
-    if (t === 'ACLs') { const f = { acl: inp_(acls[0] || 'BLOCK', 'ACL name', '100px'), act: sel_(['permit', 'deny']), pr: sel_(['tcp', 'udp', 'icmp', 'ip']), st: sel_(['any', 'host', 'network']), sv: inp_('', 'src', '100px'), dt: sel_(['host', 'any', 'network']), dv: inp_('172.16.1.10', 'dst', '100px'), op: inp_('80', 'port', '50px'), ifc: sel_(['(none)'].concat(ifs)), dir: sel_(['in', 'out']) };
-      const rows = []; for (const [n, es] of Object.entries(d.acls)) es.forEach((e, i) => rows.push(h('tr', {}, h('td', {}, n), h('td', {}, (i + 1) * 10), h('td', { class: e.action === 'permit' ? 'up' : 'dn' }, e.action), h('td', {}, Sim.aclText(e, 'ios').replace(/^(permit|deny) /, '')), h('td', {}, e.hits || 0), h('td', {}, h('button', { class: 'x', onclick: () => apply(d, ['ip access-list extended ' + n, 'no ' + Sim.aclText(e, 'ios')]) }, '✕')))));
-      return h('div', {}, tbl(['ACL', 'Seq', 'Action', 'Rule', 'Hits', ''], rows), h('p', { class: 'dim' }, 'Rules are checked top-down; end with permit ip any any or everything else is denied (implicit deny).'), h('h4', {}, 'Add rule'), h('div', { class: 'frm' }, f.acl, f.act, f.pr, 'src', f.st, f.sv, 'dst', f.dt, f.dv, 'port', f.op, 'apply to', f.ifc, f.dir, h('button', { onclick: () => { const port = (f.pr.value === 'tcp' || f.pr.value === 'udp') && f.op.value ? ' eq ' + f.op.value : ''; const ln = ['ip access-list extended ' + f.acl.value, f.act.value + ' ' + f.pr.value + ' ' + iosAddr(f.st.value, f.sv.value) + ' ' + iosAddr(f.dt.value, f.dv.value) + port]; if (f.ifc.value !== '(none)') ln.push('interface ' + f.ifc.value, 'ip access-group ' + f.acl.value + ' ' + f.dir.value); apply(d, ln); } }, 'Add')));
-    }
-    if (t === 'Tools') return toolsPane(d);
-    return h('pre', { class: 'cfgpre' }, cliOut(d, 'show running-config'));
-  });
-}
-function switchGui(d) {
-  const ports = Object.keys(d.ifs).filter(k => !d.ifs[k].svi), vl = Object.keys(d.vlans);
-  return sub(['Dashboard', 'Ports', 'VLANs', '802.1X / NAC', 'MAC table', 'Running config', 'Tools'], 'sw' + d.name, t => {
-    if (t === 'Dashboard') return h('div', {}, h('h3', {}, d.hostname + ' - Switch manager (simulated)'), tbl(['Port', 'Status', 'Mode', 'VLAN', '802.1X'], ports.map(k => { const x = d.ifs[k], c = !!Sim.segment(L, d.name, k).eps.length; return h('tr', {}, h('td', {}, k), h('td', { class: !x.up ? 'dn' : c ? 'up' : '' }, !x.up ? 'disabled' : c ? 'connected' : 'notconnect'), h('td', {}, x.mode), h('td', {}, x.vlan), h('td', {}, x.auth === 'auto' ? (x.state || 'unauth') : 'open')); })), h('p', {}, 'VLANs: ' + vl.length));
-    if (t === 'Ports') { const f = { p: sel_(ports), m: sel_(['access', 'trunk']), v: sel_(vl), en: h('input', { type: 'checkbox', checked: true }), dx: h('input', { type: 'checkbox' }) };
-      return h('div', {}, tbl(['Port', 'Mode', 'VLAN', 'Admin', '802.1X'], ports.map(k => { const x = d.ifs[k]; return h('tr', {}, h('td', {}, k), h('td', {}, x.mode), h('td', {}, x.vlan), h('td', { class: x.up ? 'up' : 'dn' }, x.up ? 'up' : 'shutdown'), h('td', {}, x.auth === 'auto' ? 'port-control auto' : 'open')); })), h('h4', {}, 'Edit port'), h('div', { class: 'frm' }, f.p, f.m, 'VLAN', f.v, h('label', {}, f.en, ' enabled'), h('label', {}, f.dx, ' 802.1X (port-control auto)'), h('button', { onclick: () => apply(d, ['interface ' + f.p.value, 'switchport mode ' + f.m.value].concat(f.m.value === 'access' ? ['switchport access vlan ' + f.v.value] : [], [f.en.checked ? 'no shutdown' : 'shutdown', f.dx.checked ? 'authentication port-control auto' : 'no authentication port-control auto'])) }, 'Apply'))); }
-    if (t === 'VLANs') { const f = { id: inp_('20', 'id', '55px'), n: inp_('SERVERS', 'name', '120px') };
-      return h('div', {}, tbl(['VLAN', 'Name', 'Ports', ''], vl.map(v => h('tr', {}, h('td', {}, v), h('td', {}, d.vlans[v]), h('td', {}, ports.filter(k => String(d.ifs[k].vlan) === String(v) && d.ifs[k].mode === 'access').join(', ')), h('td', {}, +v === 1 ? '' : h('button', { class: 'x', onclick: () => apply(d, ['no vlan ' + v]) }, '✕'))))), h('h4', {}, 'Add VLAN'), h('div', { class: 'frm' }, f.id, f.n, h('button', { onclick: () => apply(d, ['vlan ' + f.id.value, 'name ' + f.n.value]) }, 'Add'))); }
-    if (t === '802.1X / NAC') { const f = { aaa: h('input', { type: 'checkbox', checked: !!d.aaa }), dx: h('input', { type: 'checkbox', checked: !!d.dot1xGlobal }), ip: inp_(d.radius && d.radius.ip || '192.168.100.14', 'RADIUS server IP', '130px'), key: inp_(d.radius && d.radius.key || '', 'shared secret', '120px') };
-      return h('div', {}, h('h4', {}, 'Global 802.1X / RADIUS settings'), h('div', { class: 'frm' }, h('label', {}, f.aaa, ' aaa new-model'), h('label', {}, f.dx, ' dot1x system-auth-control'), 'RADIUS', f.ip, 'secret', f.key, h('button', { onclick: () => apply(d, [f.aaa.checked ? 'aaa new-model' : 'no aaa new-model', 'aaa authentication dot1x default group radius', f.dx.checked ? 'dot1x system-auth-control' : 'no dot1x system-auth-control', 'radius server ISE', 'address ipv4 ' + f.ip.value + ' auth-port 1812 acct-port 1813', 'key ' + f.key.value]) }, 'Apply')),
-        h('p', { class: 'dim' }, 'Per-port 802.1X is set under Ports (port-control auto). The shared secret must match ISE > Network Devices.'), tbl(['Port', 'State', 'User', 'Profile'], ports.filter(k => d.ifs[k].auth === 'auto').map(k => h('tr', {}, h('td', {}, k), h('td', { class: d.ifs[k].state === 'authorized' ? 'up' : 'dn' }, d.ifs[k].state || 'unauth'), h('td', {}, d.ifs[k].user || ''), h('td', {}, d.ifs[k].profile || ''))))); }
-    if (t === 'MAC table') return h('pre', { class: 'cfgpre' }, cliOut(d, 'show mac address-table'));
-    if (t === 'Tools') return h('pre', { class: 'cfgpre' }, 'Use the Terminal for ping/traceroute on a Layer-2 switch (it has no routed interfaces).');
-    return h('pre', { class: 'cfgpre' }, cliOut(d, 'show running-config'));
-  });
-}
 // ---- 802.1X login + mail client ----
 let nacMsg = {};
 function nacApp(d) {
@@ -366,66 +285,37 @@ function mailForm(getHost, defaults) {
 }
 function mailApp(d) { return h('div', {}, h('h3', {}, 'Mail client - ' + d.label), h('p', { class: 'dim' }, 'Sends a real SMTP session through the network to the ESA. From Outside use the published address (203.0.113.20); from inside use 172.16.1.20.'), mailForm(() => d.name, { server: d.name === 'Outside' ? '203.0.113.20' : '172.16.1.20', from: 'bob@partner.com' })); }
 // ---- ISE GUI ----
-function iseGui(d) {
-  const I = L.ise, grp = ['Employees', 'Contractors', 'Printers', 'Unknown'], profs = Object.keys(I.profiles);
-  return sub(['Live Logs', 'Network Devices', 'Identities', 'Policy', 'Profiles'], 'ise', t => {
-    if (t === 'Live Logs') return h('div', {}, h('h3', {}, 'Operations > RADIUS > Live Logs'), h('button', { onclick: () => refreshWins() }, '⟳ Refresh'), tbl(['Time', 'Status', 'Identity', 'Endpoint MAC', 'Network device', 'Method', 'Profile', 'Details'], I.logs.slice(0, 20).map(e => h('tr', {}, h('td', {}, e.t), h('td', { class: e.result === 'Pass' ? 'up' : 'dn' }, e.result === 'Pass' ? '● Pass' : '✖ Fail'), h('td', {}, e.user), h('td', {}, e.mac), h('td', {}, e.nas), h('td', {}, e.method), h('td', {}, e.profile), h('td', {}, e.why)))), I.logs.length ? null : h('p', { class: 'dim' }, 'No authentications yet. Log on from a PC: right-click Client > Network login (802.1X).'));
-    if (t === 'Network Devices') { const f = { n: inp_('SW1', 'name', '90px'), ip: inp_('192.168.100.23', 'IP', '120px'), s: inp_('', 'shared secret', '120px') };
-      return h('div', {}, h('h3', {}, 'Administration > Network Resources > Network Devices'), tbl(['Name', 'IP', 'Shared secret', ''], I.devices.map((x, i) => h('tr', {}, h('td', {}, x.name), h('td', {}, x.ip), h('td', {}, '••••••'), h('td', {}, h('button', { class: 'x', onclick: () => { I.devices.splice(i, 1); commit(); } }, '✕'))))), h('h4', {}, 'Add network device'), h('div', { class: 'frm' }, f.n, f.ip, f.s, h('button', { onclick: () => { I.devices.push({ name: f.n.value, ip: f.ip.value, secret: f.s.value }); commit(); } }, 'Submit')), h('p', { class: 'dim' }, 'The switch must be listed here, with the SAME shared secret as "key" under its radius server.')); }
-    if (t === 'Identities') { const u = { n: inp_('', 'username', '100px'), p: inp_('Cisco123!', 'password', '100px'), g: sel_(['Employees', 'Contractors']) }, en = { m: inp_(Cli.macOf('Client', 'eth0'), 'MAC', '130px'), g: sel_(['Printers', 'Unknown']) };
-      return h('div', {}, h('h3', {}, 'Administration > Identity Management > Users'), tbl(['Username', 'Group', ''], I.users.map((x, i) => h('tr', {}, h('td', {}, x.name), h('td', {}, x.group), h('td', {}, h('button', { class: 'x', onclick: () => { I.users.splice(i, 1); commit(); } }, '✕'))))), h('div', { class: 'frm' }, u.n, u.p, u.g, h('button', { onclick: () => { if (u.n.value) { I.users.push({ name: u.n.value, pass: u.p.value, group: u.g.value }); commit(); } } }, 'Add user')),
-        h('h3', {}, 'Endpoints (for MAB)'), tbl(['MAC', 'Endpoint group', ''], I.endpoints.map((x, i) => h('tr', {}, h('td', {}, x.mac), h('td', {}, x.group), h('td', {}, h('button', { class: 'x', onclick: () => { I.endpoints.splice(i, 1); commit(); } }, '✕'))))), h('div', { class: 'frm' }, en.m, en.g, h('button', { onclick: () => { I.endpoints.push({ mac: en.m.value, group: en.g.value }); commit(); } }, 'Add endpoint')), h('p', { class: 'dim' }, 'Prefilled MAC = the Client PC. Add it to the Printers group; the rule Printers-MAB then permits it via MAB.')); }
-    if (t === 'Policy') { const f = { n: inp_('Rule1', 'name', '90px'), g: sel_(['any'].concat(grp)), m: sel_(['any', 'dot1x', 'mab']), p: sel_(profs) };
-      const d1 = h('input', { type: 'checkbox', checked: I.allowDot1x }), m1 = h('input', { type: 'checkbox', checked: I.allowMab }); d1.addEventListener('change', () => { I.allowDot1x = d1.checked; commit(); }); m1.addEventListener('change', () => { I.allowMab = m1.checked; commit(); });
-      return h('div', {}, h('h3', {}, 'Policy > Authentication (Allowed Protocols)'), h('div', { class: 'frm' }, h('label', {}, d1, ' 802.1X (PEAP/EAP)'), h('label', {}, m1, ' MAC Authentication Bypass')), h('h3', {}, 'Policy > Authorization (first match wins)'),
-        tbl(['#', 'Rule', 'Identity group', 'Method', 'Result profile', ''], I.authz.map((r, i) => { const ps = sel_(profs, r.profile); ps.addEventListener('change', () => { r.profile = ps.value; commit(); }); return h('tr', {}, h('td', {}, i + 1), h('td', {}, r.name), h('td', {}, r.group), h('td', {}, r.method), h('td', {}, ps), h('td', {}, h('button', { disabled: i === 0, onclick: () => { const [x] = I.authz.splice(i, 1); I.authz.splice(i - 1, 0, x); commit(); } }, '↑'), h('button', { class: 'x', onclick: () => { I.authz.splice(i, 1); commit(); } }, '✕'))); })),
-        h('p', { class: 'dim' }, 'Default rule (no match): DenyAccess.'), h('h4', {}, 'Add rule'), h('div', { class: 'frm' }, f.n, f.g, f.m, f.p, h('button', { onclick: () => { I.authz.unshift({ name: f.n.value, group: f.g.value, method: f.m.value, profile: f.p.value }); commit(); } }, 'Add (top)'))); }
-    const f = { n: inp_('', 'name', '110px'), a: sel_(['accept', 'reject']), v: inp_('10', 'VLAN', '50px'), d: h('textarea', { rows: 3, placeholder: 'permit tcp any any eq 80', style: 'width:98%' }) };
-    return h('div', {}, h('h3', {}, 'Policy > Policy Elements > Authorization Profiles'), tbl(['Profile', 'Access', 'VLAN', 'Downloadable ACL', ''], Object.entries(I.profiles).map(([k, v]) => h('tr', {}, h('td', {}, k), h('td', { class: v.access === 'accept' ? 'up' : 'dn' }, v.access), h('td', {}, v.vlan || ''), h('td', {}, h('pre', { class: 'mini' }, v.dacl || '-')), h('td', {}, ['PermitAccess', 'DenyAccess'].includes(k) ? '' : h('button', { class: 'x', onclick: () => { delete I.profiles[k]; commit(); } }, '✕'))))), h('h4', {}, 'Add profile'), h('div', { class: 'frm' }, f.n, f.a, f.v), f.d, h('div', { class: 'frm' }, h('button', { onclick: () => { if (f.n.value) { I.profiles[f.n.value] = { access: f.a.value, vlan: +f.v.value || 1, dacl: f.d.value }; commit(); } } }, 'Save profile')), h('p', { class: 'dim' }, 'A dACL is pushed to the switch port: e.g. "permit tcp any any eq 80" (anything else is implicitly denied).'));
-  });
-}
 // ---- ESA GUI ----
-function esaGui(d) {
-  const E = L.esa;
-  return sub(['Dashboard', 'Mail Policies', 'HAT / Senders', 'Domains & DNS', 'Message Tracking', 'Quarantine', 'Test mail'], 'esa', t => {
-    if (t === 'Dashboard') return h('div', {}, h('h3', {}, 'Email Security Appliance - System Overview'), h('div', { class: 'tiles' }, [['Accepted', E.counters.accepted], ['Spam caught', E.counters.spam], ['Viruses', E.counters.virus], ['Blocked (HAT/SPF)', E.counters.blocked], ['DLP hits', E.counters.dlp]].map(([k, v]) => h('div', { class: 'tile' }, h('b', {}, v), h('span', {}, k)))),
-      h('h4', {}, 'Mailboxes'), tbl(['User', 'Messages', 'Latest'], Object.entries(E.mailboxes).map(([u, ms]) => h('tr', {}, h('td', {}, u + '@lab.local'), h('td', {}, ms.length), h('td', {}, ms[0] ? ms[0].subject + ' (from ' + ms[0].from + ')' : '')))));
-    if (t === 'Mail Policies') { const as = h('input', { type: 'checkbox', checked: E.antispam.on }), th = inp_(E.antispam.threshold, 'score', '55px'), aa = sel_(['quarantine', 'drop'], E.antispam.action), av = h('input', { type: 'checkbox', checked: E.antivirus }), dl = h('input', { type: 'checkbox', checked: E.dlp }), sp = sel_(['tag', 'quarantine', 'reject'], E.spfAction);
-      const f = { n: inp_('NoExe', 'name', '90px'), c: sel_(['attachment-ext', 'subject-contains', 'body-contains']), v: inp_('exe', 'value', '90px'), a: sel_(['drop', 'quarantine', 'tag']) };
-      return h('div', {}, h('h3', {}, 'Mail Policies > Incoming Mail Policy (Default)'), h('div', { class: 'frm' }, h('label', {}, as, ' Anti-Spam'), 'threshold', th, 'action', aa), h('div', { class: 'frm' }, h('label', {}, av, ' Anti-Virus'), h('label', {}, dl, ' Data Loss Prevention (SSN)'), 'SPF fail action', sp),
-        h('div', { class: 'frm' }, h('button', { class: 'primary', onclick: () => { E.antispam = { on: as.checked, threshold: +th.value || 50, action: aa.value }; E.antivirus = av.checked; E.dlp = dl.checked; E.spfAction = sp.value; commit(); notice('Policy committed.'); } }, 'Submit & Commit')),
-        h('h4', {}, 'Incoming Content Filters'), tbl(['Name', 'Condition', 'Value', 'Action', ''], E.filters.map((x, i) => h('tr', {}, h('td', {}, x.name), h('td', {}, x.cond), h('td', {}, x.value), h('td', {}, x.action), h('td', {}, h('button', { class: 'x', onclick: () => { E.filters.splice(i, 1); commit(); } }, '✕'))))), h('div', { class: 'frm' }, f.n, f.c, f.v, f.a, h('button', { onclick: () => { E.filters.push({ name: f.n.value, cond: f.c.value, value: f.v.value, action: f.a.value }); commit(); } }, 'Add filter'))); }
-    if (t === 'HAT / Senders') { const f = { g: sel_(E.hat.map(x => x.name)), ip: inp_('198.51.100.10', 'IP or CIDR', '140px') };
-      return h('div', {}, h('h3', {}, 'Mail Policies > HAT Overview (Host Access Table)'), tbl(['Sender group', 'Policy', 'Sender IPs'], E.hat.map(g => h('tr', {}, h('td', {}, g.name), h('td', { class: g.policy === 'block' ? 'dn' : 'up' }, g.policy === 'block' ? 'REJECT' : 'ACCEPT (trusted)'), h('td', {}, g.ips.map((ip, i) => h('span', { class: 'chip' }, ip, h('button', { class: 'x', onclick: () => { g.ips.splice(i, 1); commit(); } }, '✕'))))))), h('div', { class: 'frm' }, f.g, f.ip, h('button', { onclick: () => { E.hat.find(x => x.name === f.g.value).ips.push(f.ip.value); commit(); } }, 'Add sender')), h('p', { class: 'dim' }, 'Put 198.51.100.10 in BLOCKLIST and the connection is refused before any content scanning.')); }
-    if (t === 'Domains & DNS') { const f = { d: inp_('', 'domain', '120px') }, g = { d: inp_('example.net', 'domain', '120px'), ips: inp_('198.51.100.10', 'SPF-authorised IPs (comma)', '200px') };
-      return h('div', {}, h('h3', {}, 'Recipient Access Table - accepted domains'), tbl(['Domain', ''], E.domains.map((x, i) => h('tr', {}, h('td', {}, x), h('td', {}, h('button', { class: 'x', onclick: () => { E.domains.splice(i, 1); commit(); } }, '✕'))))), h('div', { class: 'frm' }, f.d, h('button', { onclick: () => { if (f.d.value) { E.domains.push(f.d.value); commit(); } } }, 'Add domain')),
-        h('h3', {}, 'Simulated Internet DNS - SPF records'), tbl(['Sender domain', 'SPF: authorised sending IPs', ''], Object.entries(E.dns).map(([k, v]) => h('tr', {}, h('td', {}, k), h('td', {}, v.spf.join(', ')), h('td', {}, h('button', { class: 'x', onclick: () => { delete E.dns[k]; commit(); } }, '✕'))))), h('div', { class: 'frm' }, g.d, g.ips, h('button', { onclick: () => { E.dns[g.d.value] = { spf: g.ips.value.split(',').map(x => x.trim()).filter(Boolean) }; commit(); } }, 'Add / replace record'))); }
-    if (t === 'Message Tracking') return h('div', {}, h('h3', {}, 'Monitor > Message Tracking'), h('button', { onclick: () => refreshWins() }, '⟳ Refresh'), tbl(['Time', 'MID', 'From', 'To', 'Subject', 'Attach', 'Sender IP', 'Result', 'Reason'], E.tracking.slice(0, 25).map(m => h('tr', {}, h('td', {}, m.t), h('td', {}, m.mid), h('td', {}, m.from), h('td', {}, m.to), h('td', {}, m.subject), h('td', {}, m.attach), h('td', {}, m.src), h('td', { class: /delivered/.test(m.disp) ? 'up' : 'dn' }, m.disp), h('td', {}, m.why)))));
-    if (t === 'Quarantine') return h('div', {}, h('h3', {}, 'Monitor > Quarantines'), tbl(['From', 'To', 'Subject', ''], E.quarantine.map((m, i) => h('tr', {}, h('td', {}, m.from), h('td', {}, m.to), h('td', {}, m.subject), h('td', {}, h('button', { onclick: () => { const u = m.to.split('@')[0]; (E.mailboxes[u] = E.mailboxes[u] || []).unshift({ from: m.from, subject: m.subject, t: 'released' }); E.quarantine.splice(i, 1); commit(); } }, 'Release'), h('button', { class: 'x', onclick: () => { E.quarantine.splice(i, 1); commit(); } }, '✕'))))), E.quarantine.length ? null : h('p', { class: 'dim' }, 'Quarantine is empty.'));
-    const hosts = Object.keys(L.dev).filter(k => L.dev[k].type === 'host' && !L.dev[k].role), hs = sel_(hosts, 'Outside');
-    return h('div', {}, h('h3', {}, 'Test mail flow'), h('div', { class: 'frm' }, 'Send from PC', hs), mailForm(() => hs.value, { server: '203.0.113.20' }), h('p', { class: 'dim' }, 'From Outside-Desktop use 203.0.113.20 (published). From inside PCs use 172.16.1.20.'));
-  });
+// ---------- bridge for gui.js ----------
+window.App = { get L() { return L; }, commit: safe(commit), notice, apply: safe(apply), cliOut, refreshWins, mailForm, setAnim: v => { lastAnim = v; },
+  afterTool: () => { save(); runChecks(); if (lastAnim) animate(lastAnim); drawTopo(); }, afterTool2: null };
+window.App.afterTool = function (net) { if (net && net.path) lastAnim = net; save(); runChecks(); drawTopo(); refreshWins(); if (lastAnim) animate(lastAnim); };
+// ---------- self-test ----------
+function selfTest() {
+  const results = []; const T = (n, f) => { try { const r = f(); results.push([n, r !== false, r === false ? 'returned false' : '']); } catch (e) { results.push([n, false, e.message]); } };
+  const snap = JSON.stringify(L), keep = Object.keys(wins);
+  for (const k of Object.keys(wins)) closeWin(k);
+  const devs = Object.keys(L.dev);
+  for (const n of devs) { const d = L.dev[n];
+    T(n + ': right-click menu', () => { showMenu(n, 100, 100); const ok = $('#ctx').children.length >= 3; $('#ctx').style.display = 'none'; return ok; });
+    if (d.type !== 'switch' || true) T(n + ': terminal opens + command', () => { openWin(n, 'term'); const w = wins[n + ':term']; if (!w) return false; const s = sessions[n] || (sessions[n] = Cli.newSession(d)); const out = Cli.exec(L, d, s, d.type === 'host' ? 'ip addr' : d.role ? 'help' : d.type === 'ftd' ? 'show version' : 'show version'); closeWin(n + ':term'); return !!out; });
+    if (guiKind(d)) T(n + ': GUI opens', () => { openWin(n, 'gui'); const k = (d.type === 'ftd' ? 'FMC1' : n) + ':gui'; const w = wins[k]; const ok = !!w && w.body.querySelector('.prod'); closeWin(k); return !!ok; });
+    T(n + ': power off / on', () => { setPower(n, false); const off = L.dev[n].on === false; setPower(n, true); return off && L.dev[n].on !== false; }); }
+  T('engine: packet simulation runs', () => typeof Sim.flow(clone(L), 'Client', { proto: 'icmp', dst: '198.51.100.10' }).ok === 'boolean');
+  T('engine: web proxy simulation runs', () => typeof Sim.webGet(clone(L), 'Client', { url: 'http://www.cisco.com', proxy: '172.16.1.30:3128' }).ok === 'boolean');
+  T('engine: mail simulation runs', () => typeof Sim.esaSend(clone(L), 'Outside', { from: 'a@partner.com', to: 'b@lab.local', subject: 's', body: 'b', attach: [], server: '203.0.113.20' }).ok === 'boolean');
+  try { L = JSON.parse(snap); } catch (e) { } for (const k of Object.keys(wins)) closeWin(k); save(); runChecks(); drawTopo();
+  const m = $('#modal'); m.innerHTML = ''; m.style.display = 'flex'; const bad = results.filter(r => !r[1]);
+  m.append(h('div', { class: 'mbox' }, h('h2', {}, 'Self-test: ' + (bad.length ? bad.length + ' problem(s)' : 'all ' + results.length + ' checks passed')), h('p', { class: 'dim' }, 'Right-click menus, terminals, GUIs and power on/off were exercised for every device on THIS browser.'),
+    h('div', { class: 'stlist' }, results.map(r => h('div', { class: r[1] ? 'up' : 'dn' }, (r[1] ? '✔ ' : '✖ ') + r[0] + (r[2] ? ' - ' + r[2] : '')))), h('div', { style: 'text-align:right;margin-top:10px' }, h('button', { class: 'primary', onclick: () => { m.style.display = 'none'; } }, 'Close'))));
+  return results;
 }
-function wsaGui(d) {
-  const W = L.wsa;
-  return sub(['Dashboard', 'Access Policies', 'Security Services', 'Reporting', 'Test request'], 'wsa', t => {
-    if (t === 'Dashboard') return h('div', {}, h('h3', {}, 'Secure Web Appliance - System Overview'), h('div', { class: 'tiles' }, [['Requests', W.counters.total], ['Allowed', W.counters.allowed], ['Blocked', W.counters.blocked], ['Malware stopped', W.counters.malware]].map(([k, v]) => h('div', { class: 'tile' }, h('b', {}, v), h('span', {}, k)))), h('p', { class: 'dim' }, 'Explicit proxy listening on 172.16.1.30:3128. Point a browser at it (Client > Desktop > Proxy), or use: curl -x 172.16.1.30:3128 http://www.cisco.com'));
-    if (t === 'Access Policies') { const f = { l: sel_(['Allow list', 'Block list']), d: inp_('www.example.com', 'domain', '170px') };
-      return h('div', {}, h('h3', {}, 'Web Security Manager > Access Policies > Global Policy: URL Filtering'), tbl(['URL category', 'Action'], Object.keys(W.policy).map(c => { const s = sel_(['allow', 'monitor', 'block'], W.policy[c]); s.addEventListener('change', () => { W.policy[c] = s.value; commit(); notice('Policy updated for ' + c + ': ' + s.value); }); return h('tr', {}, h('td', {}, c), h('td', {}, s)); })),
-        h('h4', {}, 'Custom URL lists'), h('p', {}, 'Allow: ', W.allowlist.length ? W.allowlist.map((x, i) => h('span', { class: 'chip' }, x, h('button', { class: 'x', onclick: () => { W.allowlist.splice(i, 1); commit(); } }, '✕'))) : '-', '   Block: ', W.blocklist.length ? W.blocklist.map((x, i) => h('span', { class: 'chip' }, x, h('button', { class: 'x', onclick: () => { W.blocklist.splice(i, 1); commit(); } }, '✕'))) : '-'),
-        h('div', { class: 'frm' }, f.l, f.d, h('button', { onclick: () => { (f.l.value === 'Allow list' ? W.allowlist : W.blocklist).push(f.d.value); commit(); } }, 'Add')), h('p', { class: 'dim' }, 'Custom lists override the category action.')); }
-    if (t === 'Security Services') { const av = h('input', { type: 'checkbox', checked: W.av }), dc = h('input', { type: 'checkbox', checked: W.decrypt });
-      return h('div', {}, h('h3', {}, 'Security Services'), h('div', { class: 'frm' }, h('label', {}, av, ' Anti-Malware scanning')), h('div', { class: 'frm' }, h('label', {}, dc, ' HTTPS Proxy - decrypt and inspect HTTPS traffic')), h('div', { class: 'frm' }, h('button', { class: 'primary', onclick: () => { W.av = av.checked; W.decrypt = dc.checked; commit(); notice('Security services committed.'); } }, 'Submit & Commit')), h('p', { class: 'dim' }, 'Without HTTPS decryption the WSA only sees the destination host name of an HTTPS request - it can filter by category but cannot scan the download for malware.')); }
-    if (t === 'Reporting') return h('div', {}, h('h3', {}, 'Reporting > Access log'), h('button', { onclick: () => refreshWins() }, '⟳ Refresh'), tbl(['Time', 'Client', 'URL', 'Category', 'Action', 'Reason'], W.log.slice(0, 25).map(m => h('tr', {}, h('td', {}, m.t), h('td', {}, m.client), h('td', {}, m.url), h('td', {}, m.cat), h('td', { class: m.act === 'Blocked' ? 'dn' : 'up' }, m.act), h('td', {}, m.why)))));
-    const hosts = Object.keys(L.dev).filter(k => L.dev[k].type === 'host' && !L.dev[k].role), hs = sel_(hosts, 'Client'), u = inp_('http://www.facebook.com', 'URL', '240px'), out = h('div', {});
-    return h('div', {}, h('h3', {}, 'Test a web request through this proxy'), h('div', { class: 'frm' }, 'From', hs, u, h('button', { class: 'primary', onclick: () => { lastAnim = null; const r = Sim.webGet(L, hs.value, { url: u.value, proxy: '172.16.1.30:3128' }); out.innerHTML = ''; (r.steps || []).forEach(s => out.append(h('div', { class: 'ph ' + (s.k === 'drop' ? 'drop' : s.k === 'ok' ? 'ok' : '') }, s.t))); if (!r.steps || !r.steps.length) out.append(h('div', { class: 'ph drop' }, r.why)); out.append(h('div', { class: 'phr ' + (r.ok ? 'up' : 'dn') }, r.ok ? '✔ 200 OK - ' + r.page : '✖ ' + (r.why || r.kind))); if (r.net && r.net.path) lastAnim = r.net; save(); runChecks(); drawTopo(); if (lastAnim) animate(lastAnim); } }, 'Send request')), out);
-  });
-}
+window.App.selfTest = selfTest;
 // ---------- boot ----------
 function boot() {
   load(); drawTopo(); runChecks(); startScreen();
   $('#reset').addEventListener('click', () => { if (confirm('Reset the whole lab to its starting state?')) { try { localStorage.removeItem(KEY); } catch (e) {} terms = {}; sessions = {}; brs = {}; for (const k of Object.keys(wins)) closeWin(k); L = newLab(); commit(); startScreen(); } });
-  $('#devs').addEventListener('click', startScreen);
+  $('#devs').addEventListener('click', safe(startScreen)); $('#selftest').addEventListener('click', safe(selfTest));
 }
 window.addEventListener('DOMContentLoaded', boot);
 })();

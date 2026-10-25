@@ -25,6 +25,21 @@ Not real Cisco software: command syntax and behaviour follow ASA/IOS/FMC concept
 
 **15 auto-graded lab tasks** with hints and answers; progress saved in your browser. Start screen lets you choose which devices are powered on.
 
+## How to use it (2 ways to open anything)
+1. **Click a device on the map** - an action bar appears under the map with **Terminal / Open GUI / Power on-off** buttons.
+2. Or **right-click** it (menu) / **double-click** it.
+
+GUIs open like application windows (full size). Use **—** to minimize (the window stays in the taskbar at the top), **▢** for full-screen/restore, **✕** to close.
+
+## If something does not work
+- Press **Self-test** (top right): it checks the right-click menu, terminal, GUI and power on/off of every device in *your* browser and lists exactly what fails.
+- A red bar at the top shows any error message - send me that text. Its **Reset lab** button clears saved data.
+- Saved labs are versioned: an old saved lab from an earlier version is discarded automatically (this was the cause of "right-click FTD/ASA GUI errors").
+- Automated tests: `npm i playwright` then `node tests/e2e.cjs` (197 checks: every device menu/power/GUI + all 15 lab tasks done through the GUIs).
+
+## Product-style GUIs
+ASDM-style (toolbar + navigation tree), FMC-style (top menu, **Deploy** workflow), ISE-style (Home / Operations / Policy / Administration), ESA and WSA (AsyncOS-style: edits stay **pending until Commit Changes**), IOS web-UI style for routers and switches.
+
 ## Logins
 The simulated devices need no login. (Real-device logins are in the other lab docs.)
 

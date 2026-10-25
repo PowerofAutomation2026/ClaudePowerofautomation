@@ -17,7 +17,7 @@ const clone = o => JSON.parse(JSON.stringify(o));
 function mk(type, name, label, x, y) { return { type, name, label, x, y, ifs: {}, routes: [], acls: {}, hostname: label }; }
 function addIf(d, name, ip, len, extra) { d.ifs[name] = Object.assign({ name, ip: ip || null, len: len || 24, up: true }, extra || {}); }
 function newLab() {
-  const L = { dev: {}, links: [], conns: [], ver: 4 };
+  const L = { dev: {}, links: [], conns: [], ver: 5 };
   const D = (t, n, label, x, y) => (L.dev[n] = mk(t, n, label, x, y));
   const host = (n, label, x, y, ip, len, gw, listen) => { const d = D('host', n, label, x, y); addIf(d, 'eth0', ip, len); d.gw = gw; d.listen = listen; return d; };
   host('Outside', 'Outside-Desktop', 70, 120, '198.51.100.10', 24, '198.51.100.1', { tcp: [22, 80, 443], udp: [], page: 'Outside web server (198.51.100.10)' });
@@ -397,6 +397,6 @@ function packetTracer(L, dn, nameif, p) {
   d.conns.length = nc; d.xlates.length = nx; d.connSeq = seq; if (d.events) d.events.splice(0, d.events.length - evn);
   return { o, trace: ctx.trace, path: ctx.path };
 }
-const API = { webGet, packetTracer, iseAuth, iseLogoff, esaSend, portOf, nacBlocked,  ip2n, n2ip, inNet, maskToLen, lenToMask, wildToLen, isIp, portNum, clone, newLab, flow, traceroute, routeLookup, ownsIp, evalAcl, parseAclTokens, aclText, fmtAddr, ifByNameif, ftdDeploy, segment };
+const API = { VERSION: 5, webGet, packetTracer, iseAuth, iseLogoff, esaSend, portOf, nacBlocked,  ip2n, n2ip, inNet, maskToLen, lenToMask, wildToLen, isIp, portNum, clone, newLab, flow, traceroute, routeLookup, ownsIp, evalAcl, parseAclTokens, aclText, fmtAddr, ifByNameif, ftdDeploy, segment };
 root.Sim = API; if (typeof module !== 'undefined' && module.exports) module.exports = API;
 })(typeof window !== 'undefined' ? window : globalThis);
