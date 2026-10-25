@@ -1,6 +1,6 @@
 # Creates the full SCOR-Core project in GNS3 (nodes, cables, mgmt network), starts it, and pushes day-0 configs.
 # Prereq: Install-Windows-Lab.ps1 finished, Cisco images in %USERPROFILE%\GNS3\images\QEMU
-param([switch]$NoStart, [switch]$NoPush, [ValidateSet("auto","network","ftd","nac","all")][string]$Profile = "auto")
+param([switch]$NoStart, [switch]$NoPush, [ValidateSet("auto","network","ftdfdm","ftd","nac","all")][string]$Profile = "auto")
 $ErrorActionPreference = "Stop"
 function Say($m){ Write-Host ">> $m" -ForegroundColor Cyan }
 function Warn($m){ Write-Host "!! $m" -ForegroundColor Yellow }
@@ -76,6 +76,7 @@ $hostGB = [int]((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB)
 if ($Profile -eq "auto") { $Profile = if ($hostGB -ge 110) { "all" } elseif ($hostGB -ge 56) { "ftd" } else { "network" } }
 $sets = @{
   network = @("FW1-ASAv","R1","R2","SW1","Client","Outside-Desktop","DMZ-Server")
+  ftdfdm  = @("R2","Outside-Desktop","DMZ-Server","FTD1","FTD-Client")
   ftd     = @("R2","Outside-Desktop","DMZ-Server","FTD1","FMC1","FTD-Client")
   nac     = @("R1","SW1","Client","DMZ-Server","ISE1")
   all     = @("FW1-ASAv","R1","R2","SW1","Client","Outside-Desktop","DMZ-Server","FTD1","FMC1","FTD-Client","ISE1") }
@@ -210,7 +211,7 @@ function Push-Ftd($port){
     @('(?i)IPv4 address for the management','192.168.100.12'), @('(?i)netmask','255.255.255.0'),
     @('(?i)default gateway','192.168.100.1'), @('(?i)hostname','ftd1'),
     @('(?i)DNS servers','192.168.100.33'), @('(?i)search domains','lab.local'),
-    @('(?i)Manage the device locally','no'))
+    @('(?i)Manage the device locally',$(if($hostGB -lt 56){'yes'}else{'no'})))
   $end = (Get-Date).AddMinutes(20); $done = $false; $b = New-Object byte[] 4096
   while ((Get-Date) -lt $end -and -not $done) {
     Start-Sleep -Milliseconds 800
@@ -221,7 +222,8 @@ function Push-Ftd($port){
     if (-not $hit -and $buf.Length -gt 6000) { $buf = $buf.Substring($buf.Length-1000) }
     if (-not $hit) { $t=[Text.Encoding]::ASCII.GetBytes("`r"); $s.Write($t,0,$t.Length) }
   }
-  if ($done) { $t=[Text.Encoding]::ASCII.GetBytes("configure manager add 192.168.100.13 cisco123`r"); $s.Write($t,0,$t.Length); Start-Sleep 3; Say "FTD1 configured (mgmt .12, manager = FMC .13, key cisco123)" }
+  if ($done -and $hostGB -ge 56) { $t=[Text.Encoding]::ASCII.GetBytes("configure manager add 192.168.100.13 cisco123`r"); $s.Write($t,0,$t.Length); Start-Sleep 3; Say "FTD1 configured (mgmt .12, manager = FMC .13, key cisco123)" }
+  elseif ($done) { Say "FTD1 configured for LOCAL management (FDM): https://192.168.100.12  (admin / Cisco123!)" }
   else { Warn "FTD1 wizard not completed automatically - finish it by hand (WINDOWS-GUIDE.md)" }
   $c.Close()
 }

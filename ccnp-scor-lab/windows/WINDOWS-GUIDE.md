@@ -1,5 +1,7 @@
 # SCOR lab on a Windows (Azure) VM — zero touch (GNS3 + QEMU/WHPX)
 
+## (Newest steps: see START-HERE.md)
+
 ## Before
 1. Portal: resize the VM to **Standard_D8s_v5** (8 vCPU/32 GB; Windows is kept) and expand the OS disk to **>=256 GB** (then Disk Management > Extend C:). A 2-core/100 GB VM will not work.
 2. Put your Cisco images in `C:\images` named: `asav-9.20.qcow2`, `vios-15.9.qcow2`, `viosl2-15.2.qcow2` `ftd-7.4.1.qcow2`, `fmc-7.4.1.qcow2`, `ise-3.2.qcow2` (optional `wsa-15.0.qcow2`). Images you do not have are skipped.
