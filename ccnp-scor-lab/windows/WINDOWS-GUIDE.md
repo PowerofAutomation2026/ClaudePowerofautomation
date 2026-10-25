@@ -1,27 +1,20 @@
-# SCOR lab ON a Windows (Azure) VM — native, no Linux VM
+# SCOR lab on a Windows (Azure) VM — zero touch (GNS3 + QEMU/WHPX)
 
-## Reality check (read first)
-- Azure allows ONE level of virtualization inside a VM. This design runs Cisco images directly on Windows via **QEMU + Windows Hypervisor Platform (WHPX)**, so it fits. Running Ubuntu/EVE-NG inside Windows would be two levels deep and is not supported.
-- WHPX is slower and less proven with Cisco images than Linux/KVM. **Not tested by me**; if an image won't boot, say which and I'll tune the template.
-- Your VM (2 vCPU / 32 GB / 100 GB) is too small. **Resize it in the Portal** (VM > Size): `Standard_D8s_v5` (8 vCPU/32 GB), and expand the OS disk to 256 GB (VM stopped, then Disk Management > Extend C:). Windows is not erased.
-- Realistic here: ASAv, IOSv routers, IOSvL2 switch, WSA, and ISE (alone, 16 GB). **FTDv+FMCv (36 GB together) do not fit in 32 GB**: use the 16 vCPU / 64 GB size (`D16s_v5`) for those.
+## Before
+1. Portal: resize the VM to **Standard_D8s_v5** (8 vCPU/32 GB; Windows is kept) and expand the OS disk to **>=256 GB** (then Disk Management > Extend C:). A 2-core/100 GB VM will not work.
+2. Put your Cisco images in `C:\images` named: `asav-9.20.qcow2`, `vios-15.9.qcow2`, `viosl2-15.2.qcow2` (optional: `wsa-15.0.qcow2`, `ise-3.2.qcow2`). Images you do not have are skipped. FTD/FMC do not fit in 32 GB.
 
-## Install (admin PowerShell on the Windows VM)
-```powershell
-Expand-Archive ccnp-scor-lab.zip -DestinationPath C:\ ; cd C:\ccnp-scor-lab\windows
-powershell -ExecutionPolicy Bypass -File .\Install-Windows-Lab.ps1 -Images C:\images
-# first run enables Windows Hypervisor Platform -> reboot -> run the same command again
-```
-It installs GNS3 (the GUI), QEMU, Firefox, Wireshark, PuTTY, WinSCP and registers your Cisco images as devices in GNS3.
-Put your images in `C:\images` first, named like `asav-9.20.qcow2`, `vios-15.9.qcow2`, `viosl2-15.2.qcow2`, `ise-3.2.qcow2`, `wsa-15.0.qcow2`.
+## Install (one command; run twice - the first run asks for a reboot)
+Right-click `windows\Deploy-Windows.cmd` > Run as administrator, or in admin PowerShell:
+`powershell -ExecutionPolicy Bypass -File .\Install-Windows-Lab.ps1 -Images C:\images`
+It enables Windows Hypervisor Platform + Hyper-V, installs QEMU/GNS3/Firefox/Wireshark/PuTTY, creates the LabMgmt network (Windows = 192.168.100.1),
+builds the Ubuntu desktop image (~40 min), creates the **SCOR-Core** project in GNS3 with all devices and cables, starts it, and pushes day-0 configs.
 
-## Management network = the Windows VM itself (it IS your admin desktop)
-1. Create a loopback NIC: run `hdwwiz` > Install hardware manually > Network adapters > Microsoft > **Microsoft KM-TEST Loopback Adapter**. Rename it `LabMgmt`, set IP **192.168.100.1 / 255.255.255.0**.
-2. In GNS3: drag a **Cloud** node, Configure > Ethernet interfaces > tick **LabMgmt**. Add an **Ethernet switch**; connect Cloud -> switch, and every device's management port (Mgmt0/0 of ASAv, Gi0/0 of routers, ISE Gi0, WSA M1) -> that switch.
-3. Give devices the IPs in `labs/mgmt-guide.md` (192.168.100.11 ASAv, .14 ISE, .15 WSA, .21/.22/.23 R1/R2/SW1; gateway 192.168.100.1; **skip the 'JumpBox' - Windows is your JumpBox**).
-4. Open **Firefox on the Windows VM** and browse `https://192.168.100.11/admin` (ASDM), `https://192.168.100.14/admin` (ISE), `https://192.168.100.15:8443` (WSA), `https://192.168.100.21` (R1) ... Logins: `labs/mgmt-guide.md` (also copied to your Desktop).
-   Windows firewall: allow the LabMgmt network as Private. ASDM Java launcher works on Windows (download from the ASA's web page).
+## Use
+- GNS3 desktop app: File > Open project > **SCOR-Core** (start/stop devices, consoles).
+- Device GUIs: Firefox on this Windows VM -> URLs in `labs/windows-test-plan.md` (also on your Desktop).
+- Test PCs: `mstsc` -> 192.168.100.31 (Client), .32 (Outside-Desktop), .33 (DMZ-Server) — full XFCE desktop, login `lab` / `Cisco123!`.
+- Create firewall policy in ASDM/CLI and test from Client / Outside-Desktop: `labs/windows-test-plan.md`.
 
-## Topology
-Same as the SCOR-Core design (`labs/00-topology.md`): ASAv in the middle with OUTSIDE / INSIDE / DMZ, R1+SW1 inside, R2 outside. GNS3 has no import for the EVE file, so build by drag-and-drop (10 minutes) - or ask me for a ready `.gns3project`.
-Test machines: the Windows VM itself (via a second loopback "LabInside" NIC bridged by another Cloud node) or add GNS3's Docker/Ubuntu appliance from the GNS3 marketplace.
+## Honest limits
+Not tested on a real Windows VM (I cannot run PowerShell/GNS3 here). Likely first-run snags: winget package IDs, the GNS3 silent install, Cloud-node binding to `vEthernet (LabMgmt)`, WHPX booting a particular Cisco image, console-prompt timing in the config push. Send me the error text and I will fix it.
