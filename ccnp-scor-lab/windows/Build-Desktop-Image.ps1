@@ -19,12 +19,17 @@ case $ROLE in
   client)  MI=192.168.100.31; DI=10.1.10.10/24;    GW=10.1.10.1;;
   outside) MI=192.168.100.32; DI=198.51.100.10/24; GW=198.51.100.1;;
   dmz)     MI=192.168.100.33; DI=172.16.1.10/24;   GW=172.16.1.1;;
+  ftdclient) MI=192.168.100.34; DI=10.2.1.10/24;   GW=10.2.1.1;;
   *) exit 0;;
 esac
 ip link set $M up; ip addr flush dev $M; ip addr add $MI/24 dev $M
 ip link set $D up; ip addr flush dev $D; ip addr add $DI dev $D; ip route replace default via $GW dev $D
 hostnamectl set-hostname $ROLE
 echo "<h1>$ROLE web server</h1>" > /var/www/html/index.html
+if [ "$ROLE" = dmz ]; then   # DNS for the lab (ISE/FMC setup wizards need a resolvable name)
+  printf 'listen-address=192.168.100.33\nbind-interfaces\ndomain=lab.local\naddress=/ise1.lab.local/192.168.100.14\naddress=/fmc1.lab.local/192.168.100.13\naddress=/ftd1.lab.local/192.168.100.12\naddress=/asa1.lab.local/192.168.100.11\n' > /etc/dnsmasq.d/lab.conf
+  systemctl restart dnsmasq
+fi
 '@
 $ind = { param($t) ($t -replace "`r","" -split "`n" | % { "      $_" }) -join "`n" }
 $ud = @"
@@ -40,7 +45,7 @@ chpasswd:
   expire: false
   list: ["lab:Cisco123!", "root:Cisco123!"]
 package_update: true
-packages: [xubuntu-core, lightdm, firefox, xrdp, nginx, nmap, curl, wget, iperf3, hping3, netcat-openbsd, tcpdump, tshark, dnsutils, traceroute, openssh-server, vim, net-tools]
+packages: [xubuntu-core, lightdm, firefox, xrdp, nginx, nmap, curl, wget, iperf3, hping3, netcat-openbsd, tcpdump, tshark, dnsutils, traceroute, openssh-server, vim, net-tools, dnsmasq]
 write_files:
   - path: /usr/local/sbin/labnet.sh
     permissions: '0755'
@@ -66,6 +71,7 @@ runcmd:
   - echo xfce4-session > /home/lab/.xsession
   - chown lab:lab /home/lab/.xsession
   - adduser xrdp ssl-cert
+  - systemctl disable dnsmasq
   - systemctl enable xrdp nginx labnet.service
   - rm -f /etc/netplan/*.yaml
   - touch /etc/cloud/cloud-init.disabled
