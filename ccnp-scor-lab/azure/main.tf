@@ -6,7 +6,7 @@ terraform {
 provider "azurerm" { features {} }
 
 variable "location"   { default = "eastus" }
-variable "my_ip_cidr" { description = "Your public IP as x.x.x.x/32 (only this can reach the lab)" }
+variable "my_ip_cidr" { description = "Allowed public IP(s) as x.x.x.x/32, comma-separated (only these can reach the lab)" }
 variable "vm_size"    { default = "Standard_D16s_v5" } # nested virtualization supported (KVM for Cisco images)
 variable "admin_user" { default = "labadmin" }
 variable "ssh_pubkey_path" { default = "~/.ssh/id_rsa.pub" }
@@ -47,7 +47,7 @@ resource "azurerm_network_security_group" "nsg" {
     protocol                   = "Tcp"
     source_port_range          = "*"
     destination_port_ranges    = ["22", "80", "443", "32768-35000"] # SSH, EVE web GUI, node consoles
-    source_address_prefix      = var.my_ip_cidr
+    source_address_prefixes    = split(",", var.my_ip_cidr)
     destination_address_prefix = "*"
   }
 }

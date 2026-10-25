@@ -21,7 +21,9 @@ need_tf(){
   (cd $S && unzip -qo tf.zip terraform && rm tf.zip); export PATH="$PWD/$S:$PATH"
 }
 need_key(){ [ -f $S/id_ed25519 ] || { ssh-keygen -t ed25519 -N "" -f $S/id_ed25519 -q; ok "SSH key generated"; }; }
-myip(){ curl -fsS https://api.ipify.org || die "Cannot detect public IP"; }
+# MY_IP="1.2.3.4" = your home/office IP (needed when deploying from Azure Cloud Shell). Both IPs get access.
+myip(){ local d; d=$(curl -fsS https://api.ipify.org) || die "Cannot detect public IP"
+  local out="$d/32"; for x in ${MY_IP:-}; do out="$out,$x/32"; done; echo "$out"; }
 cloud(){ cat $S/cloud 2>/dev/null || die "Nothing deployed yet. Run: ./deploy.sh up azure|aws"; }
 
 auth(){
@@ -41,11 +43,11 @@ up(){
   need_tf; need_key; auth "$c"
   [ -f $S/eve_pass ] || openssl rand -base64 15 | tr -d '/+=' > $S/eve_pass
   PASS=$(cat $S/eve_pass); IP=$(myip); echo "$c" > $S/cloud
-  say "Locking lab to your IP: $IP"
+  say "Locking lab to: $IP"
   [ "$c" = aws ] && warn_metal
   terraform -chdir=$c init -input=false -upgrade >/dev/null
   terraform -chdir=$c apply -auto-approve -input=false \
-     -var "my_ip_cidr=$IP/32" -var "ssh_pubkey_path=$PWD/$S/id_ed25519.pub"
+     -var "my_ip_cidr=$IP" -var "ssh_pubkey_path=$PWD/$S/id_ed25519.pub"
   EVE=$(terraform -chdir=$c output -raw eve_ip); echo "$EVE" > $S/ip
   SSHO="-i $S/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR"
   USR=labadmin; [ "$c" = aws ] && USR=ubuntu; echo "$USR" > $S/user
@@ -76,6 +78,9 @@ images(){  # folder of qcow2 named <eve-folder>.qcow2, e.g. asav-9.20.qcow2 -> /
   done
   ssh $SSHO $USR@$EVE "sudo /opt/unetlab/wrappers/unl_wrapper -a fixpermissions" && ok "Images ready"
 }
+fetch(){ local url=${1:?url} n=${2:?eve-folder-name} EVE USR; EVE=$(cat $S/ip); USR=$(cat $S/user)
+  SSHO="-i $S/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+  ssh $SSHO $USR@$EVE "sudo mkdir -p /opt/unetlab/addons/qemu/$n && sudo wget -q --show-progress -O /opt/unetlab/addons/qemu/$n/virtioa.qcow2 '$url' && sudo /opt/unetlab/wrappers/unl_wrapper -a fixpermissions" && ok "Image $n downloaded to the lab server"; }
 desktop(){ local EVE USR; EVE=$(cat $S/ip); USR=$(cat $S/user)
   SSHO="-i $S/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
   scp $SSHO scripts/build-ubuntu-desktop.sh $USR@$EVE:/tmp/ >/dev/null
@@ -97,8 +102,8 @@ sshc(){ exec ssh -i $S/id_ed25519 -o StrictHostKeyChecking=no $(cat $S/user)@$(c
 
 banner
 case "${1:-menu}" in
-  up) shift; up "$@";; status) status;; stop) stop;; start) start;; down) down;; ssh) sshc;; desktop) desktop;; images) images "${2:-}";;
+  up) shift; up "$@";; status) status;; stop) stop;; start) start;; down) down;; ssh) sshc;; desktop) desktop;; fetch) fetch "${2:-}" "${3:-}";; images) images "${2:-}";;
   menu) echo "1) Deploy on Azure (recommended)  2) Deploy on AWS  3) Status  4) Stop  5) Start  6) Destroy  7) Upload images"
         read -rp "> " m; case $m in 1) up azure;; 2) up aws;; 3) status;; 4) stop;; 5) start;; 6) down;; 7) read -rp "Folder: " f; images "$f";; esac;;
-  *) die "Usage: $0 [up azure|aws [--images DIR] | status | stop | start | down | ssh | images DIR]";;
+  *) die "Usage: $0 [up azure|aws [--images DIR] | status | stop | start | down | ssh | images DIR | fetch URL FOLDER]";;
 esac
