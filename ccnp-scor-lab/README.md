@@ -1,5 +1,7 @@
 # CCNP Security 350-701 SCOR — Real-Device Cloud Lab (AWS + Azure)
 
+> **No Cisco images?** Use the browser simulator in [`simulator/`](simulator/README.md): double-click `simulator\Run-Simulator.cmd`.
+
 Real Cisco software images (IOSv, ASAv, FTDv/FMCv, ISE, C8000V…) running in **EVE-NG's web GUI**, hosted on your own Azure or AWS account. No Packet Tracer.
 
 ## What I can and can't do
