@@ -17,8 +17,7 @@ export class GuardError extends Error { constructor(m: string) { super(m); this.
 
 const MAX_PER_MIN = 400
 const COOLDOWN_MS = 30_000
-const HEAP_LIMIT = 700_000_000   // bytes of used JS heap (Chrome): hard stop; the browser kills a tab around 2-4 GB
-const HEAP_SOFT = 420_000_000    // soft: forget caches quietly
+const HARD = 0.85, SOFT = 0.6, OK = 0.5   // fractions of the browser's own JS heap limit (inside the Power Apps player the number covers the whole page, host included)
 const times: number[] = []
 
 export const getGuard = () => state
@@ -49,9 +48,12 @@ export function startGuard() {
   if (started) return; started = true
   // heap watchdog (performance.memory exists in Chromium browsers only)
   setInterval(() => {
-    const m = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory
-    if (m && m.usedJSHeapSize > HEAP_SOFT && m.usedJSHeapSize <= HEAP_LIMIT) dropHooks.forEach((f) => { try { f() } catch { /* best effort */ } })
-    if (m && m.usedJSHeapSize > HEAP_LIMIT) trip('memory', 'The app is using a lot of browser memory, so background updates were stopped and caches cleared to keep it from crashing. Reload the page to continue.')
+    const m = (performance as unknown as { memory?: { usedJSHeapSize: number; jsHeapSizeLimit?: number } }).memory
+    if (!m || !m.jsHeapSizeLimit) return   // no reliable limit to compare with: do nothing rather than guess
+    const used = m.usedJSHeapSize / m.jsHeapSizeLimit
+    if (state.tripped && state.reason === 'memory' && used < OK) { resume(); return }   // pressure is gone: carry on by itself
+    if (used > HARD) trip('memory', 'The browser is close to its memory limit, so background updates were stopped and caches cleared to keep the app from crashing. Press “Continue” — if it happens again, close other tabs.')
+    else if (used > SOFT) dropHooks.forEach((f) => { try { f() } catch { /* best effort */ } })
   }, 5000)
   // crash detection: a heartbeat per tab that is removed on a clean unload
   try {
@@ -60,7 +62,9 @@ export function startGuard() {
     const prev = Number(localStorage.getItem(key) ?? 0)
     if (prev && Date.now() - prev < 90_000) { state = { ...state, safe: true }; localStorage.setItem('spx.safe', String(Date.now())) }
     const beat = () => localStorage.setItem(key, String(Date.now()))
-    beat(); setInterval(beat, 5000)
+    beat(); setInterval(() => { if (!document.hidden) beat() }, 5000)
+    // a page the host hides / re-launches is not a crash
+    document.addEventListener('visibilitychange', () => { if (document.hidden) { try { localStorage.removeItem(key) } catch { /* ignore */ } } else beat() })
     const clean = () => { try { localStorage.removeItem(key) } catch { /* ignore */ } }
     addEventListener('pagehide', clean); addEventListener('beforeunload', clean)
     // opening many tabs would leave stale keys: drop the ones older than a day

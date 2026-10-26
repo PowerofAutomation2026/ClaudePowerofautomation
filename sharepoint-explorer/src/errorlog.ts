@@ -1,4 +1,5 @@
 /** A small on-device error log + a "white page" guard. Nothing is sent anywhere. */
+import { embedded, softReset } from './reset'
 const KEY = 'spx.errors'
 export interface LoggedError { at: string; kind: string; msg: string; stack?: string }
 
@@ -27,7 +28,7 @@ export function installErrorHandlers() {
       const d = document.createElement('div'); d.id = 'spx-blank'; d.setAttribute('role', 'alert')
       d.style.cssText = 'position:fixed;inset:0;display:grid;place-items:center;background:#0b1530;color:#fff;font:16px system-ui,sans-serif;z-index:99999;padding:24px;text-align:center'
       d.innerHTML = '<div style="max-width:560px"><h2 style="margin:0 0 8px">The app view went blank</h2><p style="opacity:.85">Your data is safe. Reload to continue.' + (last ? '</p><p style="opacity:.7;font-size:13px;overflow-wrap:anywhere">Last error: ' + last.msg.replace(/[<>&]/g, '') + '</p><p>' : ' ') + '<button id="spx-reload" style="padding:10px 18px;border-radius:10px;border:0;background:#f58220;color:#fff;font-weight:700;cursor:pointer">Reload</button></p></div>'
-      document.body.appendChild(d); document.getElementById('spx-reload')?.addEventListener('click', () => location.reload())
+      document.body.appendChild(d); document.getElementById('spx-reload')?.addEventListener('click', () => { d.remove(); softReset(); setTimeout(() => { if (!(document.getElementById('root')?.textContent ?? '').trim() && !embedded()) location.reload() }, 2500) })
     }
     if (!empty && existing) existing.remove()
   }, 2000)

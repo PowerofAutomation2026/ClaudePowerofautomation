@@ -108,7 +108,7 @@ async function exec(opName: string, params: Record<string, unknown>, signal?: Ab
     const e = res?.error
     const status = Number(e?.status ?? e?.statusCode ?? res?.status ?? 0)
     const text = String(e?.message ?? (typeof e === 'string' ? e : JSON.stringify(e ?? 'Connector call failed')))
-    if ((status === 429 || status === 503 || (idempotent && (status === 504 || /throttl|too many requests|timed? ?out/i.test(text)))) && attempt < 5) {   // never re-send a write after a timeout: it may have been applied
+    if ((status === 429 || status === 503 || (idempotent && (status === 504 || /throttl|too many requests|timed? ?out/i.test(text)))) && attempt < (/did not answer in time/.test(text) ? 1 : 5)) {   // when Power Apps itself stops answering, do not wait minutes on retries   // never re-send a write after a timeout: it may have been applied
       await sleep(Math.min(20_000, 800 * 2 ** attempt) + Math.random() * 400); attempt++; continue
     }
     let pretty = text

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { autoReason, settling, escalate as escalateReq, needsEscalation, canDecide, canSubmitNow, delegate as delegateReq, cancel as cancelReq, decide as decideReq, submit as submitReq, type Me } from './approval'
 import { backgroundAllowed } from './guard'
-import { clearApprovals, putApproval, setApprovals } from './approvalStore'
+import { validApproval, clearApprovals, putApproval, setApprovals } from './approvalStore'
 import type { Engine } from './engine'
 import { emptyQuery } from './query'
 import type { Access, Approver, ApprovalFlow, ApprovalReq, Row } from './types'
@@ -41,7 +41,7 @@ export function useApproval(engine: Engine | null, me: Me, access: Access, mayDe
     setLoading(true)
     try {
       const f = await backend.loadApprovalFlow(id); setFlow(f)
-      const l = f?.enabled ? await backend.listApprovals(id) : []
+      const l = f?.enabled ? (await backend.listApprovals(id)).filter(validApproval) : []
       setReqs(l); setApprovals(id, l)
     } catch { /* approvals are optional: a settings-list problem must never break the data view */ } finally { setLoading(false) }
   }, [backend, id])

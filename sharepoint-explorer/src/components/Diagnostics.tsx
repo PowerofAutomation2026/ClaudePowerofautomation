@@ -1,4 +1,6 @@
 import { clearErrors, readErrors } from '../errorlog'
+import { getGuard } from '../guard'
+import { softReset } from '../reset'
 import { useEffect, useState } from 'react'
 import { Icon, Modal } from './ui'
 
@@ -49,7 +51,7 @@ export function StartFailure({ error }: { error: string }) {
         <p className="muted">Inside Power Apps this app only shows <b>live</b> data. It never switches to sample data on its own. Details below tell the owner what to fix.</p>
         <DiagnosticsPanel />
         <div className="row" style={{ marginTop: 14 }}>
-          <button className="btn primary" onClick={() => location.reload()}><Icon n="refresh" size={15} />Retry</button>
+          <button className="btn primary" onClick={() => softReset()}><Icon n="refresh" size={15} />Retry</button>
           {(() => { try { return window.self === window.top } catch { return false } })() && <a className="btn" href={`${location.pathname}?demo=1`}>Look at the sample data instead</a>}
         </div>
       </div>
@@ -59,10 +61,13 @@ export function StartFailure({ error }: { error: string }) {
 
 function RecentErrors() {
   const [list, setList] = useState(readErrors())
-  if (!list.length) return null
+  const g = getGuard()
+  const m = (performance as unknown as { memory?: { usedJSHeapSize: number; jsHeapSizeLimit?: number } }).memory
+  const mem = m ? `${Math.round(m.usedJSHeapSize / 1048576)} MB of ${m.jsHeapSizeLimit ? Math.round(m.jsHeapSizeLimit / 1048576) : '?'} MB` : 'not reported by this browser'
   return (
     <details style={{ marginTop: 10 }}>
-      <summary className="small"><b>Recent errors on this device ({list.length})</b></summary>
+      <summary className="small"><b>Stability: memory {mem} · {g.tripped ? `paused (${g.reason})` : g.safe ? 'safe mode' : 'normal'} · {list.length} recent error{list.length === 1 ? '' : 's'}</b></summary>
+      {!list.length && <p className="muted small">No errors recorded on this device.</p>}
       <ul className="perm-list">{list.slice(0, 8).map((e, i) => <li key={i} style={{ alignItems: 'flex-start' }}><span className="pill bad">{e.kind}</span><div style={{ flex: 1, minWidth: 0 }}><div className="small" style={{ overflowWrap: 'anywhere' }}>{e.msg}</div><div className="muted small">{e.at}</div></div></li>)}</ul>
       <button className="btn sm" onClick={() => { clearErrors(); setList([]) }}>Clear</button>
     </details>

@@ -11,6 +11,7 @@ import { AssistantPanel, AssistantSetup, inScope } from './components/Assistant'
 import { ApprovalsDialog } from './components/Approvals'
 import { useApproval } from './useApproval'
 import { backgroundAllowed, resume, useGuard } from './guard'
+import { softReset } from './reset'
 import { copyText, openTab as openWindow } from './mail'
 import { EmailDialog } from './components/EmailDialog'
 import { downloadUrl, itemUrl, openShareDialog } from './components/Drawer'
@@ -441,7 +442,7 @@ function Shell() {
           <div className={`banner ${guardState.tripped ? 'bad' : 'info'}`} role="alert" style={{ marginBottom: 10 }}>
             <Icon n="info" />
             <div style={{ flex: 1 }}>{guardState.tripped ? guardState.msg : <><b>Safe mode.</b> This page closed unexpectedly last time, so live updates, automatic approvals and background scans are paused. Everything else works normally.</>}</div>
-            <button className="btn sm" onClick={() => (guardState.reason === 'memory' ? location.reload() : resume())}>{guardState.reason === 'memory' ? 'Reload' : guardState.tripped ? 'Resume now' : 'Turn background features on'}</button>
+            <button className="btn sm" onClick={() => { resume(); if (guardState.reason === 'memory') softReset() }}>{guardState.tripped ? 'Continue' : 'Turn background features on'}</button>
           </div>
         )}
         <h1 className="sr-only">{src ? `${src.label} — ${tab}` : 'SharePoint Explorer'}</h1>
