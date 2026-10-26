@@ -1,3 +1,4 @@
+import { clearErrors, readErrors } from '../errorlog'
 import { useEffect, useState } from 'react'
 import { Icon, Modal } from './ui'
 
@@ -21,6 +22,7 @@ export function DiagnosticsPanel({ site }: { site?: string }) {
           ))}
         </ul>
       )}
+      <RecentErrors />
       <form className="row" style={{ marginTop: 10, alignItems: 'end' }} onSubmit={(e) => { e.preventDefault(); run(url.trim()) }}>
         <label className="field" style={{ flex: '1 1 300px' }}>Test a SharePoint site address<input className="input" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://contoso.sharepoint.com/sites/Finance" /></label>
         <button className="btn">Run checks again</button>
@@ -52,5 +54,17 @@ export function StartFailure({ error }: { error: string }) {
         </div>
       </div>
     </main>
+  )
+}
+
+function RecentErrors() {
+  const [list, setList] = useState(readErrors())
+  if (!list.length) return null
+  return (
+    <details style={{ marginTop: 10 }}>
+      <summary className="small"><b>Recent errors on this device ({list.length})</b></summary>
+      <ul className="perm-list">{list.slice(0, 8).map((e, i) => <li key={i} style={{ alignItems: 'flex-start' }}><span className="pill bad">{e.kind}</span><div style={{ flex: 1, minWidth: 0 }}><div className="small" style={{ overflowWrap: 'anywhere' }}>{e.msg}</div><div className="muted small">{e.at}</div></div></li>)}</ul>
+      <button className="btn sm" onClick={() => { clearErrors(); setList([]) }}>Clear</button>
+    </details>
   )
 }
