@@ -1,6 +1,7 @@
 import { Component, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
+import { startGuard } from './guard'
 import './styles.css'
 
 class Boundary extends Component<{ children: ReactNode }, { err: Error | null }> {
@@ -20,4 +21,5 @@ class Boundary extends Component<{ children: ReactNode }, { err: Error | null }>
   }
 }
 
+startGuard()
 createRoot(document.getElementById('root')!).render(<Boundary><App /></Boundary>)

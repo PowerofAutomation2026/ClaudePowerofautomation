@@ -13,7 +13,7 @@ import { clauseToOData, emptyQuery, isDefaultQuery, isFolderMode, titleField, ma
 export const LOCAL_MAX = 25_000
 export const BULK = 5_000
 export const PAGE = 250
-export const MAX_ROWS = 150_000
+export const MAX_ROWS = 60_000   // rows kept in memory in server mode; more than this in a browser tab inside the Power Apps player is not safe
 /** rows the grid may walk past on its own (filtered out client-side) before it stops and asks the user */
 export const AUTO_SCAN = 10_000
 

@@ -191,6 +191,8 @@ export function AssistantSetup({ engine, cfg, who, onSave, onClose }: { engine: 
 }
 
 function AssistantEditor({ engine, a, onSave, onClose }: { engine: Engine; a: Assistant; onSave: (a: Assistant) => void; onClose: () => void }) {
+  const [envBase, setEnvBase] = useState('')
+  useEffect(() => { void engine.backend.envId().then((e) => { const h = e.replace(/-/g, '').toLowerCase(); setEnvBase(`https://${h.slice(0, -2)}.${h.slice(-2)}.environment.api.powerplatform.com`) }).catch(() => {}) }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const [d, setD] = useState<Assistant>(a)
   const [test, setTest] = useState<{ ok: boolean; text: string } | null>(null)
   const [testing, setTesting] = useState(false)
@@ -250,6 +252,7 @@ function AssistantEditor({ engine, a, onSave, onClose }: { engine: Engine; a: As
         {d.kind === 'entra-http' ? <>
           <div className="banner info small" role="note"><Icon n="info" /><div style={{ flex: 1 }}>Works with <b>new and classic</b> Copilot Studio agents. The agent must be <b>published</b> and set to <b>Authenticate with Microsoft</b>. Needs the “HTTP with Microsoft Entra ID” connector (see the notes in Setup). Each user approves that connection once.</div></div>
           <label className="small">Environment ID <span className="muted">(Copilot Studio → Settings → Advanced → Metadata → Environment ID; this app’s own environment is filled in)</span><input className="input" value={d.environmentId ?? ''} onChange={(e) => set({ environmentId: e.target.value })} placeholder="e4c5fd77-2cb4-e3d1-8488-75cd3bd8521b" autoComplete="off" /></label>
+          {!engine.backend.agentConnector('entra-http') && <div className="banner warn small" role="note"><Icon n="info" /><div style={{ flex: 1 }}><b>One-time setup needed before this can work:</b> the “HTTP with Microsoft Entra ID” connection is not attached to this app yet.<ol style={{ margin: '4px 0 0', paddingLeft: 18 }}><li>Power Apps → Connections → New connection → <b>HTTP with Microsoft Entra ID (preauthorized)</b>, Base Resource URL <code style={{ overflowWrap: 'anywhere' }}>{envBase || 'https://<environment host>'}</code>, Resource URI <code>https://api.powerplatform.com</code>.</li><li>Run <code>Deploy.cmd</code> and answer <b>2</b> to the AI question (or <code>Deploy.cmd -AddEntraHttp</code>), then reopen the app.</li></ol></div></div>}
           {d.environmentId && !envOk && <div className="small" style={{ color: 'var(--bad)' }}>That is not a valid environment ID (a GUID).</div>}
           <label className="small">Agent schema name <span className="muted">(same Metadata page → Schema name; case-sensitive)</span><input className="input" value={d.agent ?? ''} onChange={(e) => set({ agent: e.target.value })} placeholder="cr56c_spocode" autoComplete="off" /></label>
           <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>

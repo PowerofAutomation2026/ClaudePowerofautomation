@@ -208,3 +208,11 @@ Agents built in the newer Copilot Studio experience (Skills / Connected agents, 
 ### Crash fix (v1.9.9)
 
 A filter the server could not apply (multi-value people/lookup columns, relative dates from a colour-rule legend chip or a dashboard "Show items" button) made the grid page through the whole list automatically — thousands of requests and gigabytes of data — until the browser tab ran out of memory. The grid now stops after 10,000 non-matching rows and shows a "scan further" button, applies only the filters SharePoint could not apply, and resolves relative dates properly.
+
+### Production safety nets (v1.9.10)
+
+- **Request circuit breaker:** more than 600 SharePoint calls in a minute pauses further calls for 30 seconds and shows a banner (a runaway loop can no longer hammer SharePoint or fill the tab with data).
+- **Heap watchdog:** if the page uses more than ~1.2 GB of browser memory, caches are dropped, background work stops and a banner asks you to reload — instead of the tab crashing.
+- **Safe mode:** if the previous session of a tab ended without a clean close (crash / out of memory), the next one starts with live pulse, automatic approvals and background scans paused, with a one-click "Turn background features on".
+- Background work (live pulse, auto-approval checks, dashboard refresh) only runs while the tab is visible; server-mode lists keep at most 60,000 rows in memory.
+- **Deploy.cmd** now asks which AI assistant support you want: [1] classic Copilot Studio agents, [2] new-experience agents (guides you through the one extra connection, printing the exact Base Resource URL and Resource URI), [3] both.

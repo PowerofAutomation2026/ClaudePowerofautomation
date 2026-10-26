@@ -10,6 +10,7 @@ import { BulkDialog, SearchEverywhere } from './components/Tools'
 import { AssistantPanel, AssistantSetup, inScope } from './components/Assistant'
 import { ApprovalsDialog } from './components/Approvals'
 import { useApproval } from './useApproval'
+import { backgroundAllowed, resume, useGuard } from './guard'
 import { copyText, openTab as openWindow } from './mail'
 import { EmailDialog } from './components/EmailDialog'
 import { downloadUrl, itemUrl, openShareDialog } from './components/Drawer'
@@ -88,6 +89,7 @@ function Shell() {
   const [open, setOpen] = useState<Row | null>(null)
   const [palette, setPalette] = useState(false)
   const [exp, setExp] = useState<ExportFormat | null>(null)
+  const guardState = useGuard()
   const [live, setLive] = useState<boolean>(lsGet('spx.live', false))
   const searchRef = useRef<HTMLInputElement>(null)
   const [access, setAccess] = useState<Access>({ role: 'reader', canAdd: false, canEdit: false, canDelete: false, canManage: false, groups: [], isSiteAdmin: false, reason: 'Checking your permissions…' })
@@ -187,10 +189,10 @@ function Shell() {
   /* ------------------------------------------------ live pulse */
   useEffect(() => {
     lsSet('spx.live', live)
-    if (!live || !engine) return
+    if (!live || !engine || guardState.safe) return
     let stop = false
     const tick = async () => {
-      if (stop || document.hidden) return
+      if (stop || !backgroundAllowed()) return
       const n = await engine.poll()
       if (n > 0) toast('info', `${n} item${n === 1 ? '' : 's'} added or changed`)
     }
@@ -435,6 +437,13 @@ function Shell() {
       </header>
 
       <main id="main" tabIndex={-1}>
+        {(guardState.tripped || guardState.safe) && (
+          <div className={`banner ${guardState.tripped ? 'bad' : 'info'}`} role="alert" style={{ marginBottom: 10 }}>
+            <Icon n="info" />
+            <div style={{ flex: 1 }}>{guardState.tripped ? guardState.msg : <><b>Safe mode.</b> This page closed unexpectedly last time, so live updates, automatic approvals and background scans are paused. Everything else works normally.</>}</div>
+            <button className="btn sm" onClick={() => (guardState.reason === 'memory' ? location.reload() : resume())}>{guardState.reason === 'memory' ? 'Reload' : guardState.tripped ? 'Resume now' : 'Turn background features on'}</button>
+          </div>
+        )}
         <h1 className="sr-only">{src ? `${src.label} — ${tab}` : 'SharePoint Explorer'}</h1>
         <div aria-live="polite" className="sr-only">{engine ? `${fmt(engine.rows.length)} rows shown` : ''}</div>
         {srcErr && <div className="banner bad" role="alert"><Icon n="info" /><div><b>Could not open the data source.</b> {srcErr}</div></div>}

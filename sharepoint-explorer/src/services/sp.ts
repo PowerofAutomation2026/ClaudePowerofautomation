@@ -5,6 +5,7 @@
  */
 import { getClient } from '@microsoft/power-apps/data'
 import { getContext } from '@microsoft/power-apps/app'
+import { guardRequest } from '../guard'
 import baked from '../appconfig.json'
 import type { Access, AgentReply, AppConfig, ApprovalFlow, AssistantConfig, ApprovalReq, Attachment, DashConfig, FormatRule, Backend, PermInfo, PermTarget, Principal, RoleAssign, RoleDef, VersionInfo, ViewDef, FieldKind, Page, Query, Row, SourceConfig, SpField, SpList, SpSite } from '../types'
 import { buildFilter, parseSearch, propOf, restName, titleField, noExpand } from '../query'
@@ -100,6 +101,7 @@ async function exec(opName: string, params: Record<string, unknown>, signal?: Ab
   let attempt = 0
   for (;;) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+    guardRequest()   // circuit breaker against runaway request loops
     const res: any = await slot(() => sdk().executeAsync({ connectorOperation: { tableName: ds, operationName: opName, parameters: params } } as any))
     if (res?.success) return res.data
     const e = res?.error

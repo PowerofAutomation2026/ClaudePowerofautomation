@@ -305,12 +305,36 @@ try {
   # optional Copilot Studio agent chat: decide first (connection / question), add it before SharePoint
   $csApi = 'shared_microsoftcopilotstudio'; $csConn = $null; $wantCs = $false; $csSchemaText = $null
   $wcApi = 'shared_webcontents'; $wcConn = $null; $wantWc = $false; $wcSchemaText = $null
-  try { $wcConn = @(Get-Connections) | Where-Object { $_.Api -eq $wcApi } | Select-Object -First 1; $wantWc = ([bool]$AddEntraHttp) -and [bool]$wcConn; if ([bool]$AddEntraHttp -and -not $wcConn) { Warn 'No "HTTP with Microsoft Entra ID" connection found - create it first (Power Apps > Connections > New; Resource URI https://api.powerplatform.com), then run again with -AddEntraHttp.' } } catch { }
+  $choice = ''
+  if (-not $NoCopilotStudio -and -not $NonInteractive -and -not $AddCopilotStudio -and -not $AddEntraHttp) {
+    Write-Host ''
+    Write-Host 'AI assistant inside the app (optional):' -ForegroundColor Cyan
+    Write-Host '  [1] classic Copilot Studio agents (the agent has Topics)'
+    Write-Host '  [2] NEW-experience agents (Skills / Connected agents, no Topics) - needs one extra connection'
+    Write-Host '  [3] both'
+    Write-Host '  [Enter] skip - you can still add agents as links later'
+    $choice = (Read-Host 'Choose').Trim()
+  }
+  if (-not $NoCopilotStudio -and ([bool]$AddEntraHttp -or $choice -in '2','3')) {
+    try {
+      $wcConn = @(Get-Connections) | Where-Object { $_.Api -eq $wcApi } | Select-Object -First 1
+      if (-not $wcConn -and -not $NonInteractive) {
+        $h = ($EnvironmentId -replace '-', '').ToLower(); $envHost = "https://$($h.Substring(0, $h.Length - 2)).$($h.Substring($h.Length - 2)).environment.api.powerplatform.com"
+        Warn 'Create ONE connection (sign-in cannot be scripted). In the page that opens choose "HTTP with Microsoft Entra ID (preauthorized)" and enter:'
+        Write-Host "    Base Resource URL : $envHost" -ForegroundColor Yellow
+        Write-Host '    Azure AD Resource URI : https://api.powerplatform.com' -ForegroundColor Yellow
+        Start-Process "https://make.powerapps.com/environments/$EnvironmentId/connections/available?apiName=$wcApi"
+        $null = Read-Host 'Press Enter when the connection is created'
+        $wcConn = @(Get-Connections) | Where-Object { $_.Api -eq $wcApi } | Select-Object -First 1
+      }
+      $wantWc = [bool]$wcConn
+      if (-not $wcConn) { Warn 'No HTTP with Microsoft Entra ID connection found - skipping new-experience agent support (run again later with -AddEntraHttp).' }
+    } catch { Warn "Entra HTTP step skipped: $($_.Exception.Message)" }
+  }
   if (-not $NoCopilotStudio) {
     try {
       $csConn = @(Get-Connections) | Where-Object { $_.Api -eq $csApi } | Select-Object -First 1
-      $wantCs = [bool]$AddCopilotStudio -or [bool]$csConn
-      if (-not $wantCs -and -not $NonInteractive) { $wantCs = ((Read-Host 'Add AI assistant support (chat with a Copilot Studio agent inside the app)? [y/N]').Trim()) -match '^(y|yes)$' }
+      $wantCs = [bool]$AddCopilotStudio -or [bool]$csConn -or $choice -in '1','3'
       if ($wantCs -and -not $csConn -and -not $NonInteractive) {
         Warn 'Create the "Microsoft Copilot Studio" connection once (sign-in cannot be scripted). Opening your browser...'
         Start-Process "https://make.powerapps.com/environments/$EnvironmentId/connections/available?apiName=$csApi"

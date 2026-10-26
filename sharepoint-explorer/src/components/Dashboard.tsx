@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Aggregator, insights } from '../aggregate'
 import { BULK, type Engine } from '../engine'
+import { backgroundAllowed, onGuardDrop } from '../guard'
 import { emptyQuery, titleField } from '../query'
 import { exportDashboardPdf } from '../export'
 import type { Clause, Page, SpField } from '../types'
@@ -11,6 +12,7 @@ import { Counter, Icon, useToast } from './ui'
 const SAMPLE = 2000
 interface Snapshot { agg: Aggregator; at: number; kind: 'sample' | 'full' }
 const cache = new Map<string, { sample?: Snapshot; full?: Snapshot }>()
+onGuardDrop(() => { cache.clear(); jobs.forEach((j) => j.ctl.abort()) })   // low on memory: forget cached scans and stop running ones
 
 /** A deep scan belongs to the source, not to the screen: leaving the tab (or opening an item) must not cancel it. */
 interface Job { ctl: AbortController; done: number; running: boolean; t0: number; err?: string }
@@ -77,7 +79,7 @@ export function Dashboard({ engine, version, onFilter, onGoData, title }: Props)
   }, [engine, local]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!local && !cache.get(engine.src.id)?.sample) void loadSample() }, [engine.src.id]) // eslint-disable-line react-hooks/exhaustive-deps
   // keep the sample fresh when the live pulse sees the list grow
-  useEffect(() => { if (!local && snap && engine.pendingNew > 0 && Date.now() - snap.at > 20_000) void loadSample() }, [engine.pendingNew]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!local && snap && engine.pendingNew > 0 && Date.now() - snap.at > 20_000 && backgroundAllowed()) void loadSample() }, [engine.pendingNew]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const startDeep = () => { setScope('full'); void deepScan(engine, fields) }
   useEffect(() => { // switch back to whichever snapshot the scope asks for

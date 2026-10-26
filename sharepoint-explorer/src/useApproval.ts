@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { autoReason, settling, escalate as escalateReq, needsEscalation, canDecide, canSubmitNow, delegate as delegateReq, cancel as cancelReq, decide as decideReq, submit as submitReq, type Me } from './approval'
+import { backgroundAllowed } from './guard'
 import { clearApprovals, putApproval, setApprovals } from './approvalStore'
 import type { Engine } from './engine'
 import { emptyQuery } from './query'
@@ -65,7 +66,7 @@ export function useApproval(engine: Engine | null, me: Me, access: Access, mayDe
   const busy = useRef(false), denied = useRef(false), handled = useRef(new Set<string>()), lastSweep = useRef('')
   const sweep = useCallback(async (): Promise<number> => {
     const a = flow?.auto
-    if (!engine || !backend || !id || !flow?.enabled || !a || !a.on.length || busy.current || denied.current) return 0
+    if (!engine || !backend || !id || !flow?.enabled || !a || !a.on.length || busy.current || denied.current || !backgroundAllowed()) return 0
     busy.current = true
     let n = 0
     try {

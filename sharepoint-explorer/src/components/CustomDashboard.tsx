@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BULK, type Engine } from '../engine'
+import { backgroundAllowed } from '../guard'
 import { resolveRelative } from '../format'
 import { describeClause, emptyQuery, opsFor } from '../query'
 import type { Clause, DashConfig, Op, SpField, Widget, WidgetType } from '../types'
@@ -104,10 +105,10 @@ function useWidgetResults(engine: Engine, widgets: Widget[], version: number, re
   useEffect(() => { if (!local) void run(false); return () => abort.current?.abort() }, [local, sig, engine.src.id]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { // scheduled live refresh (server mode); local mode already follows the live pulse
     if (local || !refreshSec) return
-    const t = setInterval(() => { if (!document.hidden) void run(false) }, refreshSec * 1000)
+    const t = setInterval(() => { if (backgroundAllowed()) void run(false) }, refreshSec * 1000)
     return () => clearInterval(t)
   }, [local, refreshSec, run])
-  useEffect(() => { if (!local && engine.pendingNew > 0 && Date.now() - info.at > 20_000) void run(false) }, [engine.pendingNew]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!local && engine.pendingNew > 0 && Date.now() - info.at > 20_000 && backgroundAllowed()) void run(false) }, [engine.pendingNew]) // eslint-disable-line react-hooks/exhaustive-deps
   return { res, info, run }
 }
 
