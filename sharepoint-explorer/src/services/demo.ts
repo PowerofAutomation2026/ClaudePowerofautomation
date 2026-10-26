@@ -195,6 +195,8 @@ export const demo: Backend = {
   async loadAssistants() { return lsGet<AssistantConfig | null>('spx.demo.assistants', null) },
   async saveAssistants(cfg) { lsSet('spx.demo.assistants', cfg) },
   agentConnector: () => true,
+  botSource: () => true,
+  async listBots() { await sleep(300); return [{ id: '1', name: 'Customer Helper', schema: 'cr123_custHelper', newExperience: false, published: true }, { id: '2', name: 'SPO Code', schema: 'cr56c_spocode', newExperience: true, published: true }, { id: '3', name: 'HR Policy Bot', schema: 'cr123_hrBot', newExperience: false, published: true }] },
   async envId() { return '11111111-2222-3333-4444-555555555555' },
   async probeAgent(env, schema) { await sleep(400); return `Demo: endpoints discovered for ${schema} in ${env}.` },
   async listAgents() { await sleep(300); return [{ name: 'Customer Helper', schema: 'cr123_custHelper' }, { name: 'HR Policy Bot', schema: 'cr123_hrBot' }] },

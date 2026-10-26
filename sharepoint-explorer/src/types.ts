@@ -196,6 +196,9 @@ export interface Backend {
   probeAgent(environmentId: string, schema: string): Promise<string>
   /** agents the user's Copilot Studio connection can see (schema names) */
   listAgents(): Promise<{ name: string; schema: string }[]>
+  /** the Dataverse `bot` table is attached to this app (lets the admin pick agents from a list) */
+  botSource(): boolean
+  listBots(): Promise<BotInfo[]>
   askAgent(agent: string, message: string, conversationId?: string, opts?: { kind?: 'studio' | 'link' | 'entra-http'; environmentId?: string }): Promise<AgentReply>
   loadApprovalFlow(sourceId: string): Promise<ApprovalFlow | null>
   saveApprovalFlow(sourceId: string, flow: ApprovalFlow): Promise<void>
@@ -305,4 +308,5 @@ export interface Assistant {
   enabled: boolean
 }
 export interface AssistantConfig { v: 1; assistants: Assistant[]; updated: string; updatedBy: string }
+export interface BotInfo { id: string; name: string; schema: string; newExperience: boolean; published: boolean; auth?: number }
 export interface AgentReply { text: string; conversationId?: string; all: string[] }

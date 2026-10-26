@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AGENT_INSTRUCTIONS, buildContext, withContext } from '../assistantContext'
 import type { Engine } from '../engine'
-import type { AgentReply, Assistant, AssistantConfig, Row } from '../types'
+import type { AgentReply, Assistant, AssistantConfig, BotInfo, Row } from '../types'
 import { uid } from '../util'
 import { copyText } from '../mail'
 import { Icon, Modal, useToast } from './ui'
@@ -251,6 +251,7 @@ function AssistantEditor({ engine, a, onSave, onClose }: { engine: Engine; a: As
         <label className="small">Display name<input className="input" value={d.name} onChange={(e) => set({ name: e.target.value })} maxLength={60} placeholder="e.g. HR Policy Helper" /></label>
         {d.kind === 'entra-http' ? <>
           <div className="banner info small" role="note"><Icon n="info" /><div style={{ flex: 1 }}>Works with <b>new and classic</b> Copilot Studio agents. The agent must be <b>published</b> and set to <b>Authenticate with Microsoft</b>. Needs the “HTTP with Microsoft Entra ID” connector (see the notes in Setup). Each user approves that connection once.</div></div>
+          <AgentPicker engine={engine} schema={d.agent} onPick={(b) => set({ agent: b.schema, name: d.name || b.name })} />
           <label className="small">Environment ID <span className="muted">(Copilot Studio → Settings → Advanced → Metadata → Environment ID; this app’s own environment is filled in)</span><input className="input" value={d.environmentId ?? ''} onChange={(e) => set({ environmentId: e.target.value })} placeholder="e4c5fd77-2cb4-e3d1-8488-75cd3bd8521b" autoComplete="off" /></label>
           {!engine.backend.agentConnector('entra-http') && <div className="banner warn small" role="note"><Icon n="info" /><div style={{ flex: 1 }}><b>One-time setup needed before this can work:</b> the “HTTP with Microsoft Entra ID” connection is not attached to this app yet.<ol style={{ margin: '4px 0 0', paddingLeft: 18 }}><li>Power Apps → Connections → New connection → <b>HTTP with Microsoft Entra ID (preauthorized)</b>, Base Resource URL <code style={{ overflowWrap: 'anywhere' }}>{envBase || 'https://<environment host>'}</code>, Resource URI <code>https://api.powerplatform.com</code>.</li><li>Run <code>Deploy.cmd</code> and answer <b>2</b> to the AI question (or <code>Deploy.cmd -AddEntraHttp</code>), then reopen the app.</li></ol></div></div>}
           {d.environmentId && !envOk && <div className="small" style={{ color: 'var(--bad)' }}>That is not a valid environment ID (a GUID).</div>}
@@ -261,6 +262,7 @@ function AssistantEditor({ engine, a, onSave, onClose }: { engine: Engine; a: As
           {steps.length > 0 && <div role="status" aria-live="polite" style={{ display: 'grid', gap: 4 }}>{steps.map((x, i) => <div key={i} className="small" style={{ color: x.ok === false ? 'var(--bad)' : x.ok ? 'var(--good)' : 'var(--muted)' }}>{x.ok === false ? '✖ ' : x.ok ? '✔ ' : '• '}{x.text}</div>)}</div>}
         </> : d.kind === 'studio' ? <>
           <label className="small">Agent schema name <span className="muted">(Copilot Studio → Settings → Advanced → Metadata; case-sensitive)</span><input className="input" value={d.agent ?? ''} onChange={(e) => set({ agent: e.target.value })} placeholder="cr123_hrHelper" autoComplete="off" /></label>
+          <AgentPicker engine={engine} schema={d.agent} onPick={(b) => set({ agent: b.schema, name: d.name || b.name })} />
           <div className="banner info small" role="note"><Icon n="info" /><div style={{ flex: 1 }}>Works with <b>classic (standard) Copilot Studio agents</b> that are published. Agents from the newer experience (Skills / Connected agents / Authoring canvas, no Topics) can’t be called by Microsoft’s connector yet — add those as a <b>link</b> instead. <a href="https://github.com/microsoft/PowerAppsCodeApps/discussions/434" target="_blank" rel="noreferrer noopener">Details</a></div></div>
           <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
             <button type="button" className="btn" disabled={finding} onClick={() => void findAgents()}><Icon n="search" size={14} />{finding ? 'Looking…' : 'Find my agents'}</button>
@@ -285,5 +287,23 @@ function AssistantEditor({ engine, a, onSave, onClose }: { engine: Engine; a: As
         <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}><button type="button" className="btn" onClick={onClose}>Cancel</button><button type="submit" className="btn primary" disabled={!valid}>Save assistant</button></div>
       </form>
     </Modal>
+  )
+}
+
+/** Drop-down of the agents that exist in this environment (Dataverse `bot` table). Falls back to a hint when the table is not attached. */
+function AgentPicker({ engine, schema, onPick }: { engine: Engine; schema?: string; onPick: (b: BotInfo) => void }) {
+  const has = engine.backend.botSource()
+  const [bots, setBots] = useState<BotInfo[] | null>(null)
+  const [err, setErr] = useState('')
+  useEffect(() => { if (has) engine.backend.listBots().then(setBots).catch((e) => { setErr((e as Error).message); setBots([]) }) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  if (!has) return <div className="banner info small" role="note"><Icon n="info" /><div style={{ flex: 1 }}>Want a drop-down of the agents in your environment? Run <code>Deploy.cmd</code> and choose option 2 or 3 (it adds the Dataverse “bot” table), or <code>pac code add-data-source -a dataverse -t bot</code>. Until then type the schema name below.</div></div>
+  return (
+    <label className="small">Choose an agent from this environment
+      <select className="input" value={bots?.some((b) => b.schema === schema) ? schema : ''} disabled={bots === null} onChange={(e) => { const b = bots?.find((x) => x.schema === e.target.value); if (b) onPick(b) }}>
+        <option value="">{bots === null ? 'Loading agents…' : bots.length ? 'Select an agent…' : 'No agents found'}</option>
+        {(bots ?? []).map((b) => <option key={b.id} value={b.schema}>{b.name} — {b.schema}{b.newExperience ? ' · new experience' : ''}{b.published ? '' : ' · not published yet'}</option>)}
+      </select>
+      {err && <span className="small" style={{ color: 'var(--bad)' }} role="alert">{err}</span>}
+    </label>
   )
 }

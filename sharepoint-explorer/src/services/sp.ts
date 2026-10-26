@@ -7,7 +7,7 @@ import { getClient } from '@microsoft/power-apps/data'
 import { getContext } from '@microsoft/power-apps/app'
 import { guardRequest } from '../guard'
 import baked from '../appconfig.json'
-import type { Access, AgentReply, AppConfig, ApprovalFlow, AssistantConfig, ApprovalReq, Attachment, DashConfig, FormatRule, Backend, PermInfo, PermTarget, Principal, RoleAssign, RoleDef, VersionInfo, ViewDef, FieldKind, Page, Query, Row, SourceConfig, SpField, SpList, SpSite } from '../types'
+import type { Access, AgentReply, BotInfo, AppConfig, ApprovalFlow, AssistantConfig, ApprovalReq, Attachment, DashConfig, FormatRule, Backend, PermInfo, PermTarget, Principal, RoleAssign, RoleDef, VersionInfo, ViewDef, FieldKind, Page, Query, Row, SourceConfig, SpField, SpList, SpSite } from '../types'
 import { buildFilter, parseSearch, propOf, restName, titleField, noExpand } from '../query'
 import { accessFrom } from '../access'
 import { isEditable } from '../editable'
@@ -331,6 +331,8 @@ export const sp: Backend = {
   async saveAssistants(cfg) { if (!cfgSite()) throw new Error('No config site is set for this app, so assistants cannot be shared. Re-run Deploy.cmd with -ConfigSiteUrl.'); await kvSet('assistants', cfg); lsSet('spx.assistants', cfg) },
   agentConnector: (kind) => (kind === 'entra-http' ? !!webKey() : !!studioKey()),
   async envId() { return (await getContext()).app.environmentId },
+  botSource: () => !!botKey(),
+  listBots: () => listBotsDv(),
   probeAgent: (env, schema) => probeD2E(env, schema),
   askAgent: (agent, message, conv, opts) => (opts?.kind === 'entra-http' ? askD2E(opts.environmentId ?? '', agent, message, conv) : askStudio(agent, message, conv)),
   listAgents: () => listStudioAgents(),
@@ -877,4 +879,21 @@ async function askD2E(env: string, schema: string, message: string, conv?: strin
   const text = answerOf(acts)
   if (!text) throw new Error('The agent finished its turn without a text answer. Check that the agent is published and set to “Authenticate with Microsoft”.')
   return { text, conversationId: id, all: [text] }
+}
+
+
+/* ------------------------------------------------------------------ agents of this environment (Dataverse `bot` table) */
+const botKey = () => Object.entries<any>(dataSourcesInfo).find(([k, v]) => /dataverse|cds/i.test(String(v?.dataSourceType ?? '')) && (/^bots?$/i.test(k) || /^bots?$/i.test(String(v?.tableId ?? ''))))?.[0]
+
+async function listBotsDv(): Promise<BotInfo[]> {
+  const key = botKey()
+  if (!key) throw new Error('The Dataverse “bot” table is not attached to this app. Re-run Deploy.cmd and choose the new-experience option (or: pac code add-data-source -a dataverse -t bot), then republish.')
+  const res: any = await (sdk() as any).retrieveMultipleRecordsAsync(key, { select: ['botid', 'name', 'schemaname', 'publishedon', 'template', 'authenticationmode', 'statecode'], filter: 'statecode eq 0', orderBy: ['name asc'], top: 300 })
+  if (!res?.success) {
+    const e = res?.error, m = String(e?.message ?? (typeof e === 'string' ? e : JSON.stringify(e ?? 'Could not read agents')))
+    if (/prvReadbot|privilege|403|forbidden|permission/i.test(m)) throw new Error('You do not have permission to read the list of agents (Dataverse privilege prvReadbot). Ask an admin to give your role read access to the Bot table, or type the schema name instead.')
+    throw new Error(m)
+  }
+  const list: any[] = Array.isArray(res.data) ? res.data : res.data?.value ?? []
+  return list.filter((b) => b?.schemaname && !/^msdyn_|^mscrm_/i.test(String(b.schemaname))).map((b) => ({ id: String(b.botid), name: String(b.name ?? b.schemaname), schema: String(b.schemaname), newExperience: /^cliagent/i.test(String(b.template ?? '')), published: !!b.publishedon, auth: b.authenticationmode }))
 }

@@ -356,14 +356,27 @@ try {
     Step 'Wiring the HTTP with Microsoft Entra ID connector (chat with new-experience agents)'
     try { if (Add-Src $wcApi $wcConn.Id 'webcontents' @()) { Ok 'Entra HTTP connector added'; $spf = Get-SchemaPath; $wcSchemaText = if ($spf) { [System.IO.File]::ReadAllText((Join-Path $root $spf)) } else { $null } } else { Warn 'Could not add the Entra HTTP connector - continuing without it.'; $wantWc = $false } } catch { Warn "Entra HTTP step skipped: $($_.Exception.Message)"; $wantWc = $false }
   }
+  # agent drop-down in the app: the Dataverse "bot" table (read-only use; failures never stop the deployment)
+  $wantBots = ($wantWc -or $wantCs); $botsText = $null
+  if ($wantBots) {
+    Step 'Adding the Dataverse "bot" table (drop-down of the agents in this environment)'
+    try {
+      $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+      $o = ((& pac code add-data-source -a dataverse -t bot 2>&1) | ForEach-Object { "$_" }) -join "`n"; $code = $LASTEXITCODE
+      $ErrorActionPreference = $prev
+      if (($code -eq 0 -or $o -match '(?i)added successfully|already') -and (Schema-Has '"?bots?"?\s*:\s*\{')) { Ok 'Dataverse bot table added'; $spf = Get-SchemaPath; $botsText = if ($spf) { [System.IO.File]::ReadAllText((Join-Path $root $spf)) } else { $null } }
+      else { Warn "Could not add the Dataverse bot table (the agent drop-down will be a text box instead): $(($o -replace '\s+',' ').Trim())"; $wantBots = $false }
+    } catch { Warn "Bot table step skipped: $($_.Exception.Message)"; $wantBots = $false }
+  }
   $added = $false
-  if ((Has-Sp) -and (Sp-Count) -ge 1 -and -not $wantCs -and -not $wantWc) { Ok 'SharePoint connector already registered for this connection - keeping it'; $added = $true }
+  if ((Has-Sp) -and (Sp-Count) -ge 1 -and -not $wantCs -and -not $wantWc -and -not $wantBots) { Ok 'SharePoint connector already registered for this connection - keeping it'; $added = $true }
   else { $added = Add-SharePoint }   # LAST: the connector the app cannot live without
   if (-not $added) {
     Warn 'SharePoint did not end up in the generated schema. Re-registering from a clean state...'
     Reset-Pac
     if ($wantCs) { $null = Add-Src $csApi $csConn.Id 'copilotstudio' @() }
     if ($wantWc) { $null = Add-Src $wcApi $wcConn.Id 'webcontents' @() }
+    if ($wantBots) { $null = (& pac code add-data-source -a dataverse -t bot 2>&1) }
     $added = Add-SharePoint
   }
   if (-not $added) { throw "Could not add the SharePoint connector. Run manually:  pac code add-data-source -a $api -c $($conn.Id) -d <site url> -t <existing list name>   then re-run this script." }
@@ -375,6 +388,10 @@ try {
   if ($wantWc -and -not (Schema-Has 'webcontents')) {
     if (Merge-Copilot $wcSchemaText 'webcontents|[A-Za-z0-9_\-]*webcontents[A-Za-z0-9_\-]*' 'webcontents') { Ok 'Entra HTTP connector merged back into the schema' }
     else { Warn 'Your pac version keeps only the last connector it registers, so the Entra HTTP connector is not in this build. Update pac and run again with -AddEntraHttp.' }
+  }
+  if ($wantBots -and -not (Schema-Has '"?bots?"?\s*:\s*\{')) {
+    if (Merge-Copilot $botsText 'bots?' '"?bots?"?\s*:\s*\{') { Ok 'Dataverse bot table merged back into the schema' }
+    else { Warn 'The Dataverse bot table is not in this build (agent drop-down will be a text box). Update pac and run again.' }
   }
   $schema = Get-SchemaPath
   if (-not $schema -or -not (Has-Sp)) { throw 'The generated data-source schema (.power\schemas\appschemas\dataSourcesInfo.ts) has no SharePoint source (looked for a list entry plus .power\schemas\sharepointonline or power.config.json): the app would show no SharePoint data. Delete power.config.json and the .power folder, then run this script again.' }
@@ -393,7 +410,7 @@ try {
   # the SharePoint data source key pac generated (the entry with a real tableId) must be inside the built app
   $dsKey = $null
   $sf = Get-SchemaPath
-  if ($sf) { $txt = [System.IO.File]::ReadAllText((Join-Path $root $sf)); $m = [regex]::Match($txt, '(?m)^  ["'']?([^"''\r\n:]+?)["'']?\s*:\s*\{[^{}]*?["'']?tableId["'']?\s*:\s*["''][^"'']+["'']'); if ($m.Success) { $dsKey = $m.Groups[1].Value } elseif ($txt -match '(?im)^\s*["'']?([A-Za-z0-9_\-]*sharepointonline[A-Za-z0-9_\-]*)["'']?\s*:') { $dsKey = $Matches[1] } }
+  if ($sf) { $txt = [System.IO.File]::ReadAllText((Join-Path $root $sf)); $m = [regex]::Matches($txt, '(?m)^  ["'']?([^"''\r\n:]+?)["'']?\s*:\s*\{[^{}]*?["'']?tableId["'']?\s*:\s*["''][^"'']+["'']') | Where-Object { $_.Groups[1].Value -notmatch '^bots?$' } | Select-Object -First 1; if ($m) { $dsKey = $m.Groups[1].Value } elseif ($txt -match '(?im)^\s*["'']?([A-Za-z0-9_\-]*sharepointonline[A-Za-z0-9_\-]*)["'']?\s*:') { $dsKey = $Matches[1] } }
   if ($dsKey) {
     if (-not (Select-String -Path (Join-Path $root 'dist\assets\*.js') -Pattern ([regex]::Escape($dsKey)) -Quiet)) { throw "The built app does not contain the SharePoint data source '$dsKey': it would run without live data. Check the pac output above and run again." }
     Ok "Bundle contains the SharePoint data source '$dsKey'"
