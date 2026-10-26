@@ -189,10 +189,14 @@ export interface Backend {
   loadAssistants(): Promise<AssistantConfig | null>
   saveAssistants(cfg: AssistantConfig): Promise<void>
   /** true when the Copilot Studio connector is attached to the app */
-  agentConnector(): boolean
+  agentConnector(kind?: 'studio' | 'entra-http'): boolean
+  /** this app's own Power Platform environment id (prefills the setup form) */
+  envId(): Promise<string>
+  /** entra-http: step-by-step endpoint check (returns what it found) */
+  probeAgent(environmentId: string, schema: string): Promise<string>
   /** agents the user's Copilot Studio connection can see (schema names) */
   listAgents(): Promise<{ name: string; schema: string }[]>
-  askAgent(agent: string, message: string, conversationId?: string): Promise<AgentReply>
+  askAgent(agent: string, message: string, conversationId?: string, opts?: { kind?: 'studio' | 'link' | 'entra-http'; environmentId?: string }): Promise<AgentReply>
   loadApprovalFlow(sourceId: string): Promise<ApprovalFlow | null>
   saveApprovalFlow(sourceId: string, flow: ApprovalFlow): Promise<void>
   listApprovals(sourceId: string): Promise<ApprovalReq[]>
@@ -285,9 +289,11 @@ export interface Assistant {
   id: string
   name: string
   /** studio = called through the Copilot Studio connector (chat inside the app); link = opens a chat link (Agent Builder, M365 Copilot, Copilot Studio web chat) */
-  kind: 'studio' | 'link'
+  kind: 'studio' | 'link' | 'entra-http'
   /** Copilot Studio agent schema name (case-sensitive, with publisher prefix, e.g. cr123_pncHelper) */
   agent?: string
+  /** entra-http: Power Platform environment the agent lives in */
+  environmentId?: string
   url?: string
   description?: string
   /** extra instructions added to the context block of every question */

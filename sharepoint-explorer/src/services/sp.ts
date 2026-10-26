@@ -325,8 +325,10 @@ export const sp: Backend = {
   async saveDashboard(sourceId, cfg) { await kvSet(`dashboard:${sourceId}`, cfg); lsSet(`spx.dash.${sourceId}`, cfg) },
   async loadAssistants() { return (await kvGet<AssistantConfig>('assistants')) ?? lsGet<AssistantConfig | null>('spx.assistants', null) },
   async saveAssistants(cfg) { if (!cfgSite()) throw new Error('No config site is set for this app, so assistants cannot be shared. Re-run Deploy.cmd with -ConfigSiteUrl.'); await kvSet('assistants', cfg); lsSet('spx.assistants', cfg) },
-  agentConnector: () => !!studioKey(),
-  askAgent: (agent, message, conv) => askStudio(agent, message, conv),
+  agentConnector: (kind) => (kind === 'entra-http' ? !!webKey() : !!studioKey()),
+  async envId() { return (await getContext()).app.environmentId },
+  probeAgent: (env, schema) => probeD2E(env, schema),
+  askAgent: (agent, message, conv, opts) => (opts?.kind === 'entra-http' ? askD2E(opts.environmentId ?? '', agent, message, conv) : askStudio(agent, message, conv)),
   listAgents: () => listStudioAgents(),
   async loadApprovalFlow(sourceId) { return (await kvGet<ApprovalFlow>(`approvalflow:${sourceId}`)) ?? lsGet<ApprovalFlow | null>(`spx.aflow.${sourceId}`, null) },
   async saveApprovalFlow(sourceId, flow) { lsSet(`spx.aflow.${sourceId}`, flow); await kvSet(`approvalflow:${sourceId}`, flow) },
@@ -768,4 +770,107 @@ async function askStudio(agent: string, message: string, conv?: string): Promise
   const text = all.length > 1 ? all.join('\n\n') : String(pickText(d, 'lastResponse') ?? all[0] ?? '')
   if (/preview has ended|enhanced task completion/i.test(text)) throw new Error('This agent was built with the new agentic (“GitHub Copilot harness”) experience, which the Copilot Studio connector cannot call yet. Use a classic Copilot Studio agent, or add it here as a link.')
   return { text, conversationId: (pickText(d, 'conversationId') ?? pickText(d, 'conversationID')) as string | undefined, all }
+}
+
+
+/* ------------------------------------------------------------------ Copilot Studio "Direct-to-Engine" through the Entra HTTP connector (works for new-experience / GitHub Copilot harness agents) */
+const webKey = () => Object.entries<any>(dataSourcesInfo).find(([k, v]) => isConnectorSource(v) && !v?.tableId && (/^webcontents/i.test(k) || /shared_webcontents/i.test(String(v?.apiId ?? '')) || Object.keys(v?.apis ?? {}).some((n) => /^InvokeHttp$/i.test(n))))?.[0]
+
+/** environment id -> the environment API host used by Copilot Studio: first 30 hex chars, '.', last 2 */
+export const envHost = (env: string) => { const h = env.replace(/-/g, '').toLowerCase(); return `https://${h.slice(0, -2)}.${h.slice(-2)}.environment.api.powerplatform.com` }
+
+/** one HTTP call through the "HTTP with Microsoft Entra ID" connector; returns the raw response body text */
+async function invokeHttp(method: 'GET' | 'POST', url: string, body?: unknown): Promise<string> {
+  const key = webKey()
+  if (!key) throw new Error('The “HTTP with Microsoft Entra ID” connector is not attached to this app. Create that connection in Power Apps (Base Resource URL = your environment host, Resource URI = https://api.powerplatform.com), then re-run Deploy.cmd with -AddEntraHttp (or: pac code add-data-source -a shared_webcontents -c <connection id>) and republish.')
+  const apis = dataSourcesInfo[key]?.apis ?? {}
+  const op = opOf(apis, 'InvokeHttp'); if (!op) throw new Error(`The connector in this app has no "InvokeHttp" operation (found: ${Object.keys(apis).join(', ') || 'none'}).`)
+  const plist = (apis[op].parameters ?? []) as any[]
+  const params: Record<string, unknown> = {}
+  const headers = { Accept: 'text/event-stream, application/json', 'Content-Type': 'application/json' }
+  const bodyText = body === undefined ? undefined : JSON.stringify(body)
+  const named = (n: string) => plist.find((p) => norm(p.name) === n)
+  const wholeRequest = plist.filter((p) => p.in === 'body')
+  if (named('url') || named('uri') || named('method')) {
+    for (const p of plist) {
+      const n = norm(p.name)
+      if (p.name === 'connectionId') continue
+      if (n === 'url' || n === 'uri') params[p.name] = url
+      else if (n === 'method' || n === 'verb') params[p.name] = method
+      else if (n === 'headers') params[p.name] = headers
+      else if (n === 'body' || n === 'content') params[p.name] = bodyText
+    }
+  } else if (wholeRequest.length === 1) {
+    params[wholeRequest[0].name] = { method, url, headers, ...(bodyText !== undefined ? { body: bodyText } : {}) }
+  } else throw new Error(`Unexpected InvokeHttp parameters: ${plist.map((p) => `${p.name}(${p.in})`).join(', ')}`)
+  const t0 = Date.now()
+  const res: any = await sdk().executeAsync({ connectorOperation: { tableName: key, operationName: op, parameters: params } } as any)
+  if (!res?.success) {
+    const e = res?.error, status = Number(e?.status ?? e?.statusCode ?? 0)
+    const msg = String(e?.message ?? (typeof e === 'string' ? e : JSON.stringify(e ?? 'The call failed')))
+    if (/65001|consent|not authorized|preauthorized|AADSTS/i.test(msg)) throw new Error(`Microsoft Entra refused the token for the Power Platform API (${msg}). The preauthorized connector is not allowed for this resource in your tenant: use the “HTTP with Microsoft Entra ID” (not preauthorized) connector with an Entra app that has the delegated permission CopilotStudio.Copilots.Invoke, or ask your admin.`)
+    if (/GitHub Copilot harness/i.test(msg)) throw new Error('Copilot Studio says this endpoint does not support agents built with the GitHub Copilot harness in your region yet (Microsoft is rolling the support out through the end of October 2026). Try again later.')
+    throw new Error(`${status ? `HTTP ${status}: ` : ''}${msg}${!status ? ` (after ${((Date.now() - t0) / 1000).toFixed(1)} s)` : ''}`)
+  }
+  const d = res.data
+  if (typeof d === 'string') return d
+  if (d && typeof d === 'object') return typeof d.body === 'string' ? d.body : typeof d.Body === 'string' ? d.Body : JSON.stringify(d.body ?? d)
+  return ''
+}
+
+interface Endpoints { createConversation: string; executeTurn: string }
+const endpointCache = new Map<string, Endpoints>()
+async function discover(env: string, schema: string): Promise<Endpoints> {
+  const k = `${env}|${schema}`; const hit = endpointCache.get(k); if (hit) return hit
+  if (!/^[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(env)) throw new Error('Enter the Power Platform environment ID (a GUID, e.g. e4c5fd77-2cb4-e3d1-8488-75cd3bd8521b).')
+  const raw = await invokeHttp('GET', `${envHost(env)}/copilotstudio/agents/${encodeURIComponent(schema)}/conversation-endpoints`)
+  let j: any; try { j = JSON.parse(raw) } catch { throw new Error(`Copilot Studio did not return endpoint information: ${raw.slice(0, 200)}`) }
+  const pick = (...names: string[]) => { for (const n of names) for (const kk of Object.keys(j ?? {})) if (kk.toLowerCase() === n.toLowerCase() && typeof j[kk] === 'string') return j[kk] as string; return '' }
+  const e = { createConversation: pick('createConversation', 'conversations'), executeTurn: pick('executeTurn', 'turn', 'continueTurn') }
+  if (!e.createConversation || !e.executeTurn) throw new Error(`The agent endpoint answer has no createConversation / executeTurn URL (got: ${Object.keys(j ?? {}).join(', ') || 'nothing'}).`)
+  endpointCache.set(k, e); return e
+}
+
+/** Server-sent events -> Bot Framework activities */
+function sseActivities(text: string): any[] {
+  const out: any[] = []
+  for (const block of text.split(/\r?\n\r?\n/)) {
+    const data = block.split(/\r?\n/).filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('')
+    if (!data) continue
+    try { const j = JSON.parse(data); if (Array.isArray(j)) out.push(...j); else out.push(j.activity ?? j) } catch { /* keep going */ }
+  }
+  if (!out.length) { try { const j = JSON.parse(text); out.push(...(Array.isArray(j) ? j : j.activities ?? [j.activity ?? j])) } catch { /* not JSON either */ } }
+  return out.filter(Boolean)
+}
+function answerOf(acts: any[]): string {
+  const finals = new Map<string, string>(); const order: string[] = []
+  for (const a of acts) {
+    if (a?.type !== 'message' || !a.text) continue
+    const si = (a.entities ?? []).find((e: any) => e?.type === 'streaminfo')
+    const id = si?.streamId ?? `m${order.length}`
+    if (!finals.has(id)) order.push(id)
+    finals.set(id, String(a.text))   // the last chunk of a stream is the full text
+  }
+  return order.map((i) => finals.get(i)).filter(Boolean).join('\n\n')
+}
+const convOf = (acts: any[]) => acts.map((a) => a?.conversation?.id).find(Boolean) as string | undefined
+
+async function probeD2E(env: string, schema: string): Promise<string> {
+  const e = await discover(env, schema)
+  return `Endpoints found for ${schema}: ${new URL(e.createConversation).pathname.slice(0, 80)}…`
+}
+
+async function askD2E(env: string, schema: string, message: string, conv?: string): Promise<AgentReply> {
+  const e = await discover(env, schema.trim())
+  let id = conv
+  if (!id) {
+    const start = sseActivities(await invokeHttp('POST', e.createConversation, { emitStartConversationEvent: true }))
+    id = convOf(start)
+    if (!id) throw new Error('Copilot Studio did not return a conversation id when starting the chat.')
+  }
+  const url = e.executeTurn.replace(/\{conversationId\}/gi, encodeURIComponent(id))
+  const acts = sseActivities(await invokeHttp('POST', url, { activity: { type: 'message', text: message, conversation: { id } }, conversationId: id }))
+  const text = answerOf(acts)
+  if (!text) throw new Error('The agent finished its turn without a text answer. Check that the agent is published and set to “Authenticate with Microsoft”.')
+  return { text, conversationId: id, all: [text] }
 }

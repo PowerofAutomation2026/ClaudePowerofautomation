@@ -22,6 +22,7 @@
 .PARAMETER BootstrapList     Name of an existing list/library on the config site used to register the connector. Default: tries
                              'Documents', 'Shared Documents', 'Site Pages'.
 .PARAMETER AddCopilotStudio  Also wire the Microsoft Copilot Studio connector (agent chat in the app).
+.PARAMETER AddEntraHttp      Also wire the 'HTTP with Microsoft Entra ID' connector (chat with new-experience Copilot Studio agents). Create that connection first (see README).
 .PARAMETER NoCopilotStudio   Skip the Copilot Studio question entirely.
 .PARAMETER NonInteractive    Never prompt; fail instead.
 .PARAMETER SkipPrereqInstall Do not try to install Node.js / Power Platform CLI.
@@ -40,6 +41,7 @@ param(
   [string]$BootstrapList,
   [string]$AppId,
   [switch]$AddCopilotStudio,
+  [switch]$AddEntraHttp,
   [switch]$NoCopilotStudio,
   [switch]$NonInteractive,
   [switch]$SkipPrereqInstall
@@ -284,10 +286,10 @@ try {
     }
     return $null
   }
-  function Merge-Copilot([string]$csText) {   # pac keeps only the connector it registered last: put the Copilot Studio entry back (checked with esbuild; the file is restored if it would not parse)
+  function Merge-Copilot([string]$csText, [string]$keyPattern = 'microsoftcopilotstudio|[A-Za-z0-9_\-]*copilotstudio[A-Za-z0-9_\-]*', [string]$needle = 'copilotstudio') {   # pac keeps only the connector it registered last: put the Copilot Studio entry back (checked with esbuild; the file is restored if it would not parse)
     $sp = Get-SchemaPath; if (-not $sp -or -not $csText) { return $false }
     $file = Join-Path $root $sp; $cur = [System.IO.File]::ReadAllText($file)
-    $entry = Get-Entry $csText 'microsoftcopilotstudio|[A-Za-z0-9_\-]*copilotstudio[A-Za-z0-9_\-]*'
+    $entry = Get-Entry $csText $keyPattern
     if (-not $entry) { return $false }
     $first = [regex]::Match($cur, '=\s*\{'); if (-not $first.Success) { return $false }
     $merged = $cur.Insert($first.Index + $first.Length, "`n  $entry,")
@@ -295,13 +297,15 @@ try {
     $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     $null = (& node -e "const fs=require('fs');require('esbuild').transformSync(fs.readFileSync(process.argv[1],'utf8'),{loader:'ts'})" $file 2>&1)
     $okParse = ($LASTEXITCODE -eq 0); $ErrorActionPreference = $prev
-    if (-not $okParse -or -not (Has-Sp) -or -not (Schema-Has 'copilotstudio')) { [System.IO.File]::WriteAllText($file, $cur, $utf8NoBom); return $false }
+    if (-not $okParse -or -not (Has-Sp) -or -not (Schema-Has $needle)) { [System.IO.File]::WriteAllText($file, $cur, $utf8NoBom); return $false }
     return $true
   }
   # bindings without a generated schema (config restored from a backup / fresh checkout): pac would answer "already exists" and write nothing
   if ((Test-Path $cfgPath) -and -not (Get-SchemaPath) -and ([System.IO.File]::ReadAllText($cfgPath) -match '"connectionReferences"\s*:\s*\{\s*"')) { Warn 'power.config.json has connector bindings but no generated schema - re-registering from a clean state.'; Reset-Pac }
   # optional Copilot Studio agent chat: decide first (connection / question), add it before SharePoint
   $csApi = 'shared_microsoftcopilotstudio'; $csConn = $null; $wantCs = $false; $csSchemaText = $null
+  $wcApi = 'shared_webcontents'; $wcConn = $null; $wantWc = $false; $wcSchemaText = $null
+  try { $wcConn = @(Get-Connections) | Where-Object { $_.Api -eq $wcApi } | Select-Object -First 1; $wantWc = ([bool]$AddEntraHttp) -and [bool]$wcConn; if ([bool]$AddEntraHttp -and -not $wcConn) { Warn 'No "HTTP with Microsoft Entra ID" connection found - create it first (Power Apps > Connections > New; Resource URI https://api.powerplatform.com), then run again with -AddEntraHttp.' } } catch { }
   if (-not $NoCopilotStudio) {
     try {
       $csConn = @(Get-Connections) | Where-Object { $_.Api -eq $csApi } | Select-Object -First 1
@@ -324,13 +328,18 @@ try {
     Step 'Wiring the Copilot Studio connector (agent chat)'
     try { if (Add-Src $csApi $csConn.Id 'copilotstudio' @()) { Ok 'Copilot Studio connector added'; $spf = Get-SchemaPath; $csSchemaText = if ($spf) { [System.IO.File]::ReadAllText((Join-Path $root $spf)) } else { $null } } else { Warn 'Could not add the Copilot Studio connector - continuing with SharePoint only.'; $wantCs = $false } } catch { Warn "Copilot Studio step skipped: $($_.Exception.Message)"; $wantCs = $false }
   }
+  if ($wantWc) {
+    Step 'Wiring the HTTP with Microsoft Entra ID connector (chat with new-experience agents)'
+    try { if (Add-Src $wcApi $wcConn.Id 'webcontents' @()) { Ok 'Entra HTTP connector added'; $spf = Get-SchemaPath; $wcSchemaText = if ($spf) { [System.IO.File]::ReadAllText((Join-Path $root $spf)) } else { $null } } else { Warn 'Could not add the Entra HTTP connector - continuing without it.'; $wantWc = $false } } catch { Warn "Entra HTTP step skipped: $($_.Exception.Message)"; $wantWc = $false }
+  }
   $added = $false
-  if ((Has-Sp) -and (Sp-Count) -ge 1 -and -not $wantCs) { Ok 'SharePoint connector already registered for this connection - keeping it'; $added = $true }
+  if ((Has-Sp) -and (Sp-Count) -ge 1 -and -not $wantCs -and -not $wantWc) { Ok 'SharePoint connector already registered for this connection - keeping it'; $added = $true }
   else { $added = Add-SharePoint }   # LAST: the connector the app cannot live without
   if (-not $added) {
     Warn 'SharePoint did not end up in the generated schema. Re-registering from a clean state...'
     Reset-Pac
     if ($wantCs) { $null = Add-Src $csApi $csConn.Id 'copilotstudio' @() }
+    if ($wantWc) { $null = Add-Src $wcApi $wcConn.Id 'webcontents' @() }
     $added = Add-SharePoint
   }
   if (-not $added) { throw "Could not add the SharePoint connector. Run manually:  pac code add-data-source -a $api -c $($conn.Id) -d <site url> -t <existing list name>   then re-run this script." }
@@ -338,6 +347,10 @@ try {
   if ($wantCs -and -not (Schema-Has 'copilotstudio')) {
     if (Merge-Copilot $csSchemaText) { Ok 'Copilot Studio connector merged back into the schema (pac keeps only the last connector it registers)' }
     else { Warn "Your pac version keeps only the last connector it registers (PowerAppsCodeApps issue 366), so agent chat is not included in this build. Update pac ('pac install latest' or 'dotnet tool update --global Microsoft.PowerApps.CLI.Tool') and run again with -AddCopilotStudio. Agents can still be added as links in the app." }
+  }
+  if ($wantWc -and -not (Schema-Has 'webcontents')) {
+    if (Merge-Copilot $wcSchemaText 'webcontents|[A-Za-z0-9_\-]*webcontents[A-Za-z0-9_\-]*' 'webcontents') { Ok 'Entra HTTP connector merged back into the schema' }
+    else { Warn 'Your pac version keeps only the last connector it registers, so the Entra HTTP connector is not in this build. Update pac and run again with -AddEntraHttp.' }
   }
   $schema = Get-SchemaPath
   if (-not $schema -or -not (Has-Sp)) { throw 'The generated data-source schema (.power\schemas\appschemas\dataSourcesInfo.ts) has no SharePoint source (looked for a list entry plus .power\schemas\sharepointonline or power.config.json): the app would show no SharePoint data. Delete power.config.json and the .power folder, then run this script again.' }

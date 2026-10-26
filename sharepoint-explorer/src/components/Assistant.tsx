@@ -65,8 +65,8 @@ export function AssistantPanel({ visible, engine, cfg, who, selected, canSetup, 
       const hist = !c.conv && c.msgs.length > 2 ? `Earlier in this chat:\n${c.msgs.slice(-7, -1).filter((m) => m.role !== 'error').map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.slice(0, 400)}`).join('\n')}\n\n` : ''   // carried by the app only when the agent returned no conversation id
       const msg = withCtx ? withContext(ctxJson(), hist + question) : hist + question
       let r: AgentReply
-      try { r = await engine.backend.askAgent(a.agent ?? '', msg, c.conv) }
-      catch (e) { if (!c.conv) throw e; c.conv = undefined; r = await engine.backend.askAgent(a.agent ?? '', msg) }   // an expired conversation: start a fresh one once
+      try { r = await engine.backend.askAgent(a.agent ?? '', msg, c.conv, { kind: a.kind, environmentId: a.environmentId }) }
+      catch (e) { if (!c.conv) throw e; c.conv = undefined; r = await engine.backend.askAgent(a.agent ?? '', msg, undefined, { kind: a.kind, environmentId: a.environmentId }) }   // an expired conversation: start a fresh one once
       if (r.conversationId) c.conv = r.conversationId
       c.msgs.push({ role: 'agent', text: r.text || '(The agent returned an empty answer. Check its instructions and that it is published.)', at: Date.now() })
     } catch (e) { c.msgs.push({ role: 'error', text: (e as Error).message, at: Date.now() }) }
@@ -137,6 +137,8 @@ export function AssistantSetup({ engine, cfg, who, onSave, onClose }: { engine: 
   const [edit, setEdit] = useState<Assistant | null>(null)
   const [saving, setSaving] = useState(false)
   const connector = engine.backend.agentConnector()
+  const [envBase, setEnvBase] = useState('')
+  useEffect(() => { void engine.backend.envId().then((e) => { const h = e.replace(/-/g, '').toLowerCase(); setEnvBase(`https://${h.slice(0, -2)}.${h.slice(-2)}.environment.api.powerplatform.com`) }).catch(() => {}) }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const knowledge = engine.src.url ? new URL(engine.src.url, engine.src.siteUrl).href : engine.src.siteUrl.replace(/\/$/, '')
   const upsert = (x: Assistant) => { setItems((l) => (l.some((y) => y.id === x.id) ? l.map((y) => (y.id === x.id ? x : y)) : [...l, x])); setEdit(null) }
   const save = async () => { setSaving(true); try { await onSave({ v: 1, assistants: items, updated: new Date().toISOString(), updatedBy: who }); toast('good', 'Assistants saved for everyone.'); onClose() } catch (e) { toast('bad', `Could not save: ${(e as Error).message}`) } finally { setSaving(false) } }
@@ -151,18 +153,28 @@ export function AssistantSetup({ engine, cfg, who, onSave, onClose }: { engine: 
           {items.map((x) => (
             <li key={x.id} className="card row" style={{ padding: 10, gap: 10, flexWrap: 'wrap' }}>
               <Icon n="sparkle" size={18} />
-              <div style={{ flex: 1, minWidth: 180 }}><b>{x.name}</b> <span className="pill">{x.kind === 'studio' ? 'Copilot Studio · in-app chat' : 'Link · opens agent'}</span>{!x.enabled && <span className="pill warn">off</span>}
-                <div className="muted small">{x.kind === 'studio' ? x.agent : x.url} · {x.scope === 'all' ? 'all lists & libraries' : `${x.scope.length} source(s)`}</div></div>
+              <div style={{ flex: 1, minWidth: 180 }}><b>{x.name}</b> <span className="pill">{x.kind === 'entra-http' ? 'Copilot Studio · in-app chat (any agent)' : x.kind === 'studio' ? 'Classic agent · connector chat' : 'Link · opens agent'}</span>{!x.enabled && <span className="pill warn">off</span>}
+                <div className="muted small">{x.kind === 'link' ? x.url : x.agent} · {x.scope === 'all' ? 'all lists & libraries' : `${x.scope.length} source(s)`}</div></div>
               <button className="btn sm" onClick={() => setEdit(x)}>Edit</button>
               <button className="btn sm ghost" aria-label={`Remove ${x.name}`} onClick={() => setItems(items.filter((y) => y.id !== x.id))}><Icon n="trash" size={13} /></button>
             </li>
           ))}
         </ul>
         <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-          <button className="btn primary" onClick={() => setEdit({ id: uid(), name: '', kind: 'studio', agent: '', prompts: [], scope: 'all', sendRows: true, enabled: true })}><Icon n="plus" size={14} />Add Copilot Studio agent</button>
+          <button className="btn primary" onClick={() => setEdit({ id: uid(), name: '', kind: 'entra-http', agent: '', environmentId: '', prompts: [], scope: 'all', sendRows: true, enabled: true })}><Icon n="plus" size={14} />Add Copilot Studio agent (new or classic)</button>
+          <button className="btn" onClick={() => setEdit({ id: uid(), name: '', kind: 'studio', agent: '', prompts: [], scope: 'all', sendRows: true, enabled: true })}><Icon n="plus" size={14} />Add classic agent (connector)</button>
           <button className="btn" onClick={() => setEdit({ id: uid(), name: '', kind: 'link', url: '', prompts: [], scope: 'all', sendRows: true, enabled: true })}><Icon n="plus" size={14} />Add Agent Builder / M365 Copilot link</button>
         </div>
 
+        <details>
+          <summary className="small"><b>Chat with a NEW-experience Copilot Studio agent</b> (Skills / Connected agents, no Topics)</summary>
+          <ol className="small" style={{ margin: '6px 0 0', paddingLeft: 20, display: 'grid', gap: 4 }}>
+            <li>In Power Apps → <b>Connections → New connection</b> choose <b>HTTP with Microsoft Entra ID (preauthorized)</b>. Base Resource URL: <code style={{ overflowWrap: 'anywhere' }}>{envBase || 'https://<environment host>'}</code> · Resource URI: <code>https://api.powerplatform.com</code>.{envBase && <> <button type="button" className="btn sm" onClick={() => void copyText(envBase).then((ok) => toast(ok ? 'good' : 'warn', ok ? 'Base URL copied' : 'Could not copy'))}><Icon n="copy" size={12} />Copy</button></>}</li>
+            <li>Run <code>Deploy.cmd -AddEntraHttp</code> (or <code>pac code add-data-source -a shared_webcontents -c &lt;connection id&gt;</code>) and republish. Each user approves the connection once.</li>
+            <li>Click <b>Add Copilot Studio agent (new or classic)</b> above: Environment ID + schema name from Copilot Studio → Settings → Advanced → Metadata.</li>
+            <li>The agent must be <b>published</b> with Authentication = <b>Authenticate with Microsoft</b>. Microsoft is rolling out support for new-experience agents through the end of October 2026, so a “not supported yet” message can appear until your region has it. If the token is refused, use the non-preauthorized “HTTP with Microsoft Entra ID” connector with an Entra app that has <code>CopilotStudio.Copilots.Invoke</code>.</li>
+          </ol>
+        </details>
         <details>
           <summary className="small"><b>Make your agent understand this app</b> (recommended)</summary>
           <p className="muted small">1) In Copilot Studio add this <b>knowledge source</b> so the agent can answer from the same data (users need access; agent must use “Authenticate with Microsoft”). 2) Paste the instructions into the agent so it reads the context the app sends.</p>
@@ -185,7 +197,9 @@ function AssistantEditor({ engine, a, onSave, onClose }: { engine: Engine; a: As
   const set = (p: Partial<Assistant>) => { setD((x) => ({ ...x, ...p })); setTest(null) }
   const url = goodUrl(d.url)
   const hostOk = !!url && LINK_HOSTS.test(url.hostname)
-  const valid = !!d.name.trim() && (d.kind === 'studio' ? !!d.agent?.trim() : !!url)
+  const envOk = /^[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(d.environmentId?.trim() ?? '')
+  const valid = !!d.name.trim() && (d.kind === 'studio' ? !!d.agent?.trim() : d.kind === 'entra-http' ? !!d.agent?.trim() && envOk : !!url)
+  useEffect(() => { if (d.kind === 'entra-http' && !d.environmentId) void engine.backend.envId().then((e) => setD((x) => (x.environmentId ? x : { ...x, environmentId: e }))).catch(() => {}) }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const [steps, setSteps] = useState<{ ok: boolean | null; text: string }[]>([])
   const [found, setFound] = useState<{ name: string; schema: string }[] | null>(null)
   const [finding, setFinding] = useState(false)
@@ -200,6 +214,19 @@ function AssistantEditor({ engine, a, onSave, onClose }: { engine: Engine; a: As
     const name = d.agent!.trim(); setTesting(true); setClock(0); setTest(null)
     const out: { ok: boolean | null; text: string }[] = []; const push = (ok: boolean | null, text: string) => { out.push({ ok, text }); setSteps([...out]) }
     setSteps([])
+    if (d.kind === 'entra-http') {
+      try {
+        const has = engine.backend.agentConnector('entra-http')
+        push(has, has ? 'The “HTTP with Microsoft Entra ID” connector is attached to this app.' : 'The “HTTP with Microsoft Entra ID” connector is not attached to this app (see the setup steps above).')
+        if (!has) return
+        push(true, await engine.backend.probeAgent(d.environmentId!.trim(), name))
+        const t0 = Date.now()
+        const r = await Promise.race([engine.backend.askAgent(name, 'ping', undefined, { kind: 'entra-http', environmentId: d.environmentId!.trim() }), new Promise<never>((_, rej) => setTimeout(() => rej(new Error('No answer after 150 s.')), 150_000))])
+        push(true, `Agent answered in ${((Date.now() - t0) / 1000).toFixed(1)} s: “${r.text.slice(0, 120)}”`)
+        setTest({ ok: true, text: 'Connection works.' })
+      } catch (e) { push(false, (e as Error).message) } finally { setTesting(false) }
+      return
+    }
     try {
       push(engine.backend.agentConnector(), engine.backend.agentConnector() ? 'Copilot Studio connector is attached to this app.' : 'The Copilot Studio connector is not attached to this app.')
       if (!engine.backend.agentConnector()) return
@@ -217,10 +244,19 @@ function AssistantEditor({ engine, a, onSave, onClose }: { engine: Engine; a: As
     } catch (e) { const x = e as Error & { status?: number; requestId?: string }; if (/not found|404/i.test(x.message)) push(null, 'Most likely cause: this is a new-experience (GitHub Copilot harness) agent. Fix: create a classic (standard) agent in Copilot Studio, publish it, set Authentication to “Authenticate with Microsoft”, then press Find my agents. Or add this agent as a link instead.'); push(false, `${x.message}${x.status ? ` [HTTP ${x.status}${x.requestId ? `, request ${x.requestId}` : ''}]` : ''}`) } finally { setTesting(false) }
   }
   return (
-    <Modal title={a.name ? 'Edit assistant' : d.kind === 'studio' ? 'Add Copilot Studio agent' : 'Add agent link'} onClose={onClose}>
-      <form style={{ display: 'grid', gap: 12 }} onSubmit={(e) => { e.preventDefault(); if (valid) onSave({ ...d, name: d.name.trim(), agent: d.agent?.trim(), url: d.url?.trim(), prompts: d.prompts.filter(Boolean) }) }}>
+    <Modal title={a.name ? 'Edit assistant' : d.kind === 'entra-http' ? 'Add Copilot Studio agent' : d.kind === 'studio' ? 'Add classic agent (connector)' : 'Add agent link'} onClose={onClose}>
+      <form style={{ display: 'grid', gap: 12 }} onSubmit={(e) => { e.preventDefault(); if (valid) onSave({ ...d, name: d.name.trim(), agent: d.agent?.trim(), environmentId: d.environmentId?.trim(), url: d.url?.trim(), prompts: d.prompts.filter(Boolean) }) }}>
         <label className="small">Display name<input className="input" value={d.name} onChange={(e) => set({ name: e.target.value })} maxLength={60} placeholder="e.g. HR Policy Helper" /></label>
-        {d.kind === 'studio' ? <>
+        {d.kind === 'entra-http' ? <>
+          <div className="banner info small" role="note"><Icon n="info" /><div style={{ flex: 1 }}>Works with <b>new and classic</b> Copilot Studio agents. The agent must be <b>published</b> and set to <b>Authenticate with Microsoft</b>. Needs the “HTTP with Microsoft Entra ID” connector (see the notes in Setup). Each user approves that connection once.</div></div>
+          <label className="small">Environment ID <span className="muted">(Copilot Studio → Settings → Advanced → Metadata → Environment ID; this app’s own environment is filled in)</span><input className="input" value={d.environmentId ?? ''} onChange={(e) => set({ environmentId: e.target.value })} placeholder="e4c5fd77-2cb4-e3d1-8488-75cd3bd8521b" autoComplete="off" /></label>
+          {d.environmentId && !envOk && <div className="small" style={{ color: 'var(--bad)' }}>That is not a valid environment ID (a GUID).</div>}
+          <label className="small">Agent schema name <span className="muted">(same Metadata page → Schema name; case-sensitive)</span><input className="input" value={d.agent ?? ''} onChange={(e) => set({ agent: e.target.value })} placeholder="cr56c_spocode" autoComplete="off" /></label>
+          <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+            <button type="button" className="btn" disabled={testing || !d.agent?.trim() || !envOk} onClick={() => void runTest()}><Icon n="bolt" size={14} />{testing ? `Testing… ${clock}s` : 'Test connection'}</button>
+          </div>
+          {steps.length > 0 && <div role="status" aria-live="polite" style={{ display: 'grid', gap: 4 }}>{steps.map((x, i) => <div key={i} className="small" style={{ color: x.ok === false ? 'var(--bad)' : x.ok ? 'var(--good)' : 'var(--muted)' }}>{x.ok === false ? '✖ ' : x.ok ? '✔ ' : '• '}{x.text}</div>)}</div>}
+        </> : d.kind === 'studio' ? <>
           <label className="small">Agent schema name <span className="muted">(Copilot Studio → Settings → Advanced → Metadata; case-sensitive)</span><input className="input" value={d.agent ?? ''} onChange={(e) => set({ agent: e.target.value })} placeholder="cr123_hrHelper" autoComplete="off" /></label>
           <div className="banner info small" role="note"><Icon n="info" /><div style={{ flex: 1 }}>Works with <b>classic (standard) Copilot Studio agents</b> that are published. Agents from the newer experience (Skills / Connected agents / Authoring canvas, no Topics) can’t be called by Microsoft’s connector yet — add those as a <b>link</b> instead. <a href="https://github.com/microsoft/PowerAppsCodeApps/discussions/434" target="_blank" rel="noreferrer noopener">Details</a></div></div>
           <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
