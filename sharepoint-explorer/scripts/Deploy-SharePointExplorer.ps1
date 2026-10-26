@@ -304,7 +304,7 @@ try {
   if ((Test-Path $cfgPath) -and -not (Get-SchemaPath) -and ([System.IO.File]::ReadAllText($cfgPath) -match '"connectionReferences"\s*:\s*\{\s*"')) { Warn 'power.config.json has connector bindings but no generated schema - re-registering from a clean state.'; Reset-Pac }
   # optional Copilot Studio agent chat: decide first (connection / question), add it before SharePoint
   $csApi = 'shared_microsoftcopilotstudio'; $csConn = $null; $wantCs = $false; $csSchemaText = $null
-  $wcApi = 'shared_webcontents'; $wcConn = $null; $wantWc = $false; $wcSchemaText = $null
+  $wcApi = 'shared_webcontentsv2'; $wcConn = $null; $wantWc = $false; $wcSchemaText = $null
   $choice = ''
   if (-not $NoCopilotStudio -and -not $NonInteractive -and -not $AddCopilotStudio -and -not $AddEntraHttp) {
     Write-Host ''
@@ -318,11 +318,13 @@ try {
   if (-not $NoCopilotStudio -and ([bool]$AddEntraHttp -or $choice -in '2','3')) {
     try {
       $wcConn = @(Get-Connections) | Where-Object { $_.Api -eq $wcApi } | Select-Object -First 1
+      if (-not $wcConn) { $v1 = @(Get-Connections) | Where-Object { $_.Api -eq 'shared_webcontents' } | Select-Object -First 1; if ($v1) { $wcApi = 'shared_webcontents'; $wcConn = $v1; Warn 'Using the PREAUTHORIZED connector: Microsoft refuses Copilot Studio calls from it (403 InsufficientDelegatedPermissions). Prefer the non-preauthorized one: run scripts\Grant-CopilotStudioAccess.ps1 as an admin, create the connection below, and run this script again.' } }
       if (-not $wcConn -and -not $NonInteractive) {
         $h = ($EnvironmentId -replace '-', '').ToLower(); $envHost = "https://$($h.Substring(0, $h.Length - 2)).$($h.Substring($h.Length - 2)).environment.api.powerplatform.com"
-        Warn 'Create ONE connection (sign-in cannot be scripted). In the page that opens choose "HTTP with Microsoft Entra ID (preauthorized)" and enter:'
+        Warn 'FIRST (once, as a tenant admin): run scripts\Grant-CopilotStudioAccess.ps1 - it allows the connector to call Copilot Studio.'
+        Warn 'Then create ONE connection (sign-in cannot be scripted). In the page that opens choose "HTTP with Microsoft Entra ID" (NOT the preauthorized one) and enter:'
         Write-Host "    Base Resource URL : $envHost" -ForegroundColor Yellow
-        Write-Host '    Azure AD Resource URI : https://api.powerplatform.com' -ForegroundColor Yellow
+        Write-Host '    Microsoft Entra ID Resource URI : https://api.powerplatform.com' -ForegroundColor Yellow
         Start-Process "https://make.powerapps.com/environments/$EnvironmentId/connections/available?apiName=$wcApi"
         $null = Read-Host 'Press Enter when the connection is created'
         $wcConn = @(Get-Connections) | Where-Object { $_.Api -eq $wcApi } | Select-Object -First 1
