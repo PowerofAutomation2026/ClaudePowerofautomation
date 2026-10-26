@@ -268,7 +268,7 @@ function Shell() {
   }
   const effectiveRules = useMemo(() => [...(fmtRules.hideShared ? [] : fmtRules.shared), ...fmtRules.mine], [fmtRules])
   const painter = useMemo(() => (engine ? compileRules(effectiveRules, engine.fields) : undefined), [effectiveRules, engine])
-  const legend = useMemo(() => (engine && painter ? legendCounts(engine.rows, effectiveRules, engine.fields) : []), [engine, painter, effectiveRules, ver]) // eslint-disable-line react-hooks/exhaustive-deps
+  const legend = useMemo(() => (engine && painter ? legendCounts(engine.rows.length > 10_000 ? engine.rows.slice(0, 10_000) : engine.rows, effectiveRules, engine.fields) : []), [engine, painter, effectiveRules, ver]) // eslint-disable-line react-hooks/exhaustive-deps
   const gridEdit = async (row: Row, f: SpField, value: unknown, isUndo = false) => {
     if (!engine || !boot) return
     const prev = row[f.internal]

@@ -108,7 +108,7 @@ function useWidgetResults(engine: Engine, widgets: Widget[], version: number, re
     const t = setInterval(() => { if (backgroundAllowed()) void run(false) }, refreshSec * 1000)
     return () => clearInterval(t)
   }, [local, refreshSec, run])
-  useEffect(() => { if (!local && engine.pendingNew > 0 && Date.now() - info.at > 20_000 && backgroundAllowed()) void run(false) }, [engine.pendingNew]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!local && engine.pendingNew > 0 && Date.now() - info.at > 120_000 && backgroundAllowed()) void run(false) }, [engine.pendingNew]) // eslint-disable-line react-hooks/exhaustive-deps
   return { res, info, run }
 }
 

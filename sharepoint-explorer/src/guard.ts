@@ -15,9 +15,10 @@ const emit = () => { state = { ...state }; subs.forEach((f) => f()) }
 
 export class GuardError extends Error { constructor(m: string) { super(m); this.name = 'GuardError' } }
 
-const MAX_PER_MIN = 600
+const MAX_PER_MIN = 400
 const COOLDOWN_MS = 30_000
-const HEAP_LIMIT = 1_200_000_000   // bytes of used JS heap (Chrome); the browser kills a tab around 2-4 GB
+const HEAP_LIMIT = 700_000_000   // bytes of used JS heap (Chrome): hard stop; the browser kills a tab around 2-4 GB
+const HEAP_SOFT = 420_000_000    // soft: forget caches quietly
 const times: number[] = []
 
 export const getGuard = () => state
@@ -49,6 +50,7 @@ export function startGuard() {
   // heap watchdog (performance.memory exists in Chromium browsers only)
   setInterval(() => {
     const m = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory
+    if (m && m.usedJSHeapSize > HEAP_SOFT && m.usedJSHeapSize <= HEAP_LIMIT) dropHooks.forEach((f) => { try { f() } catch { /* best effort */ } })
     if (m && m.usedJSHeapSize > HEAP_LIMIT) trip('memory', 'The app is using a lot of browser memory, so background updates were stopped and caches cleared to keep it from crashing. Reload the page to continue.')
   }, 5000)
   // crash detection: a heartbeat per tab that is removed on a clean unload

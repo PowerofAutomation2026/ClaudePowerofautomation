@@ -79,7 +79,7 @@ export function Dashboard({ engine, version, onFilter, onGoData, title }: Props)
   }, [engine, local]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!local && !cache.get(engine.src.id)?.sample) void loadSample() }, [engine.src.id]) // eslint-disable-line react-hooks/exhaustive-deps
   // keep the sample fresh when the live pulse sees the list grow
-  useEffect(() => { if (!local && snap && engine.pendingNew > 0 && Date.now() - snap.at > 20_000 && backgroundAllowed()) void loadSample() }, [engine.pendingNew]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!local && snap && engine.pendingNew > 0 && Date.now() - snap.at > 120_000 && backgroundAllowed()) void loadSample() }, [engine.pendingNew]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const startDeep = () => { setScope('full'); void deepScan(engine, fields) }
   useEffect(() => { // switch back to whichever snapshot the scope asks for

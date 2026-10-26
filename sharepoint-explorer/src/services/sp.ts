@@ -81,6 +81,7 @@ let active = 0
 const waiters: (() => void)[] = []
 const MAX_PARALLEL = 4
 async function slot<T>(fn: () => Promise<T>): Promise<T> {
+  if (waiters.length > 48) throw new Error('Too many requests are waiting for SharePoint. Try again in a moment.')   // a stalled connection must not queue work without end
   if (active >= MAX_PARALLEL) await new Promise<void>((r) => waiters.push(r))
   active++
   try { return await fn() } finally { active--; waiters.shift()?.() }
@@ -102,7 +103,7 @@ async function exec(opName: string, params: Record<string, unknown>, signal?: Ab
   for (;;) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
     guardRequest()   // circuit breaker against runaway request loops
-    const res: any = await slot(() => sdk().executeAsync({ connectorOperation: { tableName: ds, operationName: opName, parameters: params } } as any))
+    const res: any = await slot(() => Promise.race([sdk().executeAsync({ connectorOperation: { tableName: ds, operationName: opName, parameters: params } } as any), sleep(idempotent ? 60_000 : 180_000).then(() => ({ success: false, error: { status: 504, message: 'SharePoint did not answer in time (timed out).' } }))]))
     if (res?.success) return res.data
     const e = res?.error
     const status = Number(e?.status ?? e?.statusCode ?? res?.status ?? 0)

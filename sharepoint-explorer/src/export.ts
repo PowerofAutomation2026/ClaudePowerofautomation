@@ -50,12 +50,13 @@ async function openSink(name: string, mime: string, ext: string) {
     try {
       const h = await w.showSaveFilePicker({ suggestedName: `${name}.${ext}`, types: [{ description: ext.toUpperCase(), accept: { [mime]: [`.${ext}`] } }] })
       const ws = await h.createWritable()
-      return { write: (s: string) => ws.write(s), close: () => ws.close(), abort: () => ws.abort().catch(() => {}) }
+      return { memory: false, write: (s: string) => ws.write(s), close: () => ws.close(), abort: () => ws.abort().catch(() => {}) }
     } catch (e) { if ((e as Error).name === 'AbortError') throw e /* user cancelled the dialog */ }
   }
   const parts: BlobPart[] = []
   let buf = ''
   return {
+    memory: true,
     write: async (s: string) => { buf += s; if (buf.length > 1_000_000) { parts.push(new Blob([buf])); buf = '' } },
     close: async () => { parts.push(new Blob([buf])); download(new Blob(parts, { type: mime }), `${name}.${ext}`) },
     abort: async () => { parts.length = 0 },
@@ -74,7 +75,7 @@ export async function runExport(job: ExportJob): Promise<{ rows: number; note?: 
     for await (const chunk of rowSource(job)) {
       let out = ''
       for (const r of chunk) {
-        if (n >= EXPORT_MAX_ROWS) break
+        if (n >= (sink.memory ? 250_000 : EXPORT_MAX_ROWS)) break   // no disk streaming in this browser: everything is held in memory
         if (csv) out += job.columns.map((c) => csvCell(rawText(c, r))).join(',') + '\r\n'
         else {
           const o: Record<string, unknown> = { ID: r.__id }

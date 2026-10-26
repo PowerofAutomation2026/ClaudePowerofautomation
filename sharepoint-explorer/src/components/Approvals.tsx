@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { auditCsv, canDecide, isOverdue, STATUS_LABEL, validateFlow, waitingOn } from '../approval'
 import { useApprovalOf } from '../approvalStore'
 import type { Engine } from '../engine'
@@ -114,7 +114,7 @@ export function ApprovalsDialog({ engine, api, onOpen, onClose }: { engine: Engi
   const [sel, setSel] = useState<number | null>(null)
   const [status, setStatus] = useState<'all' | ApprovalReq['status']>('all')
   const mine = api.reqs.filter((r) => r.by.upn.toLowerCase() === api.me.upn.toLowerCase())
-  const list = (tab === 'me' ? api.waitingForMe : tab === 'mine' ? mine : api.reqs).filter((r) => status === 'all' || r.status === status).sort((a, b) => b.at.localeCompare(a.at))
+  const list = useMemo(() => (tab === 'me' ? api.waitingForMe : tab === 'mine' ? mine : api.reqs).filter((r) => status === 'all' || r.status === status).sort((a, b) => b.at.localeCompare(a.at)), [tab, status, api.reqs, api.waitingForMe]) // eslint-disable-line react-hooks/exhaustive-deps
   const cur = api.reqs.find((r) => r.itemId === sel)
   const toast = useToast()
   const [ticked, setTicked] = useState<Set<number>>(new Set())

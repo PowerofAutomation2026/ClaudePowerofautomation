@@ -86,6 +86,7 @@ export function useApproval(engine: Engine | null, me: Me, access: Access, mayDe
         await new Promise((r) => setTimeout(r, Math.random() * 1200))           // two open apps rarely act at the very same moment
         const fresh = await latest(row.__id)
         const why = autoReason(flow, row, engine.fields, fresh); handled.current.add(key)
+        if (handled.current.size > 5000) handled.current = new Set([...handled.current].slice(-2500))
         if (!why) continue
         await persist(submitReq(flow, { id: row.__id, title: nameOf(row), link: linkOf(row), row, fields: engine.fields, by: { name: String(row.Editor || row.Author || me.name), upn: '' }, auto: why }, me, '', fresh), fresh ?? null); n++
         if (n >= 25) break                                                       // a mass edit never floods: the rest follows on the next sweeps
@@ -94,7 +95,8 @@ export function useApproval(engine: Engine | null, me: Me, access: Access, mayDe
     return n
   }, [flow, engine, backend, id]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { handled.current.clear(); lastSweep.current = ''; denied.current = false }, [id, flow?.updated])
-  useEffect(() => { if (!active || !flow?.auto) return; const wait = Math.max(1800, 15_000 - (Date.now() - lastRun.current)); const t = setTimeout(() => { lastRun.current = Date.now(); void sweep() }, wait); return () => clearTimeout(t) }, [ver, active, flow?.updated])   // never more often than every 15 s, however busy the live pulse is // eslint-disable-line react-hooks/exhaustive-deps
+  // an early sweep only when the live pulse actually saw a change, and never more than once per 45 s
+  useEffect(() => { if (!active || !flow?.auto || !engine || (engine.pendingNew === 0 && !engine.pulse.length)) return; const wait = Math.max(1800, 45_000 - (Date.now() - lastRun.current)); const t = setTimeout(() => { lastRun.current = Date.now(); void sweep() }, wait); return () => clearTimeout(t) }, [engine?.pulse.length, active, flow?.updated])   // never more often than every 15 s, however busy the live pulse is // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!active || !flow?.auto) return; const t = setInterval(() => { if (!document.hidden) void sweep() }, 45_000); return () => clearInterval(t) }, [sweep, active, flow?.auto])
 
   return {

@@ -13,7 +13,7 @@ import { clauseToOData, emptyQuery, isDefaultQuery, isFolderMode, titleField, ma
 export const LOCAL_MAX = 25_000
 export const BULK = 5_000
 export const PAGE = 250
-export const MAX_ROWS = 60_000   // rows kept in memory in server mode; more than this in a browser tab inside the Power Apps player is not safe
+export const MAX_ROWS = 40_000   // rows kept in memory in server mode: ~4 KB of heap per 24-column row, so more than this in a tab inside the Power Apps player is not safe
 /** rows the grid may walk past on its own (filtered out client-side) before it stops and asks the user */
 export const AUTO_SCAN = 10_000
 
@@ -144,9 +144,9 @@ export class Engine {
         // only clauses SharePoint could NOT apply (multi-value people/lookups, refused expands) are evaluated here; the rest is already filtered
         const local = this.q.clauses.filter((c) => { const f = this.fields.find((x) => x.internal === c.field); return f && clauseToOData(c, f) === null })
         const kept = local.length ? page.rows.filter((r) => matchRow(r, { ...this.q, search: '', clauses: local }, this.fields)) : page.rows
-        this.rows = this.rows.concat(kept)
-        this.autoScanned += (page.scanned ?? page.rows.length) - kept.length
-        if (isFolderMode(this.q)) this.rows = sortFolderRows(this.rows, this.q, this.fields)
+        for (let i = 0; i < kept.length; i += 5000) this.rows.push(...kept.slice(i, i + 5000))   // in place: concat copied the whole array on every page
+        this.autoScanned += kept.length ? (page.scanned ?? page.rows.length) - kept.length : Math.max(page.scanned ?? 0, this.pageSize)   // an empty page counts as a full page walked
+        if (isFolderMode(this.q) && !page.cursor) this.rows = sortFolderRows(this.rows, this.q, this.fields)   // rows arrive in ID order: sort once, at the end
         got += page.rows.length
         this.scanned += page.scanned ?? page.rows.length
         for (const r of page.rows) if (r.__id > this.maxId) this.maxId = r.__id
@@ -218,6 +218,7 @@ export class Engine {
       const now = new Date().toISOString()
       this.lastSync = now
       this.total = r.itemCount || this.total
+      if (!r.added.length && !r.changed.length) return 0   // nothing happened: no re-index, no re-render
       const ts = Date.now()
       const ev = (row: Row, kind: PulseEvent['kind']): PulseEvent => ({ at: ts, kind, id: row.__id, title: String(row[this.titleField] ?? row.Title ?? `#${row.__id}`), by: String(row.Editor ?? row.Author ?? '') || undefined })
       const fresh = r.added.filter((x) => !this.hasId(x.__id))
@@ -237,7 +238,7 @@ export class Engine {
         for (const c of changed) { const i = idx.get(c.__id); if (i != null) { this.rows[i] = c; touched = true } }
         if (touched || fresh.length) this.emit()
       }
-      this.emit()
+      if (this.mode === 'local') this.emit()
       return fresh.length + changed.length
     } catch { return 0 }
   }

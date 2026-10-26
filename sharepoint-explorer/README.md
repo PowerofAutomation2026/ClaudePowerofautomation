@@ -211,8 +211,9 @@ A filter the server could not apply (multi-value people/lookup columns, relative
 
 ### Production safety nets (v1.9.10)
 
-- **Request circuit breaker:** more than 600 SharePoint calls in a minute pauses further calls for 30 seconds and shows a banner (a runaway loop can no longer hammer SharePoint or fill the tab with data).
-- **Heap watchdog:** if the page uses more than ~1.2 GB of browser memory, caches are dropped, background work stops and a banner asks you to reload — instead of the tab crashing.
+- **Request circuit breaker:** more than 400 SharePoint calls in in a minute pauses further calls for 30 seconds and shows a banner (a runaway loop can no longer hammer SharePoint or fill the tab with data).
+- **Heap watchdog:** if the page uses more than ~700 MB of browser memory, caches are dropped, background work stops and a banner asks you to reload — instead of the tab crashing.
 - **Safe mode:** if the previous session of a tab ended without a clean close (crash / out of memory), the next one starts with live pulse, automatic approvals and background scans paused, with a one-click "Turn background features on".
-- Background work (live pulse, auto-approval checks, dashboard refresh) only runs while the tab is visible; server-mode lists keep at most 60,000 rows in memory.
+- Background work (live pulse, auto-approval checks, dashboard refresh) only runs while the tab is visible; server-mode lists keep at most 40,000 rows in memory.
 - **Deploy.cmd** now asks which AI assistant support you want: [1] classic Copilot Studio agents, [2] new-experience agents (guides you through the one extra connection, printing the exact Base Resource URL and Resource URI), [3] both.
+- Every SharePoint call times out after 60 s (reads) / 180 s (writes) and at most 48 calls may wait in the queue; the dashboard sample refreshes at most every 2 minutes; the auto-approval check runs at most every 45 s (and only after the live pulse saw a change); exports without disk streaming stop at 250,000 rows; an idle live-pulse poll no longer re-indexes or re-renders anything.

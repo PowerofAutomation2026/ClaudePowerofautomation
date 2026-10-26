@@ -82,7 +82,7 @@ export class Aggregator {
         const key = String(t).toLowerCase()
         const n = this.titles.get(key)
         if (n != null) { this.titles.set(key, n + 1); if (n === 1) this.dupes++ }
-        else if (this.titles.size < 400_000) this.titles.set(key, 1)
+        else if (this.titles.size < 100_000) this.titles.set(key, 1)
       }
       if (this.isLibrary) {
         const e = String(r.File_x0020_Type ?? (String(r.FileLeafRef ?? '').includes('.') ? String(r.FileLeafRef).split('.').pop() : '') ?? '').toLowerCase() || 'none'
