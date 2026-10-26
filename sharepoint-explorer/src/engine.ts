@@ -134,7 +134,9 @@ export class Engine {
         calls++
         const page = await this.backend.query(this.src, this.fields, this.select, this.q, this.pageSize, this.cursor, this.ctl!.signal)
         if (gen !== this.gen) return
-        this.rows = this.rows.concat(page.rows)
+        // filters on columns SharePoint cannot filter server-side (multi-value people/lookups) come back unfiltered: apply them here
+        const kept = this.q.clauses.length ? page.rows.filter((r) => matchRow(r, { ...this.q, search: '' }, this.fields)) : page.rows
+        this.rows = this.rows.concat(kept)
         if (isFolderMode(this.q)) this.rows = sortFolderRows(this.rows, this.q, this.fields)
         got += page.rows.length
         this.scanned += page.scanned ?? page.rows.length

@@ -5,9 +5,9 @@
 import { resolveRelative } from './format'
 import { clauseMatches } from './query'
 import type { Row, SpField, Widget } from './types'
-import { cellText, uid } from './util'
+import { cellText, dateOnlyDay, uid } from './util'
 
-export interface GroupRes { kind: 'group'; items: { label: string; value: number }[]; total: number }
+export interface GroupRes { kind: 'group'; items: { label: string; value: number; other?: boolean }[]; total: number }
 export interface KpiRes { kind: 'kpi'; value: number; n: number; field?: SpField }
 export interface TimeRes { kind: 'time'; items: { label: string; value: number }[] }
 export interface TopRes { kind: 'top'; rows: { id: number; title: string; value: number | string }[] }
@@ -26,49 +26,50 @@ export function makeAcc(w: Widget, fields: SpField[], titleField: string): Acc {
   let clause = w.clause ? { ...w.clause, value: w.clause.op === 'lastdays' ? w.clause.value : resolveRelative(w.clause.value) } : undefined
   if (clause && cf?.percent && !isNaN(Number(clause.value)) && ['gt', 'ge', 'lt', 'le', 'eq'].includes(clause.op)) clause = { ...clause, value: String(Number(clause.value) / 100) }
   const pass = (r: Row) => !clause || !cf || clauseMatches(clause, r, cf)
-  const num = (r: Row) => { const x = Number(r[w.valueField ?? '']); return isNaN(x) ? null : x }
+  const num = (r: Row) => { const v = r[w.valueField ?? '']; if (v == null || v === '') return null; const x = Number(v); return isNaN(x) ? null : x }   // blank cells are not zeros
+  const dayOf = (raw: unknown) => { if (f?.dateOnly) return dateOnlyDay(String(raw)); const t = Date.parse(String(raw)); return isNaN(t) ? '' : dayKey(t) }
   const agg = w.agg ?? 'count'
 
   if (w.type === 'kpi' || w.type === 'goal') {
-    let n = 0, sum = 0, mn = Infinity, mx = -Infinity
+    let n = 0, k = 0, sum = 0, mn = Infinity, mx = -Infinity
     return {
-      add(rows) { for (const r of rows) { if (!pass(r)) continue; n++; const x = agg === 'count' ? null : num(r); if (x != null) { sum += x; if (x < mn) mn = x; if (x > mx) mx = x } } },
-      result: () => ({ kind: 'kpi', n, field: vf, value: agg === 'count' ? n : agg === 'sum' ? sum : agg === 'avg' ? (n ? sum / n : 0) : agg === 'min' ? (isFinite(mn) ? mn : 0) : (isFinite(mx) ? mx : 0) }),
+      add(rows) { for (const r of rows) { if (!pass(r)) continue; n++; if (agg === 'count') continue; const x = num(r); if (x != null) { k++; sum += x; if (x < mn) mn = x; if (x > mx) mx = x } } },
+      result: () => ({ kind: 'kpi', n, field: vf, value: agg === 'count' ? n : agg === 'sum' ? sum : agg === 'avg' ? (k ? sum / k : 0) : agg === 'min' ? (isFinite(mn) ? mn : 0) : (isFinite(mx) ? mx : 0) }),
     }
   }
   if (w.type === 'bar' || w.type === 'donut') {
-    const m = new Map<string, { n: number; sum: number }>()
+    const m = new Map<string, { n: number; k: number; sum: number }>()
     const CAP = 5000
     return {
       add(rows) {
         for (const r of rows) {
           if (!pass(r)) continue
           const raw = f ? r[f.internal] : ''
-          const keys: string[] = raw == null || raw === '' ? ['(empty)'] : f?.kind === 'date' ? [rebucket(dayKey(Date.parse(String(raw))), w.bucket && w.bucket !== 'auto' ? w.bucket : 'month')]
+          const keys: string[] = raw == null || raw === '' ? ['(empty)'] : f?.kind === 'date' ? (dayOf(raw) ? [rebucket(dayOf(raw), w.bucket && w.bucket !== 'auto' ? w.bucket : 'month')] : ['(empty)'])
             : Array.isArray(raw) ? raw.map(String) : f?.kind === 'user' || f?.kind === 'lookup' || f?.kind === 'multichoice' ? String(raw).split('; ') : [f?.kind === 'boolean' ? cellText(f, r) : String(raw)]
-          const x = agg === 'count' ? 0 : num(r) ?? 0
-          for (const k of keys) { const e = m.get(k); if (e) { e.n++; e.sum += x } else if (m.size < CAP) m.set(k, { n: 1, sum: x }) }
+          const x = agg === 'count' ? null : num(r)
+          for (const key of keys) { const e = m.get(key); if (e) { e.n++; if (x != null) { e.k++; e.sum += x } } else if (m.size < CAP) m.set(key, { n: 1, k: x != null ? 1 : 0, sum: x ?? 0 }) }
         }
       },
       result: () => {
-        const val = (e: { n: number; sum: number }) => (agg === 'count' ? e.n : agg === 'sum' ? e.sum : e.n ? e.sum / e.n : 0)
-        const all = [...m.entries()].map(([label, e]) => ({ label, value: Math.round(val(e) * 100) / 100 })).sort(f?.kind === 'date' ? (a, b) => a.label.localeCompare(b.label) : (a, b) => b.value - a.value)
-        const N = w.topN ?? 8, head = f?.kind === 'date' ? all.slice(-N) : all.slice(0, N), rest = f?.kind === 'date' ? 0 : all.slice(N).reduce((a, b) => a + b.value, 0)
-        if (rest > 0) head.push({ label: 'Other', value: rest })
+        const val = (e: { n: number; k: number; sum: number }) => (agg === 'count' ? e.n : agg === 'sum' ? e.sum : e.k ? e.sum / e.k : 0)
+        const all = [...m.entries()].map(([label, e]) => ({ label, value: Math.round(val(e) * 100) / 100, other: false as boolean | undefined })).sort(f?.kind === 'date' ? (a, b) => a.label.localeCompare(b.label) : (a, b) => b.value - a.value)
+        const N = w.topN ?? 8, head = f?.kind === 'date' ? all.slice(-N) : all.slice(0, N), rest = f?.kind === 'date' || agg === 'avg' ? 0 : all.slice(N).reduce((a, b) => a + b.value, 0)   // averages cannot be added up
+        if (rest > 0) head.push({ label: 'Other', value: rest, other: true })
         return { kind: 'group', items: head, total: all.reduce((a, b) => a + b.value, 0) }
       },
     }
   }
   if (w.type === 'timeline') {
-    const days = new Map<string, { n: number; sum: number }>()
+    const days = new Map<string, { n: number; k: number; sum: number }>()
     return {
-      add(rows) { for (const r of rows) { if (!pass(r)) continue; const t = Date.parse(String(r[w.field ?? 'Created'])); if (isNaN(t)) continue; const k = dayKey(t); const x = agg === 'count' ? 0 : num(r) ?? 0; const e = days.get(k); if (e) { e.n++; e.sum += x } else days.set(k, { n: 1, sum: x }) } },
+      add(rows) { for (const r of rows) { if (!pass(r)) continue; const key = dayOf(r[w.field ?? 'Created']); if (!key) continue; const x = agg === 'count' ? null : num(r); const e = days.get(key); if (e) { e.n++; if (x != null) { e.k++; e.sum += x } } else days.set(key, { n: 1, k: x != null ? 1 : 0, sum: x ?? 0 }) } },
       result: () => {
         const keys = [...days.keys()].sort(); if (!keys.length) return { kind: 'time', items: [] }
         const span = (Date.parse(keys[keys.length - 1]) - Date.parse(keys[0])) / DAY
         const b = w.bucket && w.bucket !== 'auto' ? w.bucket : span <= 75 ? 'day' : span <= 400 ? 'week' : span <= 1500 ? 'month' : 'year'
         const out = new Map<string, number>()
-        for (const k of keys) { const e = days.get(k)!; out.set(rebucket(k, b), (out.get(rebucket(k, b)) ?? 0) + (agg === 'count' ? e.n : agg === 'sum' ? e.sum : e.n ? e.sum / e.n : 0)) }
+        for (const k of keys) { const e = days.get(k)!; out.set(rebucket(k, b), (out.get(rebucket(k, b)) ?? 0) + (agg === 'count' ? e.n : agg === 'sum' ? e.sum : e.k ? e.sum / e.k : 0)) }
         return { kind: 'time', items: [...out.entries()].map(([label, value]) => ({ label, value: Math.round(value * 100) / 100 })) }
       },
     }

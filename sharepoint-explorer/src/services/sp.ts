@@ -42,7 +42,7 @@ const ds = { name: 'dataset', in: 'path', required: true, type: 'string' }
 const FILE_API = { path: '/{connectionId}/datasets/{dataset}/files', method: 'POST', parameters: [conn, ds, { name: 'folderPath', in: 'query', required: true, type: 'string' }, { name: 'name', in: 'query', required: true, type: 'string' }, { name: 'queryParametersSingleEncoded', in: 'query', required: false, type: 'boolean' }, { name: 'body', in: 'body', required: true, type: 'string', format: 'binary' }] }
 /** connector "Add attachment" */
 const ATT_API = { path: '/{connectionId}/datasets/{dataset}/tables/{tableName}/items/{itemId}/attachments', method: 'POST', parameters: [conn, ds, { name: 'tableName', in: 'path', required: true, type: 'string' }, { name: 'itemId', in: 'path', required: true, type: 'string' }, { name: 'displayName', in: 'query', required: true, type: 'string' }, { name: 'body', in: 'body', required: true, type: 'string', format: 'binary' }] }
-const isStudio = (k: string, v: any) => /copilotstudio|microsoftcopilot/i.test(`${k} ${v?.apiId ?? ''}`)
+const isStudio = (k: string, v: any) => !v?.tableId && (/^microsoftcopilotstudio$/i.test(k) || /shared_microsoftcopilotstudio/i.test(String(v?.apiId ?? '')) || Object.keys(v?.apis ?? {}).some((n) => /^ExecuteCopilot/i.test(n)))   // judged by shape, not by a list that happens to be named like the connector
 const isConnectorSource = (v: any) => v && typeof v === 'object' && !/dataverse|cds/i.test(String(v.dataSourceType ?? ''))
 for (const [k, v] of Object.entries<any>(dataSourcesInfo)) {
   if (!isConnectorSource(v) || isStudio(k, v)) continue
@@ -73,7 +73,7 @@ const spKey = () => (keyP ??= (async () => {
   let last = ''
   for (const k of c) { try { const r: any = await sdk().executeAsync({ connectorOperation: { tableName: k, operationName: 'GetDataSets', parameters: {} } } as any); if (r?.success) return k; last = String(r?.error?.message ?? 'failed') } catch (e) { last = (e as Error).message } }
   throw new Error(`None of the connectors in this app answered the SharePoint site-list call (${c.join(', ')}). ${last}`)
-})())
+})().catch((e) => { keyP = null; throw e }))   // a transient failure must not be cached for the whole session
 
 /* ------------------------------------------------------------------ throttled, retrying transport */
 let active = 0
@@ -91,7 +91,7 @@ function friendly(raw: string): string {
   if (/lookup column/i.test(raw)) return `SharePoint refused the query because it selects more than 12 people/lookup columns (lookup column threshold). The app retries with fewer columns automatically. ${raw}`
   if (/threshold/i.test(raw)) return 'SharePoint refused the query because it would scan more than 5,000 items without an index (list view threshold). Index the column you are filtering/sorting on (owner: Connect → Index column), or narrow the filter.'
   if (/does not exist|404/i.test(raw) && /list|site|web/i.test(raw)) return `Not found: ${raw}`
-  if (/(401|403)|access denied|forbidden/i.test(raw)) return `Access denied by SharePoint - you may not have permission to this list. ${raw}`
+  if (/\bHTTP (401|403)\b|access denied|forbidden|unauthori[sz]ed/i.test(raw)) return `Access denied by SharePoint - you may not have permission to this list. ${raw}`
   return raw
 }
 
@@ -261,7 +261,8 @@ export const sp: Backend = {
     const out = items.filter((i) => !(src.isLibrary && src.itemCount > 5000 && !q.folders && Number(i.FSObjType) === 1)).map((i) => toRow(i, fields))
     let next: string | undefined
     if (byId) {
-      if (items.length >= Math.min(top, 5000) && out.length) next = `id:${out[out.length - 1].__id + (asc ? 1 : -1)}`
+      const last = items[items.length - 1]   // page boundary comes from the RAW page: a page that is all folders (filtered out client-side) must not end the paging
+      if (items.length >= Math.min(top, 5000) && last && !isNaN(Number(last.Id ?? last.ID))) next = `id:${Number(last.Id ?? last.ID) + (asc ? 1 : -1)}`
     } else {
       const link: string | undefined = d?.['odata.nextLink'] ?? d?.['@odata.nextLink'] ?? d?.d?.__next
       const i = link ? link.indexOf('_api/') : -1
@@ -321,9 +322,9 @@ export const sp: Backend = {
     return { shared: shared ?? lsGet<ViewDef[]>('spx.views.shared', []), mine: mine ?? lsGet<ViewDef[]>(`spx.views.mine.${upn}`, []) }
   },
   async loadDashboard(sourceId) { return (await kvGet<DashConfig>(`dashboard:${sourceId}`)) ?? lsGet<DashConfig | null>(`spx.dash.${sourceId}`, null) },
-  async saveDashboard(sourceId, cfg) { lsSet(`spx.dash.${sourceId}`, cfg); await kvSet(`dashboard:${sourceId}`, cfg) },
+  async saveDashboard(sourceId, cfg) { await kvSet(`dashboard:${sourceId}`, cfg); lsSet(`spx.dash.${sourceId}`, cfg) },
   async loadAssistants() { return (await kvGet<AssistantConfig>('assistants')) ?? lsGet<AssistantConfig | null>('spx.assistants', null) },
-  async saveAssistants(cfg) { lsSet('spx.assistants', cfg); await kvSet('assistants', cfg) },
+  async saveAssistants(cfg) { if (!cfgSite()) throw new Error('No config site is set for this app, so assistants cannot be shared. Re-run Deploy.cmd with -ConfigSiteUrl.'); await kvSet('assistants', cfg); lsSet('spx.assistants', cfg) },
   agentConnector: () => !!studioKey(),
   askAgent: (agent, message, conv) => askStudio(agent, message, conv),
   listAgents: () => listStudioAgents(),
@@ -496,7 +497,7 @@ export function selectExpand(fields: SpField[], select: string[], isLibrary: boo
     const f = fields.find((x) => x.internal === n)
     if (!f || n === 'ID' || unusable.has(n) || unusable.has(propOf(f)) || (isLibrary && FILE_COLS.has(n))) continue
     const rn = propOf(f)
-    if ((f.kind === 'user' || f.kind === 'lookup') && noExpand.has(rn)) { sel.add(`FieldValuesAsText/${f.internal}`); if (f.kind === 'user') sel.add(`${rn}Id`); viaText = true }
+    if ((f.kind === 'user' || f.kind === 'lookup') && noExpand.has(rn)) { sel.add(`FieldValuesAsText/${fvKey(f.internal)}`); if (f.kind === 'user') sel.add(`${rn}Id`); viaText = true }
     else if (f.kind === 'user' || (f.kind === 'lookup' && f.typeAsString.startsWith('Lookup'))) { sel.add(`${rn}/${f.kind === 'lookup' ? f.lookupField || 'Title' : 'Title'}`); if (f.kind === 'user') sel.add(`${rn}/Id`); exp.add(rn) }
     else sel.add(rn)
   }
@@ -521,6 +522,8 @@ async function recover<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+/** FieldValuesAsText keys encode every underscore as _x005f_ */
+const fvKey = (n: string) => n.replace(/_/g, '_x005f_')
 const FILE_COLS = new Set(['FileRef', 'FileDirRef', 'FileLeafRef', 'FSObjType', 'File_x0020_Type', 'File_x0020_Size'])
 function toRow(item: any, fields: SpField[]): Row {
   const row: Row = { __id: Number(item.Id ?? item.ID), ID: Number(item.Id ?? item.ID) }
@@ -528,13 +531,13 @@ function toRow(item: any, fields: SpField[]): Row {
   if (item.FSObjType != null) row.FSObjType = Number(item.FSObjType)
   // size: File/Length (a string; folders return File as null) -> legacy File_x0020_Size -> FieldValuesAsText
   const len = item.File && typeof item.File === 'object' ? item.File.Length : undefined
-  const size = len ?? item.File_x0020_Size ?? item.FieldValuesAsText?.File_x0020_Size
+  const size = len ?? item.File_x0020_Size ?? item.FieldValuesAsText?.[fvKey('File_x0020_Size')] ?? item.FieldValuesAsText?.File_x0020_Size
   if (size != null && size !== '' && !isNaN(Number(size))) row.File_x0020_Size = Number(size)
   for (const f of fields) {
     if (FILE_COLS.has(f.internal) && f.internal in row) continue   // already set above as plain values (the generic loop would turn File Size into '')
     const key = propOf(f) in item ? propOf(f) : f.internal
     const fv = item.FieldValuesAsText
-    const tk = fv && (f.internal in fv ? f.internal : propOf(f) in fv ? propOf(f) : null)
+    const tk = fv && [fvKey(f.internal), f.internal, fvKey(propOf(f)), propOf(f)].find((k) => k in fv)
     if (!(key in item) && tk) {
       row[f.internal] = fv[tk]
       if (f.kind === 'user') { let ids = item[`${propOf(f)}Id`]; if (ids && typeof ids === 'object' && 'results' in ids) ids = ids.results; row[f.internal + '__ids'] = Array.isArray(ids) ? ids : ids != null ? [ids] : [] }
@@ -692,7 +695,7 @@ export async function diagnose(testSite?: string): Promise<Check[]> {
   try { out.push({ label: 'Data source bound to the SharePoint connection', ok: true, detail: await within(spKey()) }) } catch (e) { out.push({ label: 'Data source bound to the SharePoint connection', ok: false, detail: (e as Error).message }) }
   try { const r = rows(await within(exec('GetDataSets', {}))); out.push({ label: 'SharePoint connection works (list of sites)', ok: true, detail: `${r.length} site(s) returned` }) }
   catch (e) { out.push({ label: 'SharePoint connection works (list of sites)', ok: false, detail: (e as Error).message }) }
-  const site = testSite || baked.configSiteUrl || lsGet<string>('spx.lastSite', '')
+  const site = testSite || baked.configSiteUrl || lsGet<string>('spx.lastSite.live', '')
   if (site) {
     try { const w = await within(http(site, 'GET', '_api/web?$select=Title,Url')); out.push({ label: `SharePoint REST on ${site}`, ok: true, detail: `${w.Title} — ${w.Url}` }) }
     catch (e) { out.push({ label: `SharePoint REST on ${site}`, ok: false, detail: (e as Error).message }) }
@@ -762,7 +765,7 @@ async function askStudio(agent: string, message: string, conv?: string): Promise
   if (typeof d === 'string') { try { d = JSON.parse(d) } catch { d = { lastResponse: d } } }
   if (d == null) throw new Error(`The agent call returned no content after ${((Date.now() - t0) / 1000).toFixed(1)} s. The connector accepted the request but produced no answer - check that the agent is published and completes a turn.`)
   const all = ([] as unknown[]).concat(pickText(d, 'responses') ?? []).map((x) => String(x))
-  const text = String(pickText(d, 'lastResponse') ?? all[all.length - 1] ?? '')
+  const text = all.length > 1 ? all.join('\n\n') : String(pickText(d, 'lastResponse') ?? all[0] ?? '')
   if (/preview has ended|enhanced task completion/i.test(text)) throw new Error('This agent was built with the new agentic (“GitHub Copilot harness”) experience, which the Copilot Studio connector cannot call yet. Use a classic Copilot Studio agent, or add it here as a link.')
   return { text, conversationId: (pickText(d, 'conversationId') ?? pickText(d, 'conversationID')) as string | undefined, all }
 }

@@ -2,7 +2,7 @@ import { useId, useState } from 'react'
 import { fmt } from '../util'
 import { COLORS } from './ui'
 
-export interface Datum { label: string; value: number }
+export interface Datum { label: string; value: number; other?: boolean }
 const total = (d: Datum[]) => d.reduce((a, b) => a + b.value, 0)
 
 /** Every chart has a text equivalent: bars are a list with numbers, donut has a legend, timeline has a table. */
@@ -11,8 +11,8 @@ export function BarList({ data, onPick, color, format = fmt }: { data: Datum[]; 
   return (
     <ul className="bars">
       {data.map((d, i) => (
-        <li key={d.label}>
-          {onPick && d.label !== 'Other' ? <button className="lbl" onClick={() => onPick(d.label)} title={`Filter by “${d.label}”`}>{d.label}</button> : <span className="lbl" style={{ padding: '2px 4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.label}</span>}
+        <li key={d.label + (d.other ? '*' : '')}>
+          {onPick && !d.other ? <button className="lbl" onClick={() => onPick(d.label)} title={`Filter by “${d.label}”`}>{d.label}</button> : <span className="lbl" style={{ padding: '2px 4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.label}</span>}
           <span className="track" aria-hidden="true"><span className="fill" style={{ width: `${(d.value / max) * 100}%`, background: color ?? COLORS[i % COLORS.length] }} /></span>
           <span className="n">{format(d.value)} <span className="muted small">{sum ? `${Math.round((d.value / sum) * 100)}%` : ''}</span></span>
         </li>
@@ -25,7 +25,8 @@ export function Donut({ data, onPick, centerLabel }: { data: Datum[]; onPick?: (
   const sum = total(data) || 1
   const R = 52, C = 2 * Math.PI * R
   let acc = 0
-  const [hot, setHot] = useState<number | null>(null)
+  const [hotRaw, setHot] = useState<number | null>(null)
+  const hot = hotRaw != null && hotRaw < data.length ? hotRaw : null   // data can shrink under the mouse (refresh / deep scan)
   return (
     <div className="donut-wrap">
       <svg viewBox="0 0 140 140" width="150" height="150" role="img" aria-label={data.map((d) => `${d.label} ${Math.round((d.value / sum) * 100)}%`).join(', ')}>
@@ -43,8 +44,8 @@ export function Donut({ data, onPick, centerLabel }: { data: Datum[]; onPick?: (
       </svg>
       <ul className="legend">
         {data.map((d, i) => (
-          <li key={d.label}>
-            <button onClick={() => onPick?.(d.label)} disabled={!onPick || d.label === 'Other'} onMouseEnter={() => setHot(i)} onMouseLeave={() => setHot(null)} onFocus={() => setHot(i)} onBlur={() => setHot(null)}>
+          <li key={d.label + (d.other ? '*' : '')}>
+            <button onClick={() => onPick?.(d.label)} disabled={!onPick || !!d.other} onMouseEnter={() => setHot(i)} onMouseLeave={() => setHot(null)} onFocus={() => setHot(i)} onBlur={() => setHot(null)}>
               <span className="sw" style={{ background: COLORS[i % COLORS.length] }} aria-hidden="true" />
               <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.label}</span>
               <b>{fmt(d.value)}</b><span className="muted small">{Math.round((d.value / sum) * 100)}%</span>
@@ -59,7 +60,8 @@ export function Donut({ data, onPick, centerLabel }: { data: Datum[]; onPick?: (
 export function Timeline({ data, label }: { data: Datum[]; label: string }) {
   const id = useId()
   const [showTable, setShowTable] = useState(false)
-  const [hot, setHot] = useState<number | null>(null)
+  const [hotRaw, setHot] = useState<number | null>(null)
+  const hot = hotRaw != null && hotRaw < data.length ? hotRaw : null
   if (!data.length) return <p className="muted">No dated items.</p>
   const W = 640, H = 170, P = { l: 38, r: 8, t: 10, b: 24 }
   const max = Math.max(1, ...data.map((d) => d.value))

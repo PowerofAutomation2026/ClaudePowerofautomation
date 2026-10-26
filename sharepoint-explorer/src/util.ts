@@ -53,7 +53,7 @@ export function cellText(f: SpField, row: Row): string {
   switch (f.kind) {
     case 'date': return fmtDate(String(v), !f.dateOnly, !!f.dateOnly)
     case 'boolean': return v === true || v === 'true' || v === 1 ? 'Yes' : 'No'
-    case 'currency': return typeof v === 'number' ? v.toLocaleString(undefined, { style: 'currency', currency: 'USD' }) : String(v)
+    case 'currency': return typeof v === 'number' ? v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : String(v)
     case 'number': return typeof v === 'number' ? (f.percent ? `${Math.round(v * 100)}%` : f.internal === 'File_x0020_Size' ? bytes(v) : nf.format(v)) : String(v)
     case 'note': return f.richText ? stripHtml(String(v)) : String(v)
     case 'multichoice': return Array.isArray(v) ? v.join('; ') : String(v)

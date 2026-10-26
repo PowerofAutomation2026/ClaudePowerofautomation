@@ -12,6 +12,25 @@ const SAMPLE = 2000
 interface Snapshot { agg: Aggregator; at: number; kind: 'sample' | 'full' }
 const cache = new Map<string, { sample?: Snapshot; full?: Snapshot }>()
 
+/** A deep scan belongs to the source, not to the screen: leaving the tab (or opening an item) must not cancel it. */
+interface Job { ctl: AbortController; done: number; running: boolean; t0: number; err?: string }
+const jobs = new Map<string, Job>(); const subs = new Set<() => void>(); const ping = () => subs.forEach((f) => f())
+async function deepScan(engine: Engine, fields: SpField[]) {
+  const id = engine.src.id; jobs.get(id)?.ctl.abort()
+  const job: Job = { ctl: new AbortController(), done: 0, running: true, t0: Date.now() }; jobs.set(id, job)
+  const agg = new Aggregator(fields, engine.src.isLibrary); let cursor: string | undefined
+  try {
+    for (;;) {
+      const page = await engine.backend.query(engine.src, engine.fields, engine.select, { ...emptyQuery(), sort: { field: 'ID', dir: 'asc' } }, BULK, cursor, job.ctl.signal)
+      agg.add(page.rows); job.done += page.rows.length; cursor = page.cursor
+      cache.set(id, { ...cache.get(id), full: { agg, at: Date.now(), kind: 'full' } })
+      if (!cursor) break
+      ping(); await yieldToUi()
+    }
+  } catch (e) { if ((e as Error).name !== 'AbortError') job.err = (e as Error).message }
+  job.running = false; ping()
+}
+
 interface Props { engine: Engine; version: number; onFilter: (c: Clause) => void; onGoData: () => void; title: string }
 
 export function Dashboard({ engine, version, onFilter, onGoData, title }: Props) {
@@ -22,8 +41,16 @@ export function Dashboard({ engine, version, onFilter, onGoData, title }: Props)
   const [snap, setSnap] = useState<Snapshot | null>(cache.get(engine.src.id)?.sample ?? null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  const [deep, setDeep] = useState<{ done: number; running: boolean; t0: number } | null>(null)
-  const abort = useRef<AbortController | null>(null)
+  const [deep, setDeep] = useState<Job | null>(() => jobs.get(engine.src.id) ?? null)
+  const scopeRef = useRef(scope); scopeRef.current = scope
+  useEffect(() => {
+    const f = () => {
+      const j = jobs.get(engine.src.id); setDeep(j ? { ...j } : null)
+      if (scopeRef.current === 'full') setSnap(cache.get(engine.src.id)?.full ?? null)
+      if (j && !j.running && !j.ctl.signal.aborted) toast(j.err ? 'bad' : 'good', j.err ? `Deep scan stopped: ${j.err}` : `Deep scan finished: ${fmt(j.done)} items analysed.`)
+    }
+    subs.add(f); return () => { subs.delete(f) }
+  }, [engine.src.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // local mode: the dashboard is just the current view, always live and filter-aware
   const localAgg = useMemo(() => {
@@ -45,34 +72,14 @@ export function Dashboard({ engine, version, onFilter, onGoData, title }: Props)
       }
       const agg = new Aggregator(fields, engine.src.isLibrary); agg.add(page.rows)
       const s: Snapshot = { agg, at: Date.now(), kind: 'sample' }
-      cache.set(engine.src.id, { ...cache.get(engine.src.id), sample: s }); setSnap(s)
+      cache.set(engine.src.id, { ...cache.get(engine.src.id), sample: s }); if (scopeRef.current === 'sample' || !cache.get(engine.src.id)?.full) setSnap(s)
     } catch (e) { setErr((e as Error).message) } finally { setBusy(false) }
   }, [engine, local]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!local && !cache.get(engine.src.id)?.sample) void loadSample() }, [engine.src.id]) // eslint-disable-line react-hooks/exhaustive-deps
   // keep the sample fresh when the live pulse sees the list grow
   useEffect(() => { if (!local && snap && engine.pendingNew > 0 && Date.now() - snap.at > 20_000) void loadSample() }, [engine.pendingNew]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const startDeep = async () => {
-    abort.current?.abort(); const ctl = (abort.current = new AbortController())
-    const agg = new Aggregator(fields, engine.src.isLibrary)
-    const t0 = Date.now(); let done = 0, cursor: string | undefined
-    setDeep({ done: 0, running: true, t0 }); setScope('full')
-    try {
-      for (;;) {
-        const page = await engine.backend.query(engine.src, engine.fields, engine.select, { ...emptyQuery(), sort: { field: 'ID', dir: 'asc' } }, BULK, cursor, ctl.signal)
-        agg.add(page.rows); done += page.rows.length; cursor = page.cursor
-        const s: Snapshot = { agg, at: Date.now(), kind: 'full' }
-        cache.set(engine.src.id, { ...cache.get(engine.src.id), full: s }); setSnap(s); setDeep({ done, running: !!cursor, t0 })
-        if (!cursor) break
-        await yieldToUi()
-      }
-      toast('good', `Deep scan finished: ${fmt(done)} items analysed.`)
-    } catch (e) {
-      if ((e as Error).name !== 'AbortError') toast('bad', `Deep scan stopped: ${(e as Error).message}`)
-      setDeep((d) => (d ? { ...d, running: false } : d))
-    }
-  }
-  useEffect(() => () => abort.current?.abort(), [])
+  const startDeep = () => { setScope('full'); void deepScan(engine, fields) }
   useEffect(() => { // switch back to whichever snapshot the scope asks for
     if (local) return
     setSnap(scope === 'full' ? cache.get(engine.src.id)?.full ?? cache.get(engine.src.id)?.sample ?? null : cache.get(engine.src.id)?.sample ?? null)
@@ -93,7 +100,7 @@ export function Dashboard({ engine, version, onFilter, onGoData, title }: Props)
     }
     cats.sort((a, b) => rank(a.f) - rank(b.f))
     const nums = [...agg.stats.values()].filter((s) => (s.field.kind === 'number' || s.field.kind === 'currency') && s.n > 0 && !['File_x0020_Size', 'ID', 'Version'].includes(s.field.internal) && s.max > s.min).slice(0, 4)
-    const health = [...agg.stats.values()].filter((s) => !s.field.system && !['ID'].includes(s.field.internal) && s.field.kind !== 'counter').map((s) => ({ label: s.field.title, value: Math.round((s.n / Math.max(1, s.n + s.missing)) * 100) }))
+    const health = [...agg.stats.values()].filter((s) => !s.field.system && !['ID'].includes(s.field.internal) && s.field.kind !== 'counter' && s.n + s.missing > 0).map((s) => ({ label: s.field.title, value: Math.round((s.n / Math.max(1, s.n + s.missing)) * 100) }))
     const score = health.length ? Math.round(health.reduce((a, b) => a + b.value, 0) / health.length) : 100
     return { cats: cats.slice(0, 6), nums, health: health.sort((a, b) => a.value - b.value).slice(0, 8), score, timeline: agg.timeline('created') }
   }, [agg, version]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -138,20 +145,20 @@ export function Dashboard({ engine, version, onFilter, onGoData, title }: Props)
         {!local && <button className="btn sm" onClick={loadSample} disabled={busy}><Icon n="refresh" size={14} />{busy ? 'Refreshing…' : 'Refresh'}</button>}
         <button className="btn sm" onClick={() => exportDashboardPdf(title, scopeLabel,
           [{ label: 'Total items', value: fmt(total) }, { label: 'Analysed', value: fmt(agg.rows) }, { label: 'New (7 days)', value: fmt(agg.last7) }, { label: 'Data health', value: `${model.score}%` }],
-          model.cats.map((c) => ({ title: c.f.title, data: c.data })), notes)}>
+          model.cats.map((c) => ({ title: c.f.title, data: c.data })), notes).catch((e) => toast('bad', `PDF export failed: ${(e as Error).message}`))}>
           <Icon n="download" size={14} />Dashboard PDF
         </button>
       </div>
 
       {deep && (
-        <div className="banner info" role="status" aria-live="polite">
+        <div className="banner info" role="status" aria-live={deep.running ? 'off' : 'polite'}>
           <Icon n="scan" />
           <div style={{ flex: 1 }}>
             <b>{deep.running ? 'Deep scan running' : 'Deep scan finished'}</b> — {fmt(deep.done)} of {fmt(total)} items ({Math.min(100, Math.round((deep.done / Math.max(1, total)) * 100))}%)
             {deep.running && <> · ~{fmt(Math.round(deep.done / Math.max(1, (Date.now() - deep.t0) / 1000)))} items/s · the app stays fully usable while this runs</>}
             <div className="bar-progress" style={{ marginTop: 6, borderRadius: 9 }}><i style={{ width: `${Math.min(100, (deep.done / Math.max(1, total)) * 100)}%` }} /></div>
           </div>
-          {deep.running && <button className="btn sm" onClick={() => abort.current?.abort()}>Stop</button>}
+          {deep.running && <button className="btn sm" onClick={() => jobs.get(engine.src.id)?.ctl.abort()}>Stop</button>}
         </div>
       )}
 
@@ -163,7 +170,7 @@ export function Dashboard({ engine, version, onFilter, onGoData, title }: Props)
         <div className="card kpi"><div className="l">Last change</div><div className="v" style={{ fontSize: '1.4rem' }}>{agg.lastModified ? relTime(new Date(agg.lastModified).toISOString()) : '—'}</div><div className="d muted">{agg.stale ? `${fmt(agg.stale)} untouched > 1 year` : 'nothing stale'}</div></div>
         {engine.src.isLibrary
           ? <div className="card kpi"><div className="l">Storage (analysed files)</div><div className="v" style={{ fontSize: '1.5rem' }}>{bytes(agg.totalBytes)}</div><div className="d muted">{fmt(agg.ext.size)} file types</div></div>
-          : model.nums[0] && <div className="card kpi"><div className="l">{model.nums[0].field.title} · total</div><div className="v" style={{ fontSize: '1.5rem' }}>{fmt(Math.round(model.nums[0].sum))}</div><div className="d muted">avg {fmt(Math.round(model.nums[0].sum / model.nums[0].n))}</div></div>}
+          : model.nums[0] && <div className="card kpi"><div className="l">{model.nums[0].field.title} · total</div><div className="v" style={{ fontSize: '1.5rem' }}>{nval(model.nums[0], model.nums[0].sum)}</div><div className="d muted">avg {nval(model.nums[0], model.nums[0].sum / model.nums[0].n)}</div></div>}
         <div className="card kpi" style={{ display: 'flex', gap: 12, alignItems: 'center' }}><Gauge value={model.score} label="Data health" /><div><div className="l">Data health</div><div className="d muted">average fill rate of your columns</div></div></div>
       </section>
 
@@ -190,7 +197,7 @@ export function Dashboard({ engine, version, onFilter, onGoData, title }: Props)
         {model.nums.length > 0 && !engine.src.isLibrary && (
           <section className="card"><h2>Numbers</h2>
             <table className="data"><thead><tr><th>Column</th><th>Sum</th><th>Avg</th><th>Min</th><th>Max</th></tr></thead>
-              <tbody>{model.nums.map((s) => <tr key={s.field.internal}><td>{s.field.title}</td><td>{fmt(Math.round(s.sum))}</td><td>{fmt(Math.round(s.sum / s.n))}</td><td>{fmt(s.min)}</td><td>{fmt(s.max)}</td></tr>)}</tbody></table>
+              <tbody>{model.nums.map((s) => <tr key={s.field.internal}><td>{s.field.title}</td><td>{nval(s, s.sum)}</td><td>{nval(s, s.sum / s.n)}</td><td>{nval(s, s.min)}</td><td>{nval(s, s.max)}</td></tr>)}</tbody></table>
           </section>
         )}
 
@@ -204,6 +211,7 @@ export function Dashboard({ engine, version, onFilter, onGoData, title }: Props)
   )
 }
 
+const nval = (s: { field: SpField }, x: number) => (s.field.percent ? `${Math.round(x * 100)}%` : fmt(Math.round(x)))   // percent columns arrive as 0..1
 const rank = (f: SpField) => (f.kind === 'choice' ? 0 : f.kind === 'boolean' ? 1 : f.kind === 'multichoice' ? 2 : f.kind === 'text' ? 3 : f.kind === 'lookup' ? 4 : 5)
 
 export function PulseFeed({ engine, version }: { engine: Engine; version: number }) {

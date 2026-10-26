@@ -1,11 +1,12 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AGENT_INSTRUCTIONS, buildContext, withContext } from '../assistantContext'
 import type { Engine } from '../engine'
-import type { Assistant, AssistantConfig, Row } from '../types'
+import type { AgentReply, Assistant, AssistantConfig, Row } from '../types'
 import { uid } from '../util'
+import { copyText } from '../mail'
 import { Icon, Modal, useToast } from './ui'
 
-const LINK_HOSTS = /(^|\.)((copilotstudio|powerva)\.microsoft\.com|m365\.cloud\.microsoft|copilot\.cloud\.microsoft|copilot\.microsoft\.com|microsoft365\.com|office\.com|teams\.microsoft\.com|teams\.cloud\.microsoft|powerplatform\.com|directline\.botframework\.com)$/i
+const LINK_HOSTS = /(^|\.)((copilotstudio|powerva)\.microsoft\.com|m365\.cloud\.microsoft|copilot\.cloud\.microsoft|copilot\.microsoft\.com|microsoft365\.com|office\.com|sharepoint\.com|copilotstudio\.preview\.microsoft\.com|outlook\.cloud\.microsoft|teams\.microsoft\.com|teams\.cloud\.microsoft|powerplatform\.com|directline\.botframework\.com)$/i
 export const inScope = (a: Assistant, sourceId: string) => a.enabled && (a.scope === 'all' || a.scope.includes(sourceId))
 export const goodUrl = (u?: string) => { try { const x = new URL(u ?? ''); return x.protocol === 'https:' ? x : null } catch { return null } }
 
@@ -40,7 +41,7 @@ interface Msg { role: 'user' | 'agent' | 'error'; text: string; at: number }
 const chats = new Map<string, { msgs: Msg[]; conv?: string }>()   // survives closing the panel, per agent + source
 
 /** The assistant side panel: chat with a Copilot Studio agent, or open an Agent Builder / M365 Copilot agent with context. */
-export function AssistantPanel({ engine, cfg, who, selected, canSetup, onSetup, onClose }: { engine: Engine; cfg: AssistantConfig | null; who: { name: string; upn: string }; selected: Row[]; canSetup: boolean; onSetup: () => void; onClose: () => void }) {
+export function AssistantPanel({ visible, engine, cfg, who, selected, canSetup, onSetup, onClose }: { visible?: string[]; engine: Engine; cfg: AssistantConfig | null; who: { name: string; upn: string }; selected: Row[]; canSetup: boolean; onSetup: () => void; onClose: () => void }) {
   const toast = useToast()
   const list = (cfg?.assistants ?? []).filter((a) => inScope(a, engine.src.id))
   const [aid, setAid] = useState(list[0]?.id)
@@ -50,20 +51,22 @@ export function AssistantPanel({ engine, cfg, who, selected, canSetup, onSetup, 
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [withCtx, setWithCtx] = useState(true)
+  const [manual, setManual] = useState('')
   const log = useRef<HTMLDivElement>(null)
   const chat = chats.get(key) ?? { msgs: [] }
   useEffect(() => { log.current?.scrollTo({ top: log.current.scrollHeight }) }, [chat.msgs.length, busy])
 
-  const ctxJson = () => buildContext(engine, who, selected, { sendRows: !!a?.sendRows && withCtx, instructions: a?.instructions })
+  const ctxJson = () => buildContext(engine, who, selected, { sendRows: !!a?.sendRows && withCtx, instructions: a?.instructions, columns: visible })
   const send = async (q: string) => {
     const question = q.trim(); if (!question || !a || busy) return
     const c = chats.get(key) ?? { msgs: [] }; chats.set(key, c)
     c.msgs.push({ role: 'user', text: question, at: Date.now() }); setText(''); setBusy(true); force((n) => n + 1)
     try {
-      let msg = question
-      if (withCtx) msg = withContext(ctxJson(), question)
-      if (!c.conv && c.msgs.length > 2) msg = `Earlier in this chat:\n${c.msgs.slice(-7, -1).map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.slice(0, 400)}`).join('\n')}\n\n${msg}`   // agent did not give us a conversation id: carry a short history ourselves
-      const r = await engine.backend.askAgent(a.agent ?? '', msg, c.conv)
+      const hist = !c.conv && c.msgs.length > 2 ? `Earlier in this chat:\n${c.msgs.slice(-7, -1).filter((m) => m.role !== 'error').map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.slice(0, 400)}`).join('\n')}\n\n` : ''   // carried by the app only when the agent returned no conversation id
+      const msg = withCtx ? withContext(ctxJson(), hist + question) : hist + question
+      let r: AgentReply
+      try { r = await engine.backend.askAgent(a.agent ?? '', msg, c.conv) }
+      catch (e) { if (!c.conv) throw e; c.conv = undefined; r = await engine.backend.askAgent(a.agent ?? '', msg) }   // an expired conversation: start a fresh one once
       if (r.conversationId) c.conv = r.conversationId
       c.msgs.push({ role: 'agent', text: r.text || '(The agent returned an empty answer. Check its instructions and that it is published.)', at: Date.now() })
     } catch (e) { c.msgs.push({ role: 'error', text: (e as Error).message, at: Date.now() }) }
@@ -93,9 +96,10 @@ export function AssistantPanel({ engine, cfg, who, selected, canSetup, onSetup, 
             <div><b>{a.name}</b><p className="muted small" style={{ margin: '4px 0 0' }}>{a.description || 'This agent opens in its own window.'}</p></div>
             <p className="small" style={{ margin: 0 }}>Microsoft 365 Copilot agents (Agent Builder) can’t be embedded or called from an app, so this opens the agent’s chat. Copy the context first and paste it into the chat so the agent knows what you are looking at.</p>
             <label className="small">Your question (optional)<textarea className="input" rows={3} value={text} onChange={(e) => setText(e.target.value)} /></label>
+            {manual && <textarea className="input" readOnly rows={5} value={manual} aria-label="Prompt to copy" onFocus={(e) => e.currentTarget.select()} />}
             <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-              <button className="btn" onClick={async () => { try { await navigator.clipboard.writeText(withContext(ctxJson(), text || 'Help me with this.')); toast('good', 'Prompt with context copied — paste it into the agent chat.') } catch { toast('warn', 'Could not copy automatically.') } }}><Icon n="copy" size={14} />Copy prompt with context</button>
-              <button className="btn primary" onClick={() => { const u = goodUrl(a.url); if (!u || !window.open(u.href, '_blank', 'noopener')) toast('warn', 'Could not open the agent — pop-up blocked or the link is invalid.') }}><Icon n="ext" size={14} />Open {a.name}</button>
+              <button className="btn" onClick={async () => { const t = withContext(ctxJson(), text || 'Help me with this.'); if (await copyText(t)) toast('good', 'Prompt with context copied — paste it into the agent chat.'); else { setManual(t); toast('warn', 'Could not copy automatically — select the text below and press Ctrl+C.') } }}><Icon n="copy" size={14} />Copy prompt with context</button>
+              {goodUrl(a.url) ? <a className="btn primary" href={goodUrl(a.url)!.href} target="_blank" rel="noopener noreferrer"><Icon n="ext" size={14} />Open {a.name}</a> : <button className="btn primary" disabled title="The saved link is not a valid https:// URL"><Icon n="ext" size={14} />Open {a.name}</button>}
             </div>
           </div>
         ) : (
@@ -105,7 +109,7 @@ export function AssistantPanel({ engine, cfg, who, selected, canSetup, onSetup, 
               {chat.msgs.map((m, i) => (
                 <div key={i} className={`bubble ${m.role}`}>
                   {m.role === 'agent' ? <Md text={m.text} /> : <span style={{ whiteSpace: 'pre-wrap' }}>{m.text}</span>}
-                  {m.role === 'agent' && <button className="btn sm ghost" aria-label="Copy answer" onClick={() => navigator.clipboard?.writeText(m.text).then(() => toast('good', 'Answer copied'))}><Icon n="copy" size={12} /></button>}
+                  {m.role === 'agent' && <button className="btn sm ghost" aria-label="Copy answer" onClick={() => void copyText(m.text).then((ok) => toast(ok ? 'good' : 'warn', ok ? 'Answer copied' : 'Could not copy — select the text and press Ctrl+C'))}><Icon n="copy" size={12} /></button>}
                 </div>
               ))}
               {busy && <div className="bubble agent" role="status" aria-label="The agent is typing"><span className="typing"><i /><i /><i /></span></div>}
@@ -114,7 +118,7 @@ export function AssistantPanel({ engine, cfg, who, selected, canSetup, onSetup, 
               <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>{suggestions.map((s) => <button key={s} className="btn sm" disabled={busy} onClick={() => void send(s)}>{s}</button>)}</div>
               <label className="row small" style={{ gap: 6 }}><input type="checkbox" checked={withCtx} onChange={(e) => setWithCtx(e.target.checked)} />Tell the agent what I’m looking at ({engine.src.label}{sel ? `, ${sel} selected` : ''}{a.sendRows ? '' : ' — item data is not sent'})</label>
               <form className="row" style={{ gap: 6, alignItems: 'flex-end' }} onSubmit={(e) => { e.preventDefault(); void send(text) }}>
-                <textarea className="input" style={{ flex: 1 }} rows={2} aria-label="Message to the assistant" value={text} placeholder="Ask anything…" onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(text) } }} />
+                <textarea className="input" style={{ flex: 1 }} rows={2} aria-label="Message to the assistant" value={text} placeholder="Ask anything…" onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(text) } }} />
                 <button className="btn primary" type="submit" disabled={busy || !text.trim()}>Send</button>
               </form>
               <div className="muted small">AI can be wrong — check important answers. The agent runs with your own permissions.</div>
@@ -133,7 +137,7 @@ export function AssistantSetup({ engine, cfg, who, onSave, onClose }: { engine: 
   const [edit, setEdit] = useState<Assistant | null>(null)
   const [saving, setSaving] = useState(false)
   const connector = engine.backend.agentConnector()
-  const knowledge = `${engine.src.siteUrl.replace(/\/$/, '')}${engine.src.url ? new URL(engine.src.url, engine.src.siteUrl).pathname.replace(/^\/?/, '/') : ''}`
+  const knowledge = engine.src.url ? new URL(engine.src.url, engine.src.siteUrl).href : engine.src.siteUrl.replace(/\/$/, '')
   const upsert = (x: Assistant) => { setItems((l) => (l.some((y) => y.id === x.id) ? l.map((y) => (y.id === x.id ? x : y)) : [...l, x])); setEdit(null) }
   const save = async () => { setSaving(true); try { await onSave({ v: 1, assistants: items, updated: new Date().toISOString(), updatedBy: who }); toast('good', 'Assistants saved for everyone.'); onClose() } catch (e) { toast('bad', `Could not save: ${(e as Error).message}`) } finally { setSaving(false) } }
   return (
@@ -162,9 +166,9 @@ export function AssistantSetup({ engine, cfg, who, onSave, onClose }: { engine: 
         <details>
           <summary className="small"><b>Make your agent understand this app</b> (recommended)</summary>
           <p className="muted small">1) In Copilot Studio add this <b>knowledge source</b> so the agent can answer from the same data (users need access; agent must use “Authenticate with Microsoft”). 2) Paste the instructions into the agent so it reads the context the app sends.</p>
-          <div className="row small" style={{ gap: 6, flexWrap: 'wrap' }}><code style={{ overflowWrap: 'anywhere' }}>{knowledge}</code><button className="btn sm" onClick={() => navigator.clipboard?.writeText(knowledge).then(() => toast('good', 'Knowledge URL copied'))}><Icon n="copy" size={12} />Copy URL</button></div>
+          <div className="row small" style={{ gap: 6, flexWrap: 'wrap' }}><code style={{ overflowWrap: 'anywhere' }}>{knowledge}</code><button className="btn sm" onClick={() => void copyText(knowledge).then((ok) => toast(ok ? 'good' : 'warn', ok ? 'Knowledge URL copied' : 'Could not copy — select the URL and press Ctrl+C'))}><Icon n="copy" size={12} />Copy URL</button></div>
           <textarea className="input" readOnly rows={8} style={{ width: '100%', marginTop: 6 }} value={AGENT_INSTRUCTIONS} aria-label="Agent instructions to paste" />
-          <button className="btn sm" onClick={() => navigator.clipboard?.writeText(AGENT_INSTRUCTIONS).then(() => toast('good', 'Instructions copied'))}><Icon n="copy" size={12} />Copy instructions</button>
+          <button className="btn sm" onClick={() => void copyText(AGENT_INSTRUCTIONS).then((ok) => toast(ok ? 'good' : 'warn', ok ? 'Instructions copied' : 'Could not copy — select the text and press Ctrl+C'))}><Icon n="copy" size={12} />Copy instructions</button>
           <p className="muted small">Tip: use a classic (Standard) Copilot Studio agent, published and shared with your users. Add the SharePoint connector as a tool if you want the agent to act, not just answer.</p>
         </details>
         <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={saving} onClick={() => void save()}><Icon n="check" size={15} />{saving ? 'Saving…' : 'Save for everyone'}</button></div>
@@ -236,7 +240,7 @@ function AssistantEditor({ engine, a, onSave, onClose }: { engine: Engine; a: As
         <label className="small">Suggested prompts (one per line)<textarea className="input" rows={3} value={d.prompts.join('\n')} onChange={(e) => set({ prompts: e.target.value.split('\n').slice(0, 6) })} /></label>
         <label className="small">Extra instructions sent with every question <span className="muted">(optional)</span><textarea className="input" rows={2} value={d.instructions ?? ''} onChange={(e) => set({ instructions: e.target.value })} maxLength={600} /></label>
         <label className="small">Available for
-          <select className="input" value={d.scope === 'all' ? 'all' : 'this'} onChange={(e) => set({ scope: e.target.value === 'all' ? 'all' : [engine.src.id] })}><option value="all">All connected lists &amp; libraries</option><option value="this">Only “{engine.src.label}”</option></select></label>
+          <select className="input" value={d.scope === 'all' ? 'all' : 'this'} onChange={(e) => set({ scope: e.target.value === 'all' ? 'all' : [engine.src.id] })}><option value="all">All connected lists &amp; libraries</option><option value="this">{d.scope !== 'all' && !d.scope.includes(engine.src.id) ? `Only ${d.scope.length} other source(s) (re-select to use “${engine.src.label}”)` : `Only “${engine.src.label}”`}</option></select></label>
         <label className="row small" style={{ gap: 8 }}><input type="checkbox" checked={d.sendRows} onChange={(e) => set({ sendRows: e.target.checked })} />Send the selected items’ data (titles and key columns) to the agent</label>
         <label className="row small" style={{ gap: 8 }}><input type="checkbox" checked={d.enabled} onChange={(e) => set({ enabled: e.target.checked })} />Enabled</label>
         <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}><button type="button" className="btn" onClick={onClose}>Cancel</button><button type="submit" className="btn primary" disabled={!valid}>Save assistant</button></div>

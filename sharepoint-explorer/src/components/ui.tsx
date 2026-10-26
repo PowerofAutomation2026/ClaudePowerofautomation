@@ -103,6 +103,7 @@ export function Modal({ title, onClose, children, className = '', side }: { titl
     const focusables = () => Array.from(el?.querySelectorAll<HTMLElement>('button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])') ?? []).filter((x) => !x.hasAttribute('disabled'))
     ;(focusables()[0] ?? el)?.focus()
     const key = (e: KeyboardEvent) => {
+      if (el?.querySelector('[role="dialog"]')) return   // a nested dialog is open: it owns Escape and the focus trap
       if (e.key === 'Escape') { e.stopPropagation(); closeRef.current() }
       if (e.key === 'Tab') {
         const f = focusables(); if (!f.length) return

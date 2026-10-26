@@ -10,6 +10,7 @@ import { BulkDialog, SearchEverywhere } from './components/Tools'
 import { AssistantPanel, AssistantSetup, inScope } from './components/Assistant'
 import { ApprovalsDialog } from './components/Approvals'
 import { useApproval } from './useApproval'
+import { copyText, openTab as openWindow } from './mail'
 import { EmailDialog } from './components/EmailDialog'
 import { downloadUrl, itemUrl, openShareDialog } from './components/Drawer'
 import { FolderIcon } from './components/FileGlyph'
@@ -148,12 +149,15 @@ function Shell() {
   useEffect(() => { lsSet('spx.accent', accent); document.documentElement.dataset.accent = accent }, [accent])
 
   /* ------------------------------------------------ opening a source */
+  const openGen = useRef(0), engRef = useRef<Engine | null>(null)
   const openSource = useCallback(async (s: SourceConfig, goTab?: Tab) => {
     if (!boot) return
+    const gen = ++openGen.current   // only the LAST click may win, however slowly the earlier ones answer
     setLoadingSrc(true); setSrcErr(''); setSelected(new Set()); setOpen(null)
-    engine?.dispose()
+    engRef.current?.dispose(); engRef.current = null
     try {
       const [fields, list] = await Promise.all([boot.backend.getFields(s.siteUrl, s.listId), boot.backend.getList(s.siteUrl, s.listId).catch(() => null)])
+      if (gen !== openGen.current) return
       const cur: SourceConfig = { ...s, itemCount: list?.itemCount ?? s.itemCount, url: s.url || list?.url }
       const select = pickColumns(fields, cur.isLibrary)
       const eng = new Engine(boot.backend, cur, fields, select)
@@ -164,12 +168,13 @@ function Shell() {
       setUndo([])
       setFavs(new Set(lsGet<number[]>(`spx.fav.${s.id}`, [])))
       setBoardField(fields.find((f) => f.kind === 'choice' && select.includes(f.internal) && (f.choices?.length ?? 0) > 1) ?? null)
+      engRef.current = eng
       setSrc(cur); setEngine(eng); lsSet(`spx.active.${boot.backend.mode}`, s.id)
-      boot.backend.getAccess(cur, config!, boot.who.upn).then(setAccess).catch(() => setAccess((a) => ({ ...a, role: 'reader', canAdd: false, canEdit: false, canDelete: false, canManage: false, reason: 'Could not read your permissions: read-only.' })))
+      boot.backend.getAccess(cur, config!, boot.who.upn).then((a) => { if (gen === openGen.current) setAccess(a) }).catch(() => gen === openGen.current && setAccess((a) => ({ ...a, role: 'reader', canAdd: false, canEdit: false, canDelete: false, canManage: false, reason: 'Could not read your permissions: read-only.' })))
       if (goTab) setTab(goTab)
       void eng.start()
-    } catch (e) { setSrcErr((e as Error).message); setEngine(null) } finally { setLoadingSrc(false) }
-  }, [boot, engine, config])
+    } catch (e) { if (gen === openGen.current) { setSrcErr((e as Error).message); setEngine(null) } } finally { if (gen === openGen.current) setLoadingSrc(false) }
+  }, [boot, config])
 
   useEffect(() => {
     if (!boot || !config || src || loadingSrc) return
@@ -299,13 +304,13 @@ function Shell() {
       { label: 'Rename', icon: 'A', hidden: !(lib && access.canEdit), run: () => setNameDlg({ mode: 'rename', row: r }) },
       { label: 'Move to…', icon: '↦', hidden: !(lib && access.canEdit), run: () => setPicker({ mode: 'Move', row: r }) },
       { label: 'Copy to…', icon: 'copy', hidden: !(lib && access.canEdit && !isFolder), run: () => setPicker({ mode: 'Copy', row: r }) },
-      { label: 'Download', icon: 'download', hidden: !(lib && !isFolder), run: () => { if (!window.open(downloadUrl(engine, r), '_blank', 'noopener')) { navigator.clipboard?.writeText(downloadUrl(engine, r)); toast('warn', 'Pop-up blocked — the download link was copied instead.') } } },
-      { label: 'Copy link (organization can view)', icon: 'share', run: () => boot?.backend.createShareLink(engine.src, r.__id, false).then((u) => navigator.clipboard?.writeText(u)).then(() => toast('good', 'Sharing link copied')).catch((e) => toast('bad', (e as Error).message)) },
+      { label: 'Download', icon: 'download', hidden: !(lib && !isFolder), run: () => { if (!openWindow(downloadUrl(engine, r))) { void copyText(downloadUrl(engine, r)); toast('warn', 'Pop-up blocked — the download link was copied instead.') } } },
+      { label: 'Copy link (organization can view)', icon: 'share', run: () => boot?.backend.createShareLink(engine.src, r.__id, false).then((u) => copyText(u)).then((ok) => toast(ok ? 'good' : 'warn', ok ? 'Sharing link copied' : 'Could not copy automatically.')).catch((e) => toast('bad', (e as Error).message)) },
       { label: favs.has(r.__id) ? 'Remove favorite' : 'Add to favorites', icon: 'star', run: () => toggleFav(r.__id) },
       { label: 'Share…', icon: 'share', run: () => { if (!openShareDialog(engine, r)) toast('warn', 'Pop-up blocked: allow pop-ups for this site to open SharePoint’s Share dialog.') } },
       { label: 'Approval…', icon: 'check', hidden: !approval.active, run: () => { setOpenTab('approval'); setOpen(r) } },
       { label: 'Email…', icon: 'share', hidden: !lib, run: () => setMailRows([r]) },
-      { label: 'Copy link', icon: 'copy', run: () => navigator.clipboard?.writeText(itemUrl(engine, r)).then(() => toast('good', 'Link copied')) },
+      { label: 'Copy link', icon: 'copy', run: () => void copyText(itemUrl(engine, r)).then((ok) => toast(ok ? 'good' : 'warn', ok ? 'Link copied' : 'Could not copy automatically.')) },
       { label: access.canManage ? 'Manage access' : 'Who has access', icon: 'lock', sep: true, run: () => setPerm({ target: { kind: 'item', id: r.__id, name: rowName(r) }, title: rowName(r) }) },
       { label: 'Delete', icon: 'trash', danger: true, sep: true, hidden: !access.canDelete, run: () => setConfirmDel([r]) },
     ]
@@ -538,7 +543,7 @@ function Shell() {
             </div>
           </section>
         )}
-      {assistOpen && engine && <AssistantPanel engine={engine} cfg={assist} who={me} selected={engine.rows.filter((r) => selected.has(r.__id))} canSetup={isOwner || access.role === 'admin'} onSetup={() => { setAssistOpen(false); setAssistSetup(true) }} onClose={() => setAssistOpen(false)} />}
+      {assistOpen && engine && <AssistantPanel visible={visible} engine={engine} cfg={assist} who={me} selected={engine.rows.filter((r) => selected.has(r.__id))} canSetup={isOwner || access.role === 'admin'} onSetup={() => { setAssistOpen(false); setAssistSetup(true) }} onClose={() => setAssistOpen(false)} />}
       {assistSetup && engine && <AssistantSetup engine={engine} cfg={assist} who={boot.who.name} onSave={async (c) => { await boot.backend.saveAssistants(c); setAssist(c) }} onClose={() => { setAssistSetup(false); setAssistOpen(true) }} />}
       {apprOpen && engine && <ApprovalsDialog engine={engine} api={approval} onOpen={(id) => { const r = engine.rows.find((x) => x.__id === id); if (r) { setOpenTab('approval'); setOpen(r) } else toast('info', 'That item is not in the loaded rows — search for it, then open it.') }} onClose={() => setApprOpen(false)} />}
       {mailRows && engine && <EmailDialog engine={engine} rows={mailRows} onClose={() => setMailRows(null)} />}

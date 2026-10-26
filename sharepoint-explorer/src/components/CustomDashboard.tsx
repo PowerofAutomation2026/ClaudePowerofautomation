@@ -34,8 +34,9 @@ export function DashboardHost(p: HostProps) {
   const [auto, setAuto] = useState(false)
   useEffect(() => {
     let live = true; setCfg(undefined); setEditing(false); setAuto(false)
-    Promise.race([engine.backend.loadDashboard(engine.src.id), new Promise<null>((r) => setTimeout(() => r(null), 10_000))]).then((c) => live && setCfg(c && c.widgets?.length ? c : null)).catch(() => live && setCfg(null))
-    return () => { live = false }
+    const t = setTimeout(() => { if (live) setCfg((c) => (c === undefined ? null : c)) }, 10_000)   // slow tenant: show the auto dashboard meanwhile...
+    engine.backend.loadDashboard(engine.src.id).then((c) => live && setCfg(c && c.widgets?.length ? c : null)).catch(() => live && setCfg((c) => (c === undefined ? null : c)))   // ...and still apply the saved layout when it lands
+    return () => { live = false; clearTimeout(t) }
   }, [engine.src.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = async (widgets: Widget[], refreshSec: number) => {
@@ -45,8 +46,8 @@ export function DashboardHost(p: HostProps) {
   }
 
   if (cfg === undefined) return <div className="dgrid" aria-busy="true"><div className="card skel" style={{ height: 140 }} /><div className="card skel" style={{ height: 140 }} /></div>
-  if (cfg && !editing && !auto) return <CustomDashboard {...p} cfg={cfg} editing={false} onEdit={() => setEditing(true)} onAuto={() => setAuto(true)} />
-  if (editing) return <CustomDashboard {...p} cfg={cfg} editing onSave={save} onCancel={() => setEditing(false)} />
+  if (cfg && !editing && !auto) return <CustomDashboard key="view" {...p} cfg={cfg} editing={false} onEdit={() => setEditing(true)} onAuto={() => setAuto(true)} />
+  if (editing) return <CustomDashboard key="edit" {...p} cfg={cfg} editing onSave={save} onCancel={() => setEditing(false)} />
   return (
     <div>
       {canEdit && (
@@ -66,6 +67,7 @@ function useWidgetResults(engine: Engine, widgets: Widget[], version: number, re
   const [res, setRes] = useState<Record<string, WidgetRes>>({})
   const [info, setInfo] = useState<{ n: number; full: boolean; busy: boolean; at: number; err?: string }>({ n: 0, full: false, busy: false, at: 0 })
   const abort = useRef<AbortController | null>(null)
+  const scanning = useRef(false)
   const titleField = engine.fields.find((f) => f.internal === 'Title') ? 'Title' : engine.fields.find((f) => f.internal === 'FileLeafRef') ? 'FileLeafRef' : 'ID'
   const sig = JSON.stringify(widgets)
 
@@ -73,13 +75,14 @@ function useWidgetResults(engine: Engine, widgets: Widget[], version: number, re
 
   useEffect(() => { // local mode: everything is in memory, so the dashboard is always exact and instant
     if (!local) return
-    const a = accs(); for (const [, x] of a) x.add(engine.rows as never)
-    setRes(Object.fromEntries(a.map(([id, x]) => [id, x.result()]))); setInfo({ n: engine.rows.length, full: true, busy: false, at: Date.now() })
+    const a = accs(); for (const [, x] of a) x.add(engine.all as never)   // the whole list, not the filtered grid
+    setRes(Object.fromEntries(a.map(([id, x]) => [id, x.result()]))); setInfo({ n: engine.all.length, full: true, busy: false, at: Date.now() })
   }, [local, sig, version]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const run = useCallback(async (full: boolean) => {
     if (local) return
-    abort.current?.abort(); const ctl = (abort.current = new AbortController())
+    if (scanning.current && !full) return   // a timer / pulse refresh must never cancel "Scan everything"
+    abort.current?.abort(); const ctl = (abort.current = new AbortController()); scanning.current = full
     const a = accs(); let n = 0, cursor: string | undefined
     const wanted = new Set<string>([titleField, 'Created', 'Modified'])   // only what the widgets need: fewer columns = faster and safer on big libraries
     for (const w of widgets) { for (const f of [w.field, w.valueField, w.clause?.field]) if (f) wanted.add(f) }
@@ -94,6 +97,7 @@ function useWidgetResults(engine: Engine, widgets: Widget[], version: number, re
         await yieldToUi()
       }
     } catch (e) { if ((e as Error).name !== 'AbortError') setInfo((i) => ({ ...i, busy: false, err: (e as Error).message })) }
+    finally { if (abort.current === ctl) scanning.current = false }
   }, [local, sig, engine]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { if (!local) void run(false); return () => abort.current?.abort() }, [local, sig, engine.src.id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -102,7 +106,7 @@ function useWidgetResults(engine: Engine, widgets: Widget[], version: number, re
     const t = setInterval(() => { if (!document.hidden) void run(false) }, refreshSec * 1000)
     return () => clearInterval(t)
   }, [local, refreshSec, run])
-  useEffect(() => { if (!local && engine.pendingNew > 0) void run(false) }, [engine.pendingNew]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!local && engine.pendingNew > 0 && Date.now() - info.at > 20_000) void run(false) }, [engine.pendingNew]) // eslint-disable-line react-hooks/exhaustive-deps
   return { res, info, run }
 }
 
@@ -122,7 +126,7 @@ function CustomDashboard(p: HostProps & { cfg: DashConfig | null | undefined; ed
   const open = (w: Widget, label?: string) => {
     const f = fields.find((x) => x.internal === w.field)
     if (w.clause && (w.type === 'kpi' || w.type === 'goal')) { p.onFilter(w.clause); p.onGoData() }
-    else if (label && f && (w.type === 'bar' || w.type === 'donut') && label !== 'Other' && label !== '(empty)' && f.kind !== 'date') {
+    else if (label && f && (w.type === 'bar' || w.type === 'donut') && label !== '(empty)' && f.kind !== 'date') {
       p.onFilter(f.kind === 'boolean' ? { field: f.internal, op: 'eq', value: label === 'Yes' ? 'true' : 'false' } : f.kind === 'user' || f.kind === 'lookup' ? { field: f.internal, op: 'eq', value: label } : { field: f.internal, op: 'in', value: '', values: [label] }); p.onGoData()
     }
   }
@@ -175,7 +179,7 @@ function CustomDashboard(p: HostProps & { cfg: DashConfig | null | undefined; ed
                 <button className="btn sm ghost" onClick={() => setWidgets((ws) => ws.filter((x) => x.id !== w.id))} aria-label={`Remove ${w.title}`}><Icon n="trash" size={13} /></button>
               </div>
             )}
-            <WidgetView w={w} r={res[w.id]} fields={fields} total={engine.total} sampled={!local && !info.full} onOpen={(l) => open(w, l)} />
+            <WidgetView w={w} r={res[w.id]} fields={fields} allFields={engine.fields} total={engine.total} sampled={!local && !info.full} onOpen={(l) => open(w, l)} />
           </section>
         ))}
         {!live.length && <div className="card empty"><p className="muted">No widgets yet.</p></div>}
@@ -185,9 +189,11 @@ function CustomDashboard(p: HostProps & { cfg: DashConfig | null | undefined; ed
   )
 }
 
-function WidgetView({ w, r: r0, fields, total, sampled, onOpen }: { w: Widget; r?: WidgetRes; fields: SpField[]; total: number; sampled: boolean; onOpen: (label?: string) => void }) {
+function WidgetView({ w, r: r0, fields, allFields, total, sampled, onOpen }: { w: Widget; r?: WidgetRes; fields: SpField[]; allFields: SpField[]; total: number; sampled: boolean; onOpen: (label?: string) => void }) {
   const h = <h2 style={{ marginBottom: 8 }}>{w.title}</h2>
   if (w.type === 'approvals') return <ApprovalTiles title={w.title} />
+  const missing = [w.field, w.valueField, w.clause?.field].filter((n): n is string => !!n && !allFields.some((f) => f.internal === n))
+  if (missing.length && w.type !== 'text') return <div>{h}<p className="muted">This widget uses a column that no longer exists ({missing.join(', ')}). Edit the widget and pick another column.</p></div>
   if (w.type === 'text') return <div>{h}<p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{w.text}</p></div>
   let r = r0
   if (!r || r.kind === 'none') return <div aria-busy="true">{h}<div className="skel" style={{ height: 60 }} /></div>
@@ -203,7 +209,7 @@ function WidgetView({ w, r: r0, fields, total, sampled, onOpen }: { w: Widget; r
     return (
       <div className="kpi" style={{ padding: 0, border: 0, boxShadow: 'none', background: 'transparent' }}>
         <div className="l">{w.title}</div>
-        <div className="v"><Counter value={Math.round(r.value * 100) / 100} /></div>
+        <div className="v">{r.field?.percent ? `${Math.round(r.value * 100)}%` : <Counter value={Math.round(r.value * 100) / 100} />}</div>
         <div className="d muted">{AGGS.find((a) => a[0] === (w.agg ?? 'count'))?.[1]}{r.field ? ` · ${r.field.title}` : ''} {sub}</div>
         {w.clause && <button className="btn sm ghost" onClick={() => onOpen()}>Show items</button>}
       </div>

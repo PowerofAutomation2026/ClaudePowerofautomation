@@ -46,6 +46,7 @@ export class Aggregator {
       for (const s of this.stats.values()) {
         const f = s.field
         const v = r[f.internal]
+        if (!(f.internal in r)) continue   // column was not loaded (expand budget / fallback select): unknown, not empty
         if (v == null || v === '' || (Array.isArray(v) && !v.length)) { s.missing++; continue }
         s.n++
         if (f.kind === 'number' || f.kind === 'currency') {
@@ -84,7 +85,7 @@ export class Aggregator {
         else if (this.titles.size < 400_000) this.titles.set(key, 1)
       }
       if (this.isLibrary) {
-        const e = String(r.File_x0020_Type ?? String(r.FileLeafRef ?? '').split('.').pop() ?? '').toLowerCase() || 'none'
+        const e = String(r.File_x0020_Type ?? (String(r.FileLeafRef ?? '').includes('.') ? String(r.FileLeafRef).split('.').pop() : '') ?? '').toLowerCase() || 'none'
         const size = Number(r.File_x0020_Size) || 0
         const x = this.ext.get(e) ?? { count: 0, bytes: 0 }
         x.count++; x.bytes += size; this.ext.set(e, x)
@@ -103,13 +104,13 @@ export class Aggregator {
     return out
   }
 
-  top(internal: string, n = 8): { label: string; value: number }[] {
+  top(internal: string, n = 8): { label: string; value: number; other?: boolean }[] {
     const s = this.stats.get(internal)
     if (!s) return []
     const all = [...s.counts.entries()].sort((a, b) => b[1] - a[1])
-    const head = all.slice(0, n).map(([label, value]) => ({ label, value }))
+    const head: { label: string; value: number; other?: boolean }[] = all.slice(0, n).map(([label, value]) => ({ label, value }))
     const rest = all.slice(n).reduce((a, [, v]) => a + v, 0)
-    if (rest > 0) head.push({ label: 'Other', value: rest })
+    if (rest > 0) head.push({ label: 'Other', value: rest, other: true })
     return head
   }
 
@@ -147,7 +148,7 @@ export function insights(a: Aggregator, total: number, scope: string): Insight[]
       const t = s.counts.get('Yes') ?? 0
       if (t && /block|overdue|urgent|flag|escalat/i.test(s.field.title + s.field.internal)) out.push({ level: 'warn', text: `${fmt(t)} items are flagged “${s.field.title}” (${pct(t, s.n)}).` })
     }
-    if (s.missing / Math.max(1, s.n + s.missing) > 0.3 && s.field.required !== false && !s.field.system) out.push({ level: 'warn', text: `${s.field.title} is empty on ${pct(s.missing)} of items — consider making it required.` })
+    if (s.missing / Math.max(1, s.n + s.missing) > 0.3 && !s.field.required && !s.field.system) out.push({ level: 'warn', text: `${s.field.title} is empty on ${pct(s.missing)} of items — consider making it required.` })
   }
   if (a.stale / a.rows > 0.25) out.push({ level: 'warn', text: `${pct(a.stale)} of items haven’t been touched in over a year — a candidate for archiving.` })
   if (a.dupes > 0) out.push({ level: 'warn', text: `${fmt(a.dupes)} ${a.isLibrary ? 'file names' : 'titles'} appear more than once.` })
