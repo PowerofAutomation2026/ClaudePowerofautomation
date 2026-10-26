@@ -197,3 +197,14 @@ Created by **Kirolos** — Power of Automation
 ### Which Copilot Studio agents work in-app
 
 The in-app chat uses Microsoft's Copilot Studio connector, which only reaches **classic (standard) agents** — ones with Topics in the left menu. Agents from the newer *GitHub Copilot harness* experience (left menu: Skills, Connected agents, Authoring canvas, no Topics; Settings → Advanced shows an Entra Agent ID) are **not callable** by that connector today (Microsoft: microsoft/PowerAppsCodeApps discussion 434), and a Power Automate wrapper doesn't help because it uses the same connector. Options: (1) create a classic agent in the same environment, add the same SharePoint knowledge, set Authentication to *Authenticate with Microsoft*, publish and share it, then use **Find my agents**; (2) add the new-experience agent as a **link** (opens its chat; the app copies the context for you).
+
+### Chat with new-experience Copilot Studio agents (v1.9.9)
+
+Agents built in the newer Copilot Studio experience (Skills / Connected agents, no Topics) can't be reached through the Copilot Studio connector. Microsoft's Direct-to-Engine API does support them (rolling out through October 2026). In **Assistant → Setup → Add Copilot Studio agent (new or classic)** enter the **Environment ID** (pre-filled with this app's environment) and the **schema name** (Copilot Studio → Settings → Advanced → Metadata). The app talks to the agent through the **HTTP with Microsoft Entra ID (preauthorized)** connector:
+1. Power Apps → Connections → New → *HTTP with Microsoft Entra ID (preauthorized)*; Base Resource URL = `https://<environment host>` (Setup shows and copies it), Resource URI = `https://api.powerplatform.com`.
+2. `Deploy.cmd -AddEntraHttp` (or `pac code add-data-source -a shared_webcontents -c <connection id>`), republish; each user approves the connection once.
+3. The agent must be published with *Authenticate with Microsoft*. If Microsoft Entra refuses the token for this resource, use the non-preauthorized connector with an Entra app that has `CopilotStudio.Copilots.Invoke`. Agent Builder / Microsoft 365 Copilot agents still have no API: add them as a link.
+
+### Crash fix (v1.9.9)
+
+A filter the server could not apply (multi-value people/lookup columns, relative dates from a colour-rule legend chip or a dashboard "Show items" button) made the grid page through the whole list automatically — thousands of requests and gigabytes of data — until the browser tab ran out of memory. The grid now stops after 10,000 non-matching rows and shows a "scan further" button, applies only the filters SharePoint could not apply, and resolves relative dates properly.

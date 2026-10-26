@@ -238,7 +238,9 @@ export function Grid(p: GridProps) {
           {rows.length === 0 && !engine.loading && !engine.error && (
             <div className="empty" style={{ position: 'absolute', inset: 0 }}><Icon n="search" size={36} /><b>No items match</b><span className="muted">Try a different search or clear the filters.</span></div>
           )}
-          {(engine.hasMore || engine.loading) && rows.length > 0 && <div className="g-load" style={{ top: lines * rh }} aria-hidden="true">Loading more… ({fmt(rows.length)} loaded)</div>}
+          {engine.starved && engine.hasMore && !engine.loading
+            ? <div className="g-load" style={{ top: lines * rh }}><button className="btn sm" onClick={() => engine.loadMore(true)}>Scanned {fmt(engine.scanned)} rows, {fmt(rows.length)} match the filters — scan further</button></div>
+            : (engine.hasMore || engine.loading) && rows.length > 0 && <div className="g-load" style={{ top: lines * rh }} aria-hidden="true">Loading more… ({fmt(rows.length)} loaded)</div>}
         </div>
       </div>
     </div>

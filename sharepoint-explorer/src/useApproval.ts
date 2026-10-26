@@ -61,6 +61,7 @@ export function useApproval(engine: Engine | null, me: Me, access: Access, mayDe
 
   /* ---- automatic approvals: runs for whoever has the app open (new / changed items in-app or in SharePoint) ---- */
   const reqsRef = useRef(reqs); reqsRef.current = reqs
+  const lastRun = useRef(0)
   const busy = useRef(false), denied = useRef(false), handled = useRef(new Set<string>()), lastSweep = useRef('')
   const sweep = useCallback(async (): Promise<number> => {
     const a = flow?.auto
@@ -92,7 +93,7 @@ export function useApproval(engine: Engine | null, me: Me, access: Access, mayDe
     return n
   }, [flow, engine, backend, id]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { handled.current.clear(); lastSweep.current = ''; denied.current = false }, [id, flow?.updated])
-  useEffect(() => { if (!active || !flow?.auto) return; const t = setTimeout(() => void sweep(), 1800); return () => clearTimeout(t) }, [ver, active, flow?.updated]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!active || !flow?.auto) return; const wait = Math.max(1800, 15_000 - (Date.now() - lastRun.current)); const t = setTimeout(() => { lastRun.current = Date.now(); void sweep() }, wait); return () => clearTimeout(t) }, [ver, active, flow?.updated])   // never more often than every 15 s, however busy the live pulse is // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!active || !flow?.auto) return; const t = setInterval(() => { if (!document.hidden) void sweep() }, 45_000); return () => clearInterval(t) }, [sweep, active, flow?.auto])
 
   return {

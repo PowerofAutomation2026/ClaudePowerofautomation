@@ -18,7 +18,7 @@ import { Board } from './components/Board'
 import { DiagnosticsDialog, StartFailure } from './components/Diagnostics'
 import { Calendar } from './components/Calendar'
 import { FormatDialog } from './components/FormatDialog'
-import { compileRules, legendCounts } from './format'
+import { compileRules, legendCounts, resolveRelative } from './format'
 import type { FormatRule } from './types'
 import { ImportDialog } from './components/ImportDialog'
 import type { PermTarget } from './types'
@@ -519,7 +519,7 @@ function Shell() {
 
             {legend.length > 0 && (
               <div className="chips" aria-label="Colour rule legend">
-                {legend.map(({ rule, n }) => <button key={rule.id} className={`chip fmt-${rule.color} legend`} title="Show only these rows" onClick={() => addClause(rule.clause)}><span aria-hidden="true">{rule.marker ?? '●'}</span>{rule.name ?? engine.fields.find((f) => f.internal === rule.clause.field)?.title} <b>{n}</b></button>)}
+                {legend.map(({ rule, n }) => <button key={rule.id} className={`chip fmt-${rule.color} legend`} title="Show only these rows" onClick={() => addClause({ ...rule.clause, value: rule.clause.op === 'lastdays' ? rule.clause.value : resolveRelative(rule.clause.value) })}><span aria-hidden="true">{rule.marker ?? '●'}</span>{rule.name ?? engine.fields.find((f) => f.internal === rule.clause.field)?.title} <b>{n}</b></button>)}
                 {fmtRules.shared.length > 0 && <button className="btn sm ghost" onClick={() => setFmtRules((c) => ({ ...c, hideShared: !c.hideShared }))}>{fmtRules.hideShared ? 'Show shared rules' : 'Hide shared rules'}</button>}
               </div>
             )}

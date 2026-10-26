@@ -262,7 +262,8 @@ export const sp: Backend = {
     let next: string | undefined
     if (byId) {
       const last = items[items.length - 1]   // page boundary comes from the RAW page: a page that is all folders (filtered out client-side) must not end the paging
-      if (items.length >= Math.min(top, 5000) && last && !isNaN(Number(last.Id ?? last.ID))) next = `id:${Number(last.Id ?? last.ID) + (asc ? 1 : -1)}`
+      const nid = Number(last?.Id ?? last?.ID) + (asc ? 1 : -1)
+      if (items.length >= Math.min(top, 5000) && last && !isNaN(nid) && nid >= 1) next = `id:${nid}`
     } else {
       const link: string | undefined = d?.['odata.nextLink'] ?? d?.['@odata.nextLink'] ?? d?.d?.__next
       const i = link ? link.indexOf('_api/') : -1

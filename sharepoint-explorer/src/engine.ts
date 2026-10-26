@@ -8,12 +8,14 @@
  *    memory is capped, and every request is cancellable.
  */
 import type { Backend, Query, Row, SourceConfig, SpField } from './types'
-import { emptyQuery, isDefaultQuery, isFolderMode, titleField, matchRow, resetHaystack, searchTokens, sortFolderRows, sortRows } from './query'
+import { clauseToOData, emptyQuery, isDefaultQuery, isFolderMode, titleField, matchRow, resetHaystack, searchTokens, sortFolderRows, sortRows } from './query'
 
 export const LOCAL_MAX = 25_000
 export const BULK = 5_000
 export const PAGE = 250
 export const MAX_ROWS = 150_000
+/** rows the grid may walk past on its own (filtered out client-side) before it stops and asks the user */
+export const AUTO_SCAN = 10_000
 
 export type EngineMode = 'local' | 'server'
 
@@ -41,6 +43,9 @@ export class Engine {
   lastSync = new Date().toISOString()
   /** number of rows the server walked past without a match (shown as "scanned") */
   scanned = 0
+  /** server mode: the automatic viewport-fill stopped because AUTO_SCAN rows produced nothing; loadMore(true) continues */
+  starved = false
+  private autoScanned = 0
 
   private cursor?: string
   private gen = 0
@@ -83,6 +88,7 @@ export class Engine {
     this.scanned = 0
     this.pendingNew = 0
     this.pageSize = PAGE
+    this.starved = false; this.autoScanned = 0
     if (this.mode === 'local') {
       if (this.loadedAll) { this.recompute(); return }
       this.all = []; this.rows = []; this.hasMore = true; this.loading = true; this.progress = 0
@@ -135,8 +141,11 @@ export class Engine {
         const page = await this.backend.query(this.src, this.fields, this.select, this.q, this.pageSize, this.cursor, this.ctl!.signal)
         if (gen !== this.gen) return
         // filters on columns SharePoint cannot filter server-side (multi-value people/lookups) come back unfiltered: apply them here
-        const kept = this.q.clauses.length ? page.rows.filter((r) => matchRow(r, { ...this.q, search: '' }, this.fields)) : page.rows
+        // only clauses SharePoint could NOT apply (multi-value people/lookups, refused expands) are evaluated here; the rest is already filtered
+        const local = this.q.clauses.filter((c) => { const f = this.fields.find((x) => x.internal === c.field); return f && clauseToOData(c, f) === null })
+        const kept = local.length ? page.rows.filter((r) => matchRow(r, { ...this.q, search: '', clauses: local }, this.fields)) : page.rows
         this.rows = this.rows.concat(kept)
+        this.autoScanned += (page.scanned ?? page.rows.length) - kept.length
         if (isFolderMode(this.q)) this.rows = sortFolderRows(this.rows, this.q, this.fields)
         got += page.rows.length
         this.scanned += page.scanned ?? page.rows.length
@@ -144,6 +153,7 @@ export class Engine {
         this.cursor = page.cursor
         this.hasMore = !!page.cursor
         if (this.rows.length >= MAX_ROWS) { this.capped = true; this.hasMore = false }
+        if (this.autoScanned >= AUTO_SCAN && this.hasMore) { this.starved = true; this.emit(); break }   // walked a lot of rows without matches: stop and ask
         this.emit()
       }
     } catch (e) {
@@ -153,8 +163,10 @@ export class Engine {
     }
   }
 
-  loadMore() {
+  loadMore(force = false) {
     if (this.mode !== 'server' || this.loading || !this.hasMore || this.pending) return
+    if (this.starved && !force) return
+    if (force) { this.starved = false; this.autoScanned = 0 }
     // someone is scrolling fast: grow the page (up to 1,000 rows per request) so loading keeps up; slow down again when idle
     const now = Date.now()
     this.pageSize = now - this.lastLoad < 1500 ? Math.min(1000, this.pageSize * 2) : PAGE
@@ -189,7 +201,7 @@ export class Engine {
     const asc = this.q.sort.dir === 'asc'
     const ref = Math.round((asc ? f : 1 - f) * Math.max(1, this.maxIdKnown()))
     this.gen++; this.ctl?.abort(); this.ctl = new AbortController()
-    this.rows = []; this.hasMore = true; this.cursor = `id:${asc ? ref : ref + 1}`
+    this.rows = []; this.hasMore = true; this.cursor = `id:${asc ? ref : ref + 1}`; this.starved = false; this.autoScanned = 0
     this.emit()
     void this.fill(this.gen, PAGE)
   }

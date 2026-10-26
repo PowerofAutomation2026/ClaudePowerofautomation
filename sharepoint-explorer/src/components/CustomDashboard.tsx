@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BULK, type Engine } from '../engine'
+import { resolveRelative } from '../format'
 import { describeClause, emptyQuery, opsFor } from '../query'
 import type { Clause, DashConfig, Op, SpField, Widget, WidgetType } from '../types'
 import { fmt, uid, yieldToUi } from '../util'
@@ -10,7 +11,7 @@ import { Dashboard } from './Dashboard'
 import { BarList, Donut, Gauge, Timeline } from './Charts'
 import { Counter, Icon, Modal, useToast } from './ui'
 
-const SAMPLE = 3000
+const SAMPLE = 1500
 const TYPES: { t: WidgetType; label: string; hint: string }[] = [
   { t: 'approvals', label: 'Approvals', hint: 'Pending, overdue, approved and average turnaround of approval requests' },
   { t: 'kpi', label: 'Number (KPI)', hint: 'One big figure: a count, sum, average, min or max' },
@@ -125,7 +126,7 @@ function CustomDashboard(p: HostProps & { cfg: DashConfig | null | undefined; ed
   const upsert = (w: Widget) => { setWidgets((ws) => (ws.some((x) => x.id === w.id) ? ws.map((x) => (x.id === w.id ? w : x)) : [...ws, w])); setEdit(null) }
   const open = (w: Widget, label?: string) => {
     const f = fields.find((x) => x.internal === w.field)
-    if (w.clause && (w.type === 'kpi' || w.type === 'goal')) { p.onFilter(w.clause); p.onGoData() }
+    if (w.clause && (w.type === 'kpi' || w.type === 'goal')) { p.onFilter({ ...w.clause, value: w.clause.op === 'lastdays' ? w.clause.value : resolveRelative(w.clause.value) }); p.onGoData() }
     else if (label && f && (w.type === 'bar' || w.type === 'donut') && label !== '(empty)' && f.kind !== 'date') {
       p.onFilter(f.kind === 'boolean' ? { field: f.internal, op: 'eq', value: label === 'Yes' ? 'true' : 'false' } : f.kind === 'user' || f.kind === 'lookup' ? { field: f.internal, op: 'eq', value: label } : { field: f.internal, op: 'in', value: '', values: [label] }); p.onGoData()
     }
@@ -220,7 +221,7 @@ function WidgetView({ w, r: r0, fields, allFields, total, sampled, onOpen }: { w
   return (
     <div>{h}
       {!r.rows.length ? <p className="muted">No items match.</p> : (
-        <ol className="feed" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+        <ol className="feed" tabIndex={0} aria-label={w.title || 'Top items'} style={{ listStyle: 'none', padding: 0, margin: 0 }}>
           {r.rows.map((x, i) => <li key={x.id}><b style={{ width: 22 }}>{i + 1}</b><span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{x.title}</span><b>{String(x.value)}</b></li>)}
         </ol>
       )}
