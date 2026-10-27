@@ -22,7 +22,7 @@
 .PARAMETER BootstrapList     Name of an existing list/library on the config site used to register the connector. Default: tries
                              'Documents', 'Shared Documents', 'Site Pages'.
 .PARAMETER AddCopilotStudio  Also wire the Microsoft Copilot Studio connector (agent chat in the app).
-.PARAMETER AddEntraHttp      Also wire the 'HTTP with Microsoft Entra ID' connector (chat with new-experience Copilot Studio agents). Create that connection first (see README).
+.PARAMETER AddEntraHttp      Also wire the 'SPX Copilot Direct' custom connector (chat with new-experience Copilot Studio agents). Run Setup-CopilotStudioConnector.ps1 and create that connection first (see README).
 .PARAMETER NoCopilotStudio   Skip the Copilot Studio question entirely.
 .PARAMETER NonInteractive    Never prompt; fail instead.
 .PARAMETER SkipPrereqInstall Do not try to install Node.js / Power Platform CLI.
@@ -317,20 +317,20 @@ try {
   }
   if (-not $NoCopilotStudio -and ([bool]$AddEntraHttp -or $choice -in '2','3')) {
     try {
-      $wcConn = @(Get-Connections) | Where-Object { $_.Api -eq $wcApi } | Select-Object -First 1
-      if (-not $wcConn) { $v1 = @(Get-Connections) | Where-Object { $_.Api -eq 'shared_webcontents' } | Select-Object -First 1; if ($v1) { $wcApi = 'shared_webcontents'; $wcConn = $v1; Warn 'Using the PREAUTHORIZED connector: Microsoft refuses Copilot Studio calls from it (403 InsufficientDelegatedPermissions). Prefer the non-preauthorized one: run scripts\Grant-CopilotStudioAccess.ps1 as an admin, create the connection below, and run this script again.' } }
+      $wcApi = $null
+      $wcConn = @(Get-Connections) | Where-Object { $_.Api -match 'copilot.{0,6}direct' } | Select-Object -First 1
+      if ($wcConn) { $wcApi = $wcConn.Api }
       if (-not $wcConn -and -not $NonInteractive) {
-        $h = ($EnvironmentId -replace '-', '').ToLower(); $envHost = "https://$($h.Substring(0, $h.Length - 2)).$($h.Substring($h.Length - 2)).environment.api.powerplatform.com"
-        Warn 'FIRST (once, as a tenant admin): run scripts\Grant-CopilotStudioAccess.ps1 - it allows the connector to call Copilot Studio.'
-        Warn 'Then create ONE connection (sign-in cannot be scripted). In the page that opens choose "HTTP with Microsoft Entra ID" (NOT the preauthorized one) and enter:'
-        Write-Host "    Base Resource URL : $envHost" -ForegroundColor Yellow
-        Write-Host '    Microsoft Entra ID Resource URI : https://api.powerplatform.com' -ForegroundColor Yellow
-        Start-Process "https://make.powerapps.com/environments/$EnvironmentId/connections/available?apiName=$wcApi"
-        $null = Read-Host 'Press Enter when the connection is created'
-        $wcConn = @(Get-Connections) | Where-Object { $_.Api -eq $wcApi } | Select-Object -First 1
+        Warn 'New-experience agents need the custom connector "SPX Copilot Direct" (Microsoft''s own HTTP connectors cannot call Copilot Studio).'
+        Warn 'FIRST (once, as an admin with Azure CLI): run  scripts\Setup-CopilotStudioConnector.ps1 -EnvironmentId ' + $EnvironmentId
+        Warn 'Then create the connection (sign-in cannot be scripted): Power Apps > Connections > New connection > SPX Copilot Direct.'
+        Start-Process "https://make.powerapps.com/environments/$EnvironmentId/connections"
+        $null = Read-Host 'Press Enter when the connection is created (or Enter to skip)'
+        $wcConn = @(Get-Connections) | Where-Object { $_.Api -match 'copilot.{0,6}direct' } | Select-Object -First 1
+        if ($wcConn) { $wcApi = $wcConn.Api }
       }
       $wantWc = [bool]$wcConn
-      if (-not $wcConn) { Warn 'No HTTP with Microsoft Entra ID connection found - skipping new-experience agent support (run again later with -AddEntraHttp).' }
+      if (-not $wcConn) { Warn 'No SPX Copilot Direct connection found - skipping new-experience agent support (run Setup-CopilotStudioConnector.ps1, create the connection, then run again with -AddEntraHttp).' }
     } catch { Warn "Entra HTTP step skipped: $($_.Exception.Message)" }
   }
   if (-not $NoCopilotStudio) {
@@ -355,7 +355,7 @@ try {
     try { if (Add-Src $csApi $csConn.Id 'copilotstudio' @()) { Ok 'Copilot Studio connector added'; $spf = Get-SchemaPath; $csSchemaText = if ($spf) { [System.IO.File]::ReadAllText((Join-Path $root $spf)) } else { $null } } else { Warn 'Could not add the Copilot Studio connector - continuing with SharePoint only.'; $wantCs = $false } } catch { Warn "Copilot Studio step skipped: $($_.Exception.Message)"; $wantCs = $false }
   }
   if ($wantWc) {
-    Step 'Wiring the HTTP with Microsoft Entra ID connector (chat with new-experience agents)'
+    Step 'Wiring the SPX Copilot Direct connector (chat with new-experience agents)'
     try { if (Add-Src $wcApi $wcConn.Id 'webcontents' @()) { Ok 'Entra HTTP connector added'; $spf = Get-SchemaPath; $wcSchemaText = if ($spf) { [System.IO.File]::ReadAllText((Join-Path $root $spf)) } else { $null } } else { Warn 'Could not add the Entra HTTP connector - continuing without it.'; $wantWc = $false } } catch { Warn "Entra HTTP step skipped: $($_.Exception.Message)"; $wantWc = $false }
   }
   # agent drop-down in the app: the Dataverse "bot" table (read-only use; failures never stop the deployment)

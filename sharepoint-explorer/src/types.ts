@@ -198,7 +198,7 @@ export interface Backend {
   listAgents(): Promise<{ name: string; schema: string }[]>
   /** the Dataverse `bot` table is attached to this app (lets the admin pick agents from a list) */
   /** which "HTTP with Microsoft Entra ID" connector build is compiled into the app */
-  webConnector(): { key: string; apiId: string; v2: boolean; all: string[] } | null
+  webConnector(): { key: string; apiId: string; v2: boolean; custom?: boolean; all: string[] } | null
   botSource(): boolean
   listBots(): Promise<BotInfo[]>
   askAgent(agent: string, message: string, conversationId?: string, opts?: { kind?: 'studio' | 'link' | 'entra-http'; environmentId?: string }): Promise<AgentReply>

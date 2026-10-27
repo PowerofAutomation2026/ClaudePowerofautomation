@@ -329,10 +329,10 @@ export const sp: Backend = {
   async saveDashboard(sourceId, cfg) { await kvSet(`dashboard:${sourceId}`, cfg); lsSet(`spx.dash.${sourceId}`, cfg) },
   async loadAssistants() { return (await kvGet<AssistantConfig>('assistants')) ?? lsGet<AssistantConfig | null>('spx.assistants', null) },
   async saveAssistants(cfg) { if (!cfgSite()) throw new Error('No config site is set for this app, so assistants cannot be shared. Re-run Deploy.cmd with -ConfigSiteUrl.'); await kvSet('assistants', cfg); lsSet('spx.assistants', cfg) },
-  agentConnector: (kind) => (kind === 'entra-http' ? !!webKey() : !!studioKey()),
+  agentConnector: (kind) => (kind === 'entra-http' ? !!(d2eKey() || webKey()) : !!studioKey()),
   async envId() { return (await getContext()).app.environmentId },
   botSource: () => !!botKey(),
-  webConnector: () => { const w = webPick(); return w ? { key: w.key, apiId: w.apiId, v2: w.v2, all: webKeys().map((x) => x.key) } : null },
+  webConnector: () => { const ck = d2eKey(); if (ck) return { key: ck, apiId: '', v2: true, custom: true, all: [ck] }; const w = webPick(); return w ? { key: w.key, apiId: w.apiId, v2: w.v2, all: webKeys().map((x) => x.key) } : null },
   listBots: () => listBotsDv(),
   probeAgent: (env, schema) => probeD2E(env, schema),
   askAgent: (agent, message, conv, opts) => (opts?.kind === 'entra-http' ? askD2E(opts.environmentId ?? '', agent, message, conv) : askStudio(agent, message, conv)),
@@ -785,12 +785,39 @@ const webKeys = () => Object.entries<any>(dataSourcesInfo).filter(([k, v]) => is
 /** the connector build the app uses for Copilot Studio calls: the NON-preauthorized one (v2) wins when both are present */
 const webPick = () => { const l = webKeys(); return l.find((x) => x.v2) ?? l[0] }
 const webKey = () => webPick()?.key
+/** custom connector made by scripts\Setup-CopilotStudioConnector.ps1 (own Entra app): has Discover + Invoke operations */
+const d2eKey = () => Object.entries<any>(dataSourcesInfo).find(([, v]) => isConnectorSource(v) && !v?.tableId && Object.keys(v?.apis ?? {}).some((n) => /^Discover$/i.test(n)) && Object.keys(v?.apis ?? {}).some((n) => /^Invoke$/i.test(n)))?.[0]
 
 /** environment id -> the environment API host used by Copilot Studio: first 30 hex chars, '.', last 2 */
 export const envHost = (env: string) => { const h = env.replace(/-/g, '').toLowerCase(); return `https://${h.slice(0, -2)}.${h.slice(-2)}.environment.api.powerplatform.com` }
 
 /** one HTTP call through the "HTTP with Microsoft Entra ID" connector; returns the raw response body text */
+async function invokeCustom(key: string, method: 'GET' | 'POST', url: string, body?: unknown): Promise<string> {
+  const apis = dataSourcesInfo[key]?.apis ?? {}
+  const u = new URL(url)
+  const disc = u.pathname.match(/\/copilotstudio\/agents\/([^/]+)\/conversation-endpoints$/i)
+  const params: Record<string, unknown> = {}
+  let op: string | undefined
+  if (method === 'GET' && disc) { op = opOf(apis, 'Discover'); params.agent = decodeURIComponent(disc[1]) }
+  else { op = opOf(apis, 'Invoke'); params.route = u.pathname.replace(/^\//, ''); const av = u.searchParams.get('api-version'); if (av) params['api-version'] = av; if (body !== undefined) params.body = body }
+  if (!op) throw new Error(`The custom connector has no matching operation (found: ${Object.keys(apis).join(', ') || 'none'}). Re-run scripts\\Setup-CopilotStudioConnector.ps1.`)
+  const t0 = Date.now()
+  const res: any = await sdk().executeAsync({ connectorOperation: { tableName: key, operationName: op, parameters: params } } as any)
+  if (!res?.success) {
+    const e = res?.error, status = Number(e?.status ?? e?.statusCode ?? 0)
+    const msg = String(e?.message ?? (typeof e === 'string' ? e : JSON.stringify(e ?? 'The call failed')))
+    if (/InsufficientDelegatedPermissions|65001|AADSTS|consent/i.test(msg)) throw new Error(`Copilot Studio refused the token of the custom connector (${msg.slice(0, 200)}). Check that the Entra app has the delegated permission CopilotStudio.Copilots.Invoke (Power Platform API) with admin consent, and that the connection was created after that (delete and re-create it).`)
+    if (/GitHub Copilot harness/i.test(msg)) throw new Error('Copilot Studio says this endpoint does not support agents built with the GitHub Copilot harness in your region yet. Try again later.')
+    throw new Error(`${status ? `HTTP ${status}: ` : ''}${msg}${!status ? ` (after ${((Date.now() - t0) / 1000).toFixed(1)} s)` : ''}`)
+  }
+  const d = res.data
+  if (typeof d === 'string') return d
+  if (d && typeof d === 'object') return typeof d.body === 'string' ? d.body : JSON.stringify(d.body ?? d)
+  return ''
+}
+
 async function invokeHttp(method: 'GET' | 'POST', url: string, body?: unknown): Promise<string> {
+  const ck = d2eKey(); if (ck) return invokeCustom(ck, method, url, body)
   const key = webKey()
   if (!key) throw new Error('The “HTTP with Microsoft Entra ID” connector is not attached to this app. Create that connection in Power Apps (Base Resource URL = your environment host, Resource URI = https://api.powerplatform.com), then re-run Deploy.cmd with -AddEntraHttp (or: pac code add-data-source -a shared_webcontents -c <connection id>) and republish.')
   const apis = dataSourcesInfo[key]?.apis ?? {}
@@ -818,7 +845,7 @@ async function invokeHttp(method: 'GET' | 'POST', url: string, body?: unknown): 
   if (!res?.success) {
     const e = res?.error, status = Number(e?.status ?? e?.statusCode ?? 0)
     const msg = String(e?.message ?? (typeof e === 'string' ? e : JSON.stringify(e ?? 'The call failed')))
-    if (/InsufficientDelegatedPermissions|65001|consent|not authorized|preauthorized|AADSTS/i.test(msg)) throw new Error(`Copilot Studio refused the call because the connector's Microsoft app has no permission for the Power Platform API (connector used by this build: ${key}${/webcontentsv2/i.test(key) ? '' : ' = the PREAUTHORIZED one'}; ${msg.slice(0, 200)}). Fix (once): 1) a tenant admin runs scripts\\Grant-CopilotStudioAccess.ps1 (grants CopilotStudio.Copilots.Invoke to “HTTP with Microsoft Entra ID”); 2) create a NEW connection with the NON-preauthorized “HTTP with Microsoft Entra ID” connector (Resource URI https://api.powerplatform.com, Base Resource URL = your environment host); 3) run Deploy.cmd again (option 2). The preauthorized connector can never get this permission.`)
+    if (/InsufficientDelegatedPermissions|65001|consent|not authorized|preauthorized|AADSTS/i.test(msg)) throw new Error(`Copilot Studio refused the call: the Microsoft-owned “HTTP with Microsoft Entra ID” connector cannot get permission for the Power Platform API (Entra does not allow that; connector in this build: ${key}; ${msg.slice(0, 160)}). Fix (once, by an admin): run scripts\\Setup-CopilotStudioConnector.ps1 -EnvironmentId <id> - it creates your own Entra app and a custom connector - then create the connection, run Deploy.cmd again (option 2) and republish.`)
     if (/GitHub Copilot harness/i.test(msg)) throw new Error('Copilot Studio says this endpoint does not support agents built with the GitHub Copilot harness in your region yet (Microsoft is rolling the support out through the end of October 2026). Try again later.')
     throw new Error(`${status ? `HTTP ${status}: ` : ''}${msg}${!status ? ` (after ${((Date.now() - t0) / 1000).toFixed(1)} s)` : ''}`)
   }
