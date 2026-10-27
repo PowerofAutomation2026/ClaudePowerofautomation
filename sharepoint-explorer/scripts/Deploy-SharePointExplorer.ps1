@@ -322,7 +322,11 @@ try {
       if ($wcConn) { $wcApi = $wcConn.Api }
       if (-not $wcConn -and -not $NonInteractive) {
         Warn 'New-experience agents need the custom connector "SPX Copilot Direct" (Microsoft''s own HTTP connectors cannot call Copilot Studio).'
-        Warn 'FIRST (once, as an admin with Azure CLI): run  scripts\Setup-CopilotStudioConnector.ps1 -EnvironmentId ' + $EnvironmentId
+        $setup = Join-Path $PSScriptRoot 'Setup-CopilotStudioConnector.ps1'
+        if (Test-Path $setup) {
+          $go = (Read-Host 'Create it now? Needs Azure CLI and rights to create an Entra app + grant consent [Y/n]').Trim()
+          if ($go -notmatch '^(n|no)$') { try { & $setup -EnvironmentId $EnvironmentId } catch { Warn "Connector setup did not finish: $($_.Exception.Message)" } }
+        } else { Warn 'Run scripts\Setup-CopilotStudioConnector.ps1 -EnvironmentId ' + $EnvironmentId }
         Warn 'Then create the connection (sign-in cannot be scripted): Power Apps > Connections > New connection > SPX Copilot Direct.'
         Start-Process "https://make.powerapps.com/environments/$EnvironmentId/connections"
         $null = Read-Host 'Press Enter when the connection is created (or Enter to skip)'
