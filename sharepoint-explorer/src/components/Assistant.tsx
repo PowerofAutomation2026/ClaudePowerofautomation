@@ -222,6 +222,8 @@ function AssistantEditor({ engine, a, onSave, onClose }: { engine: Engine; a: As
         const has = engine.backend.agentConnector('entra-http')
         push(has, has ? 'The “HTTP with Microsoft Entra ID” connector is attached to this app.' : 'The “HTTP with Microsoft Entra ID” connector is not attached to this app (see the setup steps above).')
         if (!has) return
+        const wc = engine.backend.webConnector()
+        if (wc) push(wc.v2 ? true : false, wc.v2 ? `Connector in this build: ${wc.key} (non-preauthorized) ✓` : `Connector in this build: ${wc.key} — this is the PREAUTHORIZED connector, which Copilot Studio always refuses (403). Create the non-preauthorized “HTTP with Microsoft Entra ID” connection, then run Deploy.cmd again (option 2). Other HTTP connectors compiled in: ${wc.all.join(', ')}.`)
         push(true, await engine.backend.probeAgent(d.environmentId!.trim(), name))
         const t0 = Date.now()
         const r = await Promise.race([engine.backend.askAgent(name, 'ping', undefined, { kind: 'entra-http', environmentId: d.environmentId!.trim() }), new Promise<never>((_, rej) => setTimeout(() => rej(new Error('No answer after 150 s.')), 150_000))])

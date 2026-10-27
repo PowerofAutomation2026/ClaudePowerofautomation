@@ -332,6 +332,7 @@ export const sp: Backend = {
   agentConnector: (kind) => (kind === 'entra-http' ? !!webKey() : !!studioKey()),
   async envId() { return (await getContext()).app.environmentId },
   botSource: () => !!botKey(),
+  webConnector: () => { const w = webPick(); return w ? { key: w.key, apiId: w.apiId, v2: w.v2, all: webKeys().map((x) => x.key) } : null },
   listBots: () => listBotsDv(),
   probeAgent: (env, schema) => probeD2E(env, schema),
   askAgent: (agent, message, conv, opts) => (opts?.kind === 'entra-http' ? askD2E(opts.environmentId ?? '', agent, message, conv) : askStudio(agent, message, conv)),
@@ -780,7 +781,10 @@ async function askStudio(agent: string, message: string, conv?: string): Promise
 
 
 /* ------------------------------------------------------------------ Copilot Studio "Direct-to-Engine" through the Entra HTTP connector (works for new-experience / GitHub Copilot harness agents) */
-const webKey = () => Object.entries<any>(dataSourcesInfo).find(([k, v]) => isConnectorSource(v) && !v?.tableId && (/^webcontents/i.test(k) || /shared_webcontents/i.test(String(v?.apiId ?? '')) || Object.keys(v?.apis ?? {}).some((n) => /^InvokeHttp$/i.test(n))))?.[0]
+const webKeys = () => Object.entries<any>(dataSourcesInfo).filter(([k, v]) => isConnectorSource(v) && !v?.tableId && (/^webcontents/i.test(k) || /shared_webcontents/i.test(String(v?.apiId ?? '')) || Object.keys(v?.apis ?? {}).some((n) => /^InvokeHttp$/i.test(n)))).map(([k, v]) => ({ key: k, apiId: String(v?.apiId ?? ''), v2: /webcontentsv2/i.test(`${k} ${v?.apiId ?? ''}`) }))
+/** the connector build the app uses for Copilot Studio calls: the NON-preauthorized one (v2) wins when both are present */
+const webPick = () => { const l = webKeys(); return l.find((x) => x.v2) ?? l[0] }
+const webKey = () => webPick()?.key
 
 /** environment id -> the environment API host used by Copilot Studio: first 30 hex chars, '.', last 2 */
 export const envHost = (env: string) => { const h = env.replace(/-/g, '').toLowerCase(); return `https://${h.slice(0, -2)}.${h.slice(-2)}.environment.api.powerplatform.com` }
@@ -814,7 +818,7 @@ async function invokeHttp(method: 'GET' | 'POST', url: string, body?: unknown): 
   if (!res?.success) {
     const e = res?.error, status = Number(e?.status ?? e?.statusCode ?? 0)
     const msg = String(e?.message ?? (typeof e === 'string' ? e : JSON.stringify(e ?? 'The call failed')))
-    if (/InsufficientDelegatedPermissions|65001|consent|not authorized|preauthorized|AADSTS/i.test(msg)) throw new Error(`Copilot Studio refused the call because the connector's Microsoft app has no permission for the Power Platform API (${msg.slice(0, 220)}). Fix (once): 1) a tenant admin runs scripts\\Grant-CopilotStudioAccess.ps1 (grants CopilotStudio.Copilots.Invoke to “HTTP with Microsoft Entra ID”); 2) create a NEW connection with the NON-preauthorized “HTTP with Microsoft Entra ID” connector (Resource URI https://api.powerplatform.com, Base Resource URL = your environment host); 3) run Deploy.cmd again (option 2). The preauthorized connector can never get this permission.`)
+    if (/InsufficientDelegatedPermissions|65001|consent|not authorized|preauthorized|AADSTS/i.test(msg)) throw new Error(`Copilot Studio refused the call because the connector's Microsoft app has no permission for the Power Platform API (connector used by this build: ${key}${/webcontentsv2/i.test(key) ? '' : ' = the PREAUTHORIZED one'}; ${msg.slice(0, 200)}). Fix (once): 1) a tenant admin runs scripts\\Grant-CopilotStudioAccess.ps1 (grants CopilotStudio.Copilots.Invoke to “HTTP with Microsoft Entra ID”); 2) create a NEW connection with the NON-preauthorized “HTTP with Microsoft Entra ID” connector (Resource URI https://api.powerplatform.com, Base Resource URL = your environment host); 3) run Deploy.cmd again (option 2). The preauthorized connector can never get this permission.`)
     if (/GitHub Copilot harness/i.test(msg)) throw new Error('Copilot Studio says this endpoint does not support agents built with the GitHub Copilot harness in your region yet (Microsoft is rolling the support out through the end of October 2026). Try again later.')
     throw new Error(`${status ? `HTTP ${status}: ` : ''}${msg}${!status ? ` (after ${((Date.now() - t0) / 1000).toFixed(1)} s)` : ''}`)
   }
