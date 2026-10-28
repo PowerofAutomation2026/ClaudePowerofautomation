@@ -14,7 +14,6 @@
     "application/json"
   ],
   "produces": [
-    "text/event-stream",
     "application/json"
   ],
   "paths": {
@@ -33,16 +32,10 @@
         ],
         "responses": {
           "200": {
-            "description": "OK",
-            "schema": {
-              "type": "string"
-            }
+            "description": "OK"
           },
           "default": {
-            "description": "Error",
-            "schema": {
-              "type": "string"
-            }
+            "description": "Error"
           }
         }
       }
@@ -77,12 +70,10 @@
             "in": "path"
           },
           {
-            "default": "2022-03-01-preview",
             "required": false,
             "type": "string",
             "name": "api-version",
-            "in": "query",
-            "x-ms-visibility": "internal"
+            "in": "query"
           },
           {
             "required": true,
@@ -95,16 +86,10 @@
         ],
         "responses": {
           "200": {
-            "description": "OK",
-            "schema": {
-              "type": "string"
-            }
+            "description": "OK"
           },
           "default": {
-            "description": "Error",
-            "schema": {
-              "type": "string"
-            }
+            "description": "Error"
           }
         }
       }
@@ -145,12 +130,10 @@
             "in": "path"
           },
           {
-            "default": "2022-03-01-preview",
             "required": false,
             "type": "string",
             "name": "api-version",
-            "in": "query",
-            "x-ms-visibility": "internal"
+            "in": "query"
           },
           {
             "required": true,
@@ -163,16 +146,10 @@
         ],
         "responses": {
           "200": {
-            "description": "OK",
-            "schema": {
-              "type": "string"
-            }
+            "description": "OK"
           },
           "default": {
-            "description": "Error",
-            "schema": {
-              "type": "string"
-            }
+            "description": "Error"
           }
         }
       }
@@ -219,12 +196,10 @@
             "in": "path"
           },
           {
-            "default": "2022-03-01-preview",
             "required": false,
             "type": "string",
             "name": "api-version",
-            "in": "query",
-            "x-ms-visibility": "internal"
+            "in": "query"
           },
           {
             "required": true,
@@ -237,16 +212,10 @@
         ],
         "responses": {
           "200": {
-            "description": "OK",
-            "schema": {
-              "type": "string"
-            }
+            "description": "OK"
           },
           "default": {
-            "description": "Error",
-            "schema": {
-              "type": "string"
-            }
+            "description": "Error"
           }
         }
       }
@@ -299,12 +268,10 @@
             "in": "path"
           },
           {
-            "default": "2022-03-01-preview",
             "required": false,
             "type": "string",
             "name": "api-version",
-            "in": "query",
-            "x-ms-visibility": "internal"
+            "in": "query"
           },
           {
             "required": true,
@@ -317,16 +284,10 @@
         ],
         "responses": {
           "200": {
-            "description": "OK",
-            "schema": {
-              "type": "string"
-            }
+            "description": "OK"
           },
           "default": {
-            "description": "Error",
-            "schema": {
-              "type": "string"
-            }
+            "description": "Error"
           }
         }
       }
@@ -385,12 +346,10 @@
             "in": "path"
           },
           {
-            "default": "2022-03-01-preview",
             "required": false,
             "type": "string",
             "name": "api-version",
-            "in": "query",
-            "x-ms-visibility": "internal"
+            "in": "query"
           },
           {
             "required": true,
@@ -403,16 +362,10 @@
         ],
         "responses": {
           "200": {
-            "description": "OK",
-            "schema": {
-              "type": "string"
-            }
+            "description": "OK"
           },
           "default": {
-            "description": "Error",
-            "schema": {
-              "type": "string"
-            }
+            "description": "Error"
           }
         }
       }
@@ -477,12 +430,10 @@
             "in": "path"
           },
           {
-            "default": "2022-03-01-preview",
             "required": false,
             "type": "string",
             "name": "api-version",
-            "in": "query",
-            "x-ms-visibility": "internal"
+            "in": "query"
           },
           {
             "required": true,
@@ -495,16 +446,10 @@
         ],
         "responses": {
           "200": {
-            "description": "OK",
-            "schema": {
-              "type": "string"
-            }
+            "description": "OK"
           },
           "default": {
-            "description": "Error",
-            "schema": {
-              "type": "string"
-            }
+            "description": "Error"
           }
         }
       }
@@ -575,12 +520,10 @@
             "in": "path"
           },
           {
-            "default": "2022-03-01-preview",
             "required": false,
             "type": "string",
             "name": "api-version",
-            "in": "query",
-            "x-ms-visibility": "internal"
+            "in": "query"
           },
           {
             "required": true,
@@ -593,16 +536,10 @@
         ],
         "responses": {
           "200": {
-            "description": "OK",
-            "schema": {
-              "type": "string"
-            }
+            "description": "OK"
           },
           "default": {
-            "description": "Error",
-            "schema": {
-              "type": "string"
-            }
+            "description": "Error"
           }
         }
       }
@@ -679,12 +616,10 @@
             "in": "path"
           },
           {
-            "default": "2022-03-01-preview",
             "required": false,
             "type": "string",
             "name": "api-version",
-            "in": "query",
-            "x-ms-visibility": "internal"
+            "in": "query"
           },
           {
             "required": true,
@@ -697,16 +632,10 @@
         ],
         "responses": {
           "200": {
-            "description": "OK",
-            "schema": {
-              "type": "string"
-            }
+            "description": "OK"
           },
           "default": {
-            "description": "Error",
-            "schema": {
-              "type": "string"
-            }
+            "description": "Error"
           }
         }
       }
@@ -789,12 +718,10 @@
             "in": "path"
           },
           {
-            "default": "2022-03-01-preview",
             "required": false,
             "type": "string",
             "name": "api-version",
-            "in": "query",
-            "x-ms-visibility": "internal"
+            "in": "query"
           },
           {
             "required": true,
@@ -807,254 +734,10 @@
         ],
         "responses": {
           "200": {
-            "description": "OK",
-            "schema": {
-              "type": "string"
-            }
+            "description": "OK"
           },
           "default": {
-            "description": "Error",
-            "schema": {
-              "type": "string"
-            }
-          }
-        }
-      }
-    },
-    "/{s1}/{s2}/{s3}/{s4}/{s5}/{s6}/{s7}/{s8}/{s9}/{s10}/{s11}/{s12}/{s13}": {
-      "post": {
-        "summary": "Call a 13-segment Copilot Studio route",
-        "operationId": "Path13",
-        "parameters": [
-          {
-            "required": true,
-            "type": "string",
-            "name": "s1",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s2",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s3",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s4",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s5",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s6",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s7",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s8",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s9",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s10",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s11",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s12",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s13",
-            "in": "path"
-          },
-          {
-            "default": "2022-03-01-preview",
-            "required": false,
-            "type": "string",
-            "name": "api-version",
-            "in": "query",
-            "x-ms-visibility": "internal"
-          },
-          {
-            "required": true,
-            "schema": {
-              "type": "object"
-            },
-            "name": "body",
-            "in": "body"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "schema": {
-              "type": "string"
-            }
-          },
-          "default": {
-            "description": "Error",
-            "schema": {
-              "type": "string"
-            }
-          }
-        }
-      }
-    },
-    "/{s1}/{s2}/{s3}/{s4}/{s5}/{s6}/{s7}/{s8}/{s9}/{s10}/{s11}/{s12}/{s13}/{s14}": {
-      "post": {
-        "summary": "Call a 14-segment Copilot Studio route",
-        "operationId": "Path14",
-        "parameters": [
-          {
-            "required": true,
-            "type": "string",
-            "name": "s1",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s2",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s3",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s4",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s5",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s6",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s7",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s8",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s9",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s10",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s11",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s12",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s13",
-            "in": "path"
-          },
-          {
-            "required": true,
-            "type": "string",
-            "name": "s14",
-            "in": "path"
-          },
-          {
-            "default": "2022-03-01-preview",
-            "required": false,
-            "type": "string",
-            "name": "api-version",
-            "in": "query",
-            "x-ms-visibility": "internal"
-          },
-          {
-            "required": true,
-            "schema": {
-              "type": "object"
-            },
-            "name": "body",
-            "in": "body"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "schema": {
-              "type": "string"
-            }
-          },
-          "default": {
-            "description": "Error",
-            "schema": {
-              "type": "string"
-            }
+            "description": "Error"
           }
         }
       }
