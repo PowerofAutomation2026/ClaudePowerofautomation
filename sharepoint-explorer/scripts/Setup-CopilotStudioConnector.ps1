@@ -22,13 +22,46 @@ param(
   [string]$ConnectorName = 'SPX Copilot Direct',
   [string]$OutDir = '.\copilot-connector',
   [string]$ExtraRedirectUri,
-  [string]$AppId
+  [string]$AppId,
+  [switch]$SwaggerOnly
 )
 $ErrorActionPreference = 'Stop'
 $ppApi = '8578e004-a5c6-46e7-913e-12f58912df43'          # Power Platform API
 $scopeId = '204440d3-c1d0-4826-b570-99eb6f5e2aeb'       # CopilotStudio.Copilots.Invoke (verified below against your tenant)
 function Step($t) { Write-Host "`n==> $t" -ForegroundColor Cyan }
 function Ok($t) { Write-Host "    $t" -ForegroundColor Green }
+function Build-Swagger {
+$h = ($EnvironmentId -replace '-', '').ToLower(); $envHost = "$($h.Substring(0, $h.Length - 2)).$($h.Substring($h.Length - 2)).environment.api.powerplatform.com"
+$sse = @('text/event-stream', 'application/json')
+$agentP = @{ name = 'agent'; in = 'path'; required = $true; type = 'string'; description = 'Agent schema name, e.g. cr56c_spocode' }
+$convP = @{ name = 'conversationId'; in = 'path'; required = $true; type = 'string' }
+$apiV = @{ name = 'api-version'; in = 'query'; required = $false; type = 'string'; default = '2022-03-01-preview'; 'x-ms-visibility' = 'internal' }
+$bodyAny = @{ name = 'body'; in = 'body'; required = $true; schema = @{ type = 'object' } }
+$resp = @{ '200' = @{ description = 'OK'; schema = @{ type = 'string' } }; default = @{ description = 'Error'; schema = @{ type = 'string' } } }
+$swagger = [ordered]@{
+  swagger = '2.0'; info = @{ title = $ConnectorName; description = 'Talks to Copilot Studio agents (Direct-to-Engine) as the signed-in user.'; version = '1.0' }
+  host = $envHost; basePath = '/'; schemes = @('https'); consumes = @('application/json'); produces = $sse
+  paths = [ordered]@{
+    '/copilotstudio/agents/{agent}/conversation-endpoints' = @{ get = @{ operationId = 'Discover'; summary = 'Find the conversation endpoints of an agent'; parameters = @($agentP); responses = $resp } }
+  }
+  securityDefinitions = @{ oauth2_auth = @{ type = 'oauth2'; flow = 'accessCode'; authorizationUrl = 'https://login.windows.net/common/oauth2/authorize'; tokenUrl = 'https://login.windows.net/common/oauth2/authorize'; scopes = @{} } }
+  security = @(@{ oauth2_auth = @() })
+}
+# Copilot Studio returns long routes (e.g. /copilotstudio/agenticruntime/3p/.../conversations). A path parameter would encode the slashes, so the connector
+# offers one operation per segment count (Path4 ... Path14); every segment is its own path parameter and the slashes stay slashes.
+foreach ($n in 4..14) {
+  $segs = 1..$n | ForEach-Object { @{ name = "s$_"; in = 'path'; required = $true; type = 'string' } }
+  $swagger.paths["/" + ((1..$n | ForEach-Object { "{s$_}" }) -join '/')] = @{ post = @{ operationId = "Path$n"; summary = "Call a $n-segment Copilot Studio route"; parameters = @($segs + @($apiV, $bodyAny)); responses = $resp } }
+}
+return $swagger
+}
+if ($SwaggerOnly) {   # just regenerate the OpenAPI file (to paste into an existing connector: Power Apps > Custom connectors > Edit > Swagger editor)
+  if ($EnvironmentId -notmatch '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$') { throw 'EnvironmentId must be a GUID.' }
+  New-Item -ItemType Directory -Force $OutDir | Out-Null
+  $f = Join-Path (Resolve-Path $OutDir).Path 'apiDefinition.swagger.json'
+  [System.IO.File]::WriteAllText($f, ((Build-Swagger) | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding($false)))
+  Write-Host "Written: $f" -ForegroundColor Green; return
+}
 if (-not (Get-Command az -ErrorAction SilentlyContinue)) { throw 'Azure CLI (az) is required: https://aka.ms/installazurecliwindows' }
 if (-not (Get-Command pac -ErrorAction SilentlyContinue)) { throw 'Power Platform CLI (pac) is required (Deploy.cmd installs it).' }
 if ($EnvironmentId -notmatch '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$') { throw 'EnvironmentId must be a GUID.' }
@@ -64,26 +97,8 @@ $secret = az ad app credential reset --append --id $appId --display-name 'copilo
 Ok 'Client secret created (kept only in the generated connector file below)'
 
 Step 'Writing connector files'
-$h = ($EnvironmentId -replace '-', '').ToLower(); $envHost = "$($h.Substring(0, $h.Length - 2)).$($h.Substring($h.Length - 2)).environment.api.powerplatform.com"
 New-Item -ItemType Directory -Force $OutDir | Out-Null
-$sse = @('text/event-stream', 'application/json')
-$agentP = @{ name = 'agent'; in = 'path'; required = $true; type = 'string'; description = 'Agent schema name, e.g. cr56c_spocode' }
-$convP = @{ name = 'conversationId'; in = 'path'; required = $true; type = 'string' }
-$apiV = @{ name = 'api-version'; in = 'query'; required = $false; type = 'string'; default = '2022-03-01-preview'; 'x-ms-visibility' = 'internal' }
-$bodyAny = @{ name = 'body'; in = 'body'; required = $true; schema = @{ type = 'object' } }
-$resp = @{ '200' = @{ description = 'OK'; schema = @{ type = 'string' } }; default = @{ description = 'Error'; schema = @{ type = 'string' } } }
-$swagger = [ordered]@{
-  swagger = '2.0'; info = @{ title = $ConnectorName; description = 'Talks to Copilot Studio agents (Direct-to-Engine) as the signed-in user.'; version = '1.0' }
-  host = $envHost; basePath = '/'; schemes = @('https'); consumes = @('application/json'); produces = $sse
-  paths = [ordered]@{
-    '/copilotstudio/agents/{agent}/conversation-endpoints' = @{ get = @{ operationId = 'Discover'; summary = 'Find the conversation endpoints of an agent'; parameters = @($agentP); responses = $resp } }
-    '/copilotstudio/dataverse-backed/authenticated/bots/{agent}/conversations' = @{ post = @{ operationId = 'CreateConversation'; summary = 'Start a conversation'; parameters = @($agentP, $apiV, $bodyAny); responses = $resp } }
-    '/copilotstudio/dataverse-backed/authenticated/bots/{agent}/conversations/{conversationId}' = @{ post = @{ operationId = 'ExecuteTurn'; summary = 'Send a message'; parameters = @($agentP, $convP, $apiV, $bodyAny); responses = $resp } }
-    '/{route}' = @{ post = @{ operationId = 'Invoke'; summary = 'Call any Copilot Studio route returned by discovery'; parameters = @(@{ name = 'route'; in = 'path'; required = $true; type = 'string'; 'x-ms-url-encoding' = 'double' }, $apiV, $bodyAny); responses = $resp } }
-  }
-  securityDefinitions = @{ oauth2_auth = @{ type = 'oauth2'; flow = 'accessCode'; authorizationUrl = 'https://login.windows.net/common/oauth2/authorize'; tokenUrl = 'https://login.windows.net/common/oauth2/authorize'; scopes = @{} } }
-  security = @(@{ oauth2_auth = @() })
-}
+$swagger = Build-Swagger
 $props = [ordered]@{ properties = [ordered]@{
   connectionParameters = @{ token = @{ type = 'oauthSetting'; oAuthSettings = [ordered]@{
     identityProvider = 'aad'; clientId = $appId; clientSecret = $secret

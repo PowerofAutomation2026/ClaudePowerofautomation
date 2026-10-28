@@ -786,7 +786,7 @@ const webKeys = () => Object.entries<any>(dataSourcesInfo).filter(([k, v]) => is
 const webPick = () => { const l = webKeys(); return l.find((x) => x.v2) ?? l[0] }
 const webKey = () => webPick()?.key
 /** custom connector made by scripts\Setup-CopilotStudioConnector.ps1 (own Entra app): has Discover + Invoke operations */
-const d2eKey = () => Object.entries<any>(dataSourcesInfo).find(([, v]) => isConnectorSource(v) && !v?.tableId && Object.keys(v?.apis ?? {}).some((n) => /^Discover$/i.test(n)) && Object.keys(v?.apis ?? {}).some((n) => /^Invoke$/i.test(n)))?.[0]
+const d2eKey = () => Object.entries<any>(dataSourcesInfo).find(([, v]) => isConnectorSource(v) && !v?.tableId && Object.keys(v?.apis ?? {}).some((n) => /^Discover$/i.test(n)) && Object.keys(v?.apis ?? {}).some((n) => /^(Invoke|Path\d+)$/i.test(n)))?.[0]
 
 /** environment id -> the environment API host used by Copilot Studio: first 30 hex chars, '.', last 2 */
 export const envHost = (env: string) => { const h = env.replace(/-/g, '').toLowerCase(); return `https://${h.slice(0, -2)}.${h.slice(-2)}.environment.api.powerplatform.com` }
@@ -799,7 +799,14 @@ async function invokeCustom(key: string, method: 'GET' | 'POST', url: string, bo
   const params: Record<string, unknown> = {}
   let op: string | undefined
   if (method === 'GET' && disc) { op = opOf(apis, 'Discover'); params.agent = decodeURIComponent(disc[1]) }
-  else { op = opOf(apis, 'Invoke'); params.route = u.pathname.replace(/^\//, ''); const av = u.searchParams.get('api-version'); if (av) params['api-version'] = av; if (body !== undefined) params.body = body }
+  else {
+    const segs = u.pathname.split('/').filter(Boolean).map((x) => decodeURIComponent(x))
+    op = opOf(apis, `Path${segs.length}`)
+    if (!op) throw new Error(`The custom connector has no operation for a ${segs.length}-part route (${u.pathname}). Update the connector's definition with the newest scripts\\Setup-CopilotStudioConnector.ps1 -SwaggerOnly output, then run Deploy.cmd again.`)
+    segs.forEach((x, i) => { params[`s${i + 1}`] = x })
+    const av = u.searchParams.get('api-version'); if (av) params['api-version'] = av
+    if (body !== undefined) params.body = body
+  }
   if (!op) throw new Error(`The custom connector has no matching operation (found: ${Object.keys(apis).join(', ') || 'none'}). Re-run scripts\\Setup-CopilotStudioConnector.ps1.`)
   const t0 = Date.now()
   const res: any = await sdk().executeAsync({ connectorOperation: { tableName: key, operationName: op, parameters: params } } as any)
