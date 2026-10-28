@@ -21,7 +21,8 @@ param(
   [string]$AppName = 'SharePointExplorer-CopilotStudio',
   [string]$ConnectorName = 'SPX Copilot Direct',
   [string]$OutDir = '.\copilot-connector',
-  [string]$ExtraRedirectUri
+  [string]$ExtraRedirectUri,
+  [string]$AppId
 )
 $ErrorActionPreference = 'Stop'
 $ppApi = '8578e004-a5c6-46e7-913e-12f58912df43'          # Power Platform API
@@ -44,7 +45,12 @@ $real = az ad sp show --id $ppApi --query "oauth2PermissionScopes[?value=='Copil
 if ($real) { $scopeId = $real.Trim(); Ok "Permission CopilotStudio.Copilots.Invoke = $scopeId" } else { Write-Warning "Could not read the permission id from your tenant; using the published id $scopeId" }
 
 Step "Entra app registration '$AppName'"
-$appId = az ad app list --display-name $AppName --query "[0].appId" -o tsv
+if ($AppId) { $appId = $AppId }
+else {
+  $apps = @(az ad app list --display-name $AppName --query "[?displayName=='$AppName'].{appId:appId,created:createdDateTime}" -o json | ConvertFrom-Json)
+  if ($apps.Count -gt 1) { Write-Warning "Several Entra apps are named '$AppName': $(($apps | ForEach-Object { $_.appId }) -join ', '). Using the oldest. Delete the extras or pass -AppId <id>." }
+  $appId = ($apps | Sort-Object created | Select-Object -First 1).appId
+}
 if (-not $appId) {
   $appId = az ad app create --display-name $AppName --sign-in-audience AzureADMyOrg --web-redirect-uris 'https://global.consent.azure-apim.net/redirect' --query appId -o tsv
   az ad sp create --id $appId | Out-Null
@@ -82,7 +88,7 @@ $props = [ordered]@{ properties = [ordered]@{
   connectionParameters = @{ token = @{ type = 'oauthSetting'; oAuthSettings = [ordered]@{
     identityProvider = 'aad'; clientId = $appId; clientSecret = $secret
     scopes = @('https://api.powerplatform.com/CopilotStudio.Copilots.Invoke')
-    redirectMode = 'Global'; redirectUrl = 'https://global.consent.azure-apim.net/redirect'
+    redirectMode = 'GlobalPerConnector'; redirectUrl = 'https://global.consent.azure-apim.net/redirect'
     properties = @{ IsFirstParty = 'False'; AzureActiveDirectoryResourceId = 'https://api.powerplatform.com' }
     customParameters = @{ loginUri = @{ value = 'https://login.microsoftonline.com' }; tenantId = @{ value = $tenantId }; resourceUri = @{ value = 'https://api.powerplatform.com' }; enableOnbehalfOfLogin = @{ value = 'false' } } } } }
   iconBrandColor = '#2E7D32'; capabilities = @(); publisher = 'SharePoint Explorer'; stackOwner = 'SharePoint Explorer' } }
@@ -121,10 +127,21 @@ else {
     if ($in -match '^https://global\.consent\.azure-apim\.net/redirect/\S+$') { $uris += $in } elseif ($in) { Write-Warning 'That does not look like a redirect address - skipped.' }
   }
 }
+if (-not $ExtraRedirectUri -and $found -and $uris.Count -ge 2) {   # try to read the exact redirect URL back from the service
+  try {
+    $dl = Join-Path $OutDir 'downloaded'; New-Item -ItemType Directory -Force $dl | Out-Null
+    & pac connector download --connector-id $found --environment $EnvironmentId --outputDirectory $dl 2>&1 | Out-Null
+    $dp = Get-ChildItem $dl -Recurse -Filter apiProperties.json -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($dp) { $ru = (Get-Content $dp.FullName -Raw | ConvertFrom-Json).properties.connectionParameters.token.oAuthSettings.redirectUrl; if ($ru -match '^https://global\.consent\.azure-apim\.net/redirect/\S+$') { $uris += $ru } }
+  } catch { }
+}
 $cur = @(az ad app show --id $appId --query 'web.redirectUris' -o json | ConvertFrom-Json)
 $all = @($cur + $uris | Where-Object { $_ } | Select-Object -Unique)
 az ad app update --id $appId --web-redirect-uris @all | Out-Null
-Ok ("Redirect addresses on the app: " + ($all -join ', '))
+$after = @(az ad app show --id $appId --query 'web.redirectUris' -o json | ConvertFrom-Json)
+foreach ($u in $uris) { if ($after -notcontains $u) { Write-Warning "Redirect address was NOT saved on the app: $u" } }
+Ok ("App (client id) $appId - redirect addresses: " + ($after -join ', '))
+Write-Host "Any AADSTS50011 error must name application '$appId'. If it names another GUID, the connection uses a different app/connector - delete extra 'SPX Copilot Direct' connectors in Power Apps > Custom connectors and create the connection again." -ForegroundColor Yellow
 Write-Host ''
 Write-Host 'If signing in to the connection fails with AADSTS50011 (redirect URI mismatch), copy the redirect URI from that error and run again with  -ExtraRedirectUri <that URI>  (or add it under Entra > App registrations > $AppName > Authentication).' -ForegroundColor Yellow
 Write-Host 'Next steps' -ForegroundColor Cyan
