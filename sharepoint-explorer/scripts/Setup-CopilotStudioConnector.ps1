@@ -20,7 +20,8 @@ param(
   [Parameter(Mandatory)][string]$EnvironmentId,
   [string]$AppName = 'SharePointExplorer-CopilotStudio',
   [string]$ConnectorName = 'SPX Copilot Direct',
-  [string]$OutDir = '.\copilot-connector'
+  [string]$OutDir = '.\copilot-connector',
+  [string]$ExtraRedirectUri
 )
 $ErrorActionPreference = 'Stop'
 $ppApi = '8578e004-a5c6-46e7-913e-12f58912df43'          # Power Platform API
@@ -102,7 +103,12 @@ if ($code -ne 0) {
   Write-Warning 'pac could not create the connector. Create it by hand instead: Power Apps > Custom connectors > New custom connector > Import an OpenAPI file > apiDefinition.swagger.json; Security: OAuth 2.0, Identity provider Azure Active Directory, Client id/secret from apiProperties.json, Resource URL https://api.powerplatform.com, Scope https://api.powerplatform.com/CopilotStudio.Copilots.Invoke; then copy the redirect URL it shows into the Entra app registration (Authentication > Web). Name it exactly: ' + $ConnectorName
 }
 
+if ($ExtraRedirectUri) {
+  az ad app update --id $appId --web-redirect-uris 'https://global.consent.azure-apim.net/redirect' $ExtraRedirectUri | Out-Null
+  Ok "Redirect URI added: $ExtraRedirectUri"
+}
 Write-Host ''
+Write-Host 'If signing in to the connection fails with AADSTS50011 (redirect URI mismatch), copy the redirect URI from that error and run again with  -ExtraRedirectUri <that URI>  (or add it under Entra > App registrations > $AppName > Authentication).' -ForegroundColor Yellow
 Write-Host 'Next steps' -ForegroundColor Cyan
 Write-Host "  1. Power Apps > Connections > New connection > '$ConnectorName' > sign in once (each user does this the first time they use the agent chat)."
 Write-Host '  2. Run Deploy.cmd again and choose option 2 (it finds the connection and adds the connector to the app).'
