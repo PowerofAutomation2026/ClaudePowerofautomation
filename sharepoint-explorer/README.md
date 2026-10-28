@@ -1,17 +1,255 @@
-# PNC SharePoint Team — Explorer (Power Apps code app)
+<div align="center">
 
-Connect **any SharePoint list or document library** with one button and get a grid, an auto-built dashboard,
-instant search and PDF / CSV / JSON export. Built for lists with **millions of rows**: the browser never holds more than a
-capped window of rows; everything else is paged, streamed or aggregated.
+# ⚡ PNC SharePoint Team — Explorer
 
-## AI assistant: Copilot Studio and Microsoft 365 Copilot agents
+### Connect **any SharePoint list or library** with one click — dashboards, approvals, e-mail and an **AI assistant** that talks to your **Copilot Studio agents** (classic *and* new experience).
 
-Admins open **Assistant → Setup** (the Assistant button in the header) and add agents; everyone then sees them for the lists/libraries in scope.
-- **Copilot Studio agent (chat inside the app):** uses the *Microsoft Copilot Studio* connector (`ExecuteCopilotAsyncV2`), so it needs no extra app registration or CSP changes and runs with each user's own connection. Enter the agent's **schema name** (Copilot Studio → Settings → Advanced → Metadata, case-sensitive) and press **Test connection**. The agent must be **published**, shared with your users, and a *classic* (Standard) agent — agents built in the new agentic experience can't be called through the connector yet.
-- **Agent Builder / Microsoft 365 Copilot / Copilot Lite agent (link):** these agents can't be called from an app by Microsoft's design, so paste the agent's **Share link**; the app opens it and can **copy a prompt with context** (what list you're in, filters, selected items) to paste into the chat.
-- **Context:** every question can carry a `[CONTEXT]{…}[/CONTEXT]` block (source, search/filters, selected items with key columns and approval status). Setup gives you ready-to-paste **agent instructions** and the **knowledge-source URL** of the current list/library so the agent answers from the same data.
-- Chat UX: suggested prompts (yours + built-ins), selection-aware shortcuts, typing indicator, copy answer, New chat, multi-turn (conversation id, with a short-history fallback), safe markdown (bold, lists, links).
-- To enable in-app chat the connector must be attached: `Deploy.cmd` now asks "Add AI assistant support?" (or run `Deploy.cmd -AddCopilotStudio`; `-NoCopilotStudio` skips the question), or run `pac code add-data-source -a shared_microsoftcopilotstudio -c <connection id>` and republish. Users need the licences Power Apps code apps and Copilot Studio require; Copilot Studio message capacity applies.
+![Power Apps code app](https://img.shields.io/badge/Power%20Apps-Code%20App-742774?logo=powerapps&logoColor=white)
+![React](https://img.shields.io/badge/React-TypeScript-61DAFB?logo=react&logoColor=black)
+![SharePoint](https://img.shields.io/badge/SharePoint-Lists%20%26%20Libraries-0078D4?logo=microsoftsharepoint&logoColor=white)
+![Copilot Studio](https://img.shields.io/badge/Copilot%20Studio-Classic%20%2B%20New%20experience-2E7D32)
+![Millions of rows](https://img.shields.io/badge/Scale-Millions%20of%20rows-orange)
+![Accessibility](https://img.shields.io/badge/axe--core-0%20violations-success)
+
+**Created by Kirolos — Power of Automation**
+
+</div>
+
+---
+
+## 📑 Contents
+1. [What you get](#-what-you-get)
+2. [How it works](#-how-it-works)
+3. [Requirements](#-requirements)
+4. [Quick start (15 minutes)](#-quick-start-15-minutes)
+5. [AI assistant — pick your agent type](#-ai-assistant--pick-your-agent-type)
+6. [Classic Copilot Studio agents (no extra setup)](#-classic-copilot-studio-agents-no-extra-setup)
+7. [New-experience agents: custom connector + app registration](#-new-experience-agents-custom-connector--app-registration)
+8. [The Swagger (OpenAPI) file](#-the-swagger-openapi-file)
+9. [All the links you need](#-all-the-links-you-need)
+10. [FAQ & troubleshooting](#-faq--troubleshooting)
+11. [Full feature reference](#-full-feature-reference)
+
+---
+
+## ✨ What you get
+
+| | Feature | Highlights |
+|---|---|---|
+| 🔌 | **Connect anything** | Pick a site → any list or library → **Connect**. All users then see the same source. Several sources can be published. |
+| 📊 | **Dashboards** | Auto-built from the schema, or **admin-designed** (numbers, gauges, bars, donuts, timelines, top-N, notes) and saved for everyone. |
+| ✅ | **Approvals** | Multi-layer workflows per list/library, conditional layers, escalation, delegation, **automatic triggers** on create/modify with criteria, full history and audit CSV. |
+| ✉️ | **Library e-mail** | Send files/folders as links (Outlook web, default mail app, copy, `.eml`). |
+| 🤖 | **AI assistant** | Chat with **Copilot Studio agents inside the app** (classic and new experience) with the current list/selection as context; Agent Builder / M365 Copilot agents as one-click links. |
+| 🔎 | **Search & export** | Instant search up to 25k items, server-side beyond; CSV / JSON / PDF, streaming export of everything matching. |
+| ✏️ | **Inline editing & colour rules** | Excel-style editing, undo, conditional formatting. |
+| 🛡️ | **Production safety nets** | Request circuit breaker, memory watchdog, safe mode, auto-recovery, error log — built for "heavy duty". |
+| ♿ | **Accessibility** | Light / dark / high-contrast, keyboard grid, ARIA, axe-core clean. |
+| 🚀 | **Zero-touch deploy** | `Deploy.cmd` installs tools, wires connectors, builds and publishes. |
+
+---
+
+## 🧭 How it works
+
+```mermaid
+flowchart LR
+  U[User in Power Apps] --> A[SharePoint Explorer<br/>code app]
+  A -->|SharePoint connector<br/>user's own permissions| SP[(SharePoint lists & libraries)]
+  A -->|SPX_Config list| CFG[(Shared settings,<br/>dashboards, approvals)]
+  A -->|Copilot Studio connector| C1[Classic agents]
+  A -->|SPX Copilot Direct<br/>custom connector| EN[Entra app registration<br/>CopilotStudio.Copilots.Invoke]
+  EN --> PP[Power Platform API<br/>Copilot Studio runtime]
+  PP --> C2[New-experience agents]
+  A -->|Share link + context prompt| AB[Agent Builder / M365 Copilot]
+```
+
+* Everything runs **as the signed-in user** — SharePoint permissions, connections and Copilot access are the user's own.
+* Only the data you choose is sent to an agent (selected items' titles and key columns, optional).
+
+---
+
+## 🧰 Requirements
+
+| Need | Why | Link |
+|---|---|---|
+| Windows + PowerShell | runs `Deploy.cmd` | – |
+| **Power Apps Premium** licence (users) | code apps + premium connectors | https://learn.microsoft.com/power-apps/developer/code-apps/overview |
+| SharePoint connection | data | https://make.powerapps.com → *Connections* |
+| **Node.js** + **Power Platform CLI (`pac`)** | build & publish (installed by `Deploy.cmd` if missing) | https://nodejs.org · https://learn.microsoft.com/power-platform/developer/cli/introduction |
+| *New-experience agents only:* **Azure CLI** | creates the Entra app + connector | https://aka.ms/installazurecliwindows |
+| *New-experience agents only:* an admin who can **create app registrations and grant admin consent** | one-time setup | https://entra.microsoft.com |
+| A **published** Copilot Studio agent, *Authentication = Authenticate with Microsoft* | the agent to talk to | https://copilotstudio.microsoft.com |
+
+---
+
+## 🚀 Quick start (15 minutes)
+
+1. Unzip the package, double-click **`Deploy.cmd`**.
+2. Enter your **environment ID** (the GUID in `make.powerapps.com/environments/<GUID>/…`).
+3. Answer the AI question: **1** classic agents · **2** new-experience agents · **3** both · *Enter* skip.
+4. If asked, create the **SharePoint connection** once (sign-in cannot be scripted). The script opens the page and waits.
+5. Open the published app → **Connect** → site → list/library → **Connect**.
+6. Share the app with your users in https://make.powerapps.com.
+
+> Try it without deploying: double-click `Run-Demo.cmd` (sample data, no tenant needed).
+
+Re-run `Deploy.cmd` any time to publish a new version; it updates the same app.
+
+---
+
+## 🤖 AI assistant — pick your agent type
+
+| Agent | Works in-app chat? | What you need |
+|---|---|---|
+| **Classic** Copilot Studio agent (Topics in the left menu) | ✅ yes | Nothing extra — Microsoft's *Copilot Studio* connector (`Deploy.cmd` option **1**) |
+| **New experience** agent (Skills / Connected agents, no Topics; picker shows *· new experience*) | ✅ yes | **Custom connector "SPX Copilot Direct" + your own Entra app registration** (option **2**, see below) |
+| Agent Builder / Microsoft 365 Copilot / Copilot Lite | 🔗 link | No API exists. Paste the agent's *Share* link; the app opens it and copies a **prompt with context**. |
+
+> **Why an app registration for new-experience agents?** Copilot Studio's direct endpoint needs a token with the delegated permission `CopilotStudio.Copilots.Invoke`. Microsoft's own *HTTP with Microsoft Entra ID* connectors sign in through Microsoft-owned apps, and Entra does not allow those to be consented for this API — they always end in **403 `InsufficientDelegatedPermissions`**. A custom connector that signs in through **your own app registration** is the supported route.
+
+---
+
+## 🟢 Classic Copilot Studio agents (no extra setup)
+
+1. In Copilot Studio create a **classic** agent, **publish** it, set **Authentication → Authenticate with Microsoft**, share it with your users.
+2. Run `Deploy.cmd`, choose **1** (or `Deploy.cmd -AddCopilotStudio`). The script attaches the **Microsoft Copilot Studio** connector (`shared_microsoftcopilotstudio`) — create that connection when asked.
+3. In the app: **Assistant → Setup → Add Copilot Studio agent** → pick the agent from the drop-down → **Test connection** → **Save assistant**.
+
+Connector reference: https://learn.microsoft.com/connectors/microsoftcopilotstudio/
+
+---
+
+## 🔵 New-experience agents: custom connector + app registration
+
+### Option A — automatic (recommended)
+
+```powershell
+# as an admin who may create app registrations (Azure CLI + PowerShell 7)
+./scripts/Setup-CopilotStudioConnector.ps1 -EnvironmentId <your-environment-GUID>
+```
+…or simply run `Deploy.cmd`, choose **2**, and answer **Y** to *“Create it now?”*. The script:
+1. signs you in to Azure and makes sure the **Power Platform API** exists in your tenant;
+2. creates the Entra app **SharePointExplorer-CopilotStudio** (single tenant) with the delegated permission **`CopilotStudio.Copilots.Invoke`**, grants **admin consent**, creates a client secret;
+3. writes the connector files for your environment and creates the custom connector **SPX Copilot Direct** (`pac connector create`);
+4. reads the connector's **own redirect URI** and registers it on the app (or asks you to paste it);
+5. prints the next steps.
+
+Then:
+6. **Power Apps → Connections → New connection → SPX Copilot Direct** → sign in once (each user does this the first time).
+7. Run `Deploy.cmd` again → **2** → it attaches the connector to the app and republishes.
+8. In the app: **Assistant → Setup → Add Copilot Studio agent** → pick the agent → **Test connection** (four green ticks) → **Save assistant**.
+
+### Option B — by hand in the portals
+
+<details>
+<summary><b>1 · Entra app registration</b></summary>
+
+1. https://entra.microsoft.com → **Identity → Applications → App registrations → New registration**
+   * Name `SharePointExplorer-CopilotStudio` · *Accounts in this organizational directory only*.
+2. **API permissions → Add a permission → APIs my organization uses →** search **Power Platform API** (App ID `8578e004-a5c6-46e7-913e-12f58912df43`; if it is missing run `az ad sp create --id 8578e004-a5c6-46e7-913e-12f58912df43`) **→ Delegated permissions → CopilotStudio → `CopilotStudio.Copilots.Invoke`** (id `204440d3-c1d0-4826-b570-99eb6f5e2aeb`) **→ Add**, then **Grant admin consent**.
+3. **Certificates & secrets → New client secret** → copy the **value** now.
+4. Note the **Application (client) ID** and **Directory (tenant) ID**.
+5. **Authentication → Add a platform → Web** and add the redirect URIs *(step 3 of the connector gives you the second one)*:
+   * `https://global.consent.azure-apim.net/redirect`
+   * `https://global.consent.azure-apim.net/redirect/<connector-name>` — e.g. `…/redirect/new-5fspx-20copilot-20direct-5f<hash>`. Copy it from the connector's *Security* tab (**Redirect URL**) or from the sign-in error `AADSTS50011`. Case-sensitive, no trailing slash.
+</details>
+
+<details>
+<summary><b>2 · Custom connector</b></summary>
+
+1. https://make.powerapps.com → your environment → **More → Custom connectors → New custom connector → Import an OpenAPI file** → choose `copilot-connector/apiDefinition.swagger.json` (the host inside is for environment `e4c5fd77-2cb4-e3d1-8488-75cd3bd8521b`; for another environment generate it: `./scripts/Setup-CopilotStudioConnector.ps1 -EnvironmentId <GUID> -SwaggerOnly`).
+2. Connector name: **SPX Copilot Direct** (the deploy script looks for this name).
+3. **Security** tab → **OAuth 2.0**:
+   | Setting | Value |
+   |---|---|
+   | Identity provider | **Azure Active Directory** |
+   | Client id / secret | from your app registration |
+   | Login URL | `https://login.windows.net` |
+   | Tenant ID | your tenant GUID |
+   | Resource URL | `https://api.powerplatform.com` |
+   | Scope | `https://api.powerplatform.com/CopilotStudio.Copilots.Invoke` |
+   | Enable on-behalf-of login | off |
+4. **Create connector**, copy the shown **Redirect URL** into the app registration (step 1.5), then create the connection and run `Deploy.cmd` (option 2).
+</details>
+
+### Updating an existing connector definition
+Power Apps → **Custom connectors → SPX Copilot Direct → Edit → Swagger editor** → replace everything with `copilot-connector/apiDefinition.swagger.json` → **Update connector** → run `Deploy.cmd` (option 2) so the app picks up the operations. Same connection, same app registration.
+
+---
+
+## 📜 The Swagger (OpenAPI) file
+
+`copilot-connector/apiDefinition.swagger.json` is the verified definition (it worked on a real tenant). It declares:
+
+* **`Discover`** — `GET /copilotstudio/agents/{agent}/conversation-endpoints` → returns the agent's real conversation URLs.
+* **`Path4` … `Path12`** — `POST /{s1}/…/{sN}` + optional `api-version` + JSON body. Copilot Studio's routes are long (e.g. `/copilotstudio/agenticruntime/3p/dataverse-backed/authenticated/bots/<schema>/conversations`); a single path parameter would encode the slashes (`%2F` → **404 RouteNotFound**), so there is one operation per segment count and every segment is its own parameter. The app picks the right operation automatically.
+* `host` = `<env GUID without dashes, last 2 chars after a dot>.environment.api.powerplatform.com` (e.g. `e4c5fd772cb4e3d1848875cd3bd852.1b.environment.api.powerplatform.com`).
+
+---
+
+## 🔗 All the links you need
+
+| What | URL |
+|---|---|
+| Power Apps maker portal | https://make.powerapps.com |
+| Connections (create *SharePoint*, *Copilot Studio*, *SPX Copilot Direct*) | `https://make.powerapps.com/environments/<ENV-ID>/connections` |
+| Custom connectors | `https://make.powerapps.com/environments/<ENV-ID>/customconnectors` |
+| Apps (find the published app) | `https://make.powerapps.com/environments/<ENV-ID>/apps` |
+| Copilot Studio | `https://copilotstudio.microsoft.com/environments/<ENV-ID>/home` |
+| Agent metadata (schema name, environment ID) | Copilot Studio → agent → **Settings → Advanced → Metadata** |
+| **Entra app registrations** | https://entra.microsoft.com → *Applications → App registrations* (or https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade) |
+| Redirect URI (generic) | `https://global.consent.azure-apim.net/redirect` |
+| Redirect URI (per connector) | `https://global.consent.azure-apim.net/redirect/<connector-name>` |
+| Power Platform API permission | App ID `8578e004-a5c6-46e7-913e-12f58912df43` · scope `CopilotStudio.Copilots.Invoke` (`204440d3-c1d0-4826-b570-99eb6f5e2aeb`) |
+| Token audience | `https://api.powerplatform.com` |
+| Azure CLI download | https://aka.ms/installazurecliwindows |
+| Power Platform CLI docs | https://learn.microsoft.com/power-platform/developer/cli/introduction |
+| Code apps docs | https://learn.microsoft.com/power-apps/developer/code-apps/overview |
+| Custom connector OAuth (Entra) docs | https://learn.microsoft.com/connectors/custom-connectors/azure-active-directory-authentication |
+
+---
+
+## ❓ FAQ & troubleshooting
+
+<details><summary><b>403 <code>InsufficientDelegatedPermissions … CopilotStudio.Copilots.Invoke</code></b></summary>
+You are using a Microsoft HTTP connector. Use the custom connector <b>SPX Copilot Direct</b> with your own app registration (above). Run <code>Deploy.cmd</code> → 2.
+</details>
+
+<details><summary><b>Sign-in error <code>AADSTS50011</code> — redirect URI does not match</b></summary>
+Add the exact URI from the error text to the app named in the error (search App registrations by the GUID after <i>“for the application”</i>) under <b>Authentication → Web</b>, save, wait a few minutes, retry in an InPrivate window. Several connectors with the same name each have their own URI — delete extras in Custom connectors.
+</details>
+
+<details><summary><b>404 <code>RouteNotFound</code> or “no operation for an N-part route”</b></summary>
+The connector has an old definition. Paste <code>copilot-connector/apiDefinition.swagger.json</code> in the connector's Swagger editor, <b>Update connector</b>, then run <code>Deploy.cmd</code> (2) again (extract to a new folder if it still says the old definition).
+</details>
+
+<details><summary><b>“Copilot Direct connector is not attached to this app”</b></summary>
+Create the <b>SPX Copilot Direct</b> connection (Connections → New connection) and run <code>Deploy.cmd</code> → 2.
+</details>
+
+<details><summary><b>Agent is “not published yet” / no answer</b></summary>
+Publish it in Copilot Studio and set <b>Authentication → Authenticate with Microsoft</b>. For new-experience agents Microsoft is still rolling the runtime out by region — a “not supported yet” message can appear until yours has it.
+</details>
+
+<details><summary><b>The agent drop-down is empty</b></summary>
+It reads the Dataverse <code>bot</code> table; your role needs read access to it (<code>prvReadbot</code>). You can always type the schema name instead.
+</details>
+
+<details><summary><b>Do I have to use an app registration?</b></summary>
+Only for in-app chat with <i>new-experience</i> agents. Classic agents need none. Without it, use <b>Add this agent as a link instead</b> (opens the agent; optional “Chat here” embeds the Copilot Studio web chat if your tenant allows it).
+</details>
+
+<details><summary><b>“Not enough memory to open this page” / Aw, Snap</b></summary>
+That is the browser out of memory (many Power Apps tabs). Close other tabs or use a separate window. The app caps rows at 40,000, drops caches under memory pressure and recovers without a reload; Diagnostics shows its error log.
+</details>
+
+<details><summary><b>Security notes</b></summary>
+The client secret lives only in the connector. <code>copilot-connector/apiProperties.json</code> (generated by the script) contains it — keep it private. Agents run as each user; rotate the secret before it expires (2 years by default).
+</details>
+
+---
+
+## 📚 Full feature reference
 
 ## Approvals (lists and libraries, multi-layer)
 
@@ -178,13 +416,8 @@ Through the code-apps SDK and the user's own SharePoint connection, using the co
 action (plain SharePoint REST) with the site URL as the `dataset`, so one registered connector reaches any site or list. At start-up the app
 adds that operation to the generated data-source description (`src/services/sp.ts`), because `pac` only describes one list for tabular connectors.
 
-> **Status:** developed and tested against the demo backend and against an in-memory emulation of the SharePoint REST endpoints
-> (the deploy script was run against a stubbed `pac`). It has **not** been run against a real tenant. Treat the first deployment as a pilot:
-> connect a small list first, then a big one. If connector registration is rejected, run the command the script prints:
-> `pac code add-data-source -a shared_sharepointonline -c <connectionId> -d <site> -t <existing list>`.
+> **Status:** the SharePoint, dashboard, approval and e-mail features have been exercised against the demo backend and an in-memory emulation of SharePoint REST; the Copilot Studio integration (classic and new-experience agents through the custom connector) has been verified on a real tenant. Treat a first deployment as a pilot: connect a small list first, then a big one.
 
----
-Created by **Kirolos** — Power of Automation
 
 ## Deploy never asks which list to connect
 
@@ -194,17 +427,7 @@ Created by **Kirolos** — Power of Automation
 
 **Assistant → Setup → Add Copilot Studio agent** has **Find my agents** (lists the agents your Copilot Studio connection can see, click to fill in the exact schema name) and a step-by-step **Test connection**: connector attached → your connection sees the agent → the agent answers (with timing). Error "The request was not sent or there was no response from the server" with no HTTP status means the Power Apps player never got a reply — most often the agent's synchronous call took too long (the player gives up after about 2 minutes), or a proxy/VPN/browser extension blocked the call. Use a classic agent set to *Authenticate with Microsoft*, published, and test from another network/browser; if it keeps timing out, wrap the agent in a Power Automate flow ("Execute Agent and wait" + "Respond to Power Apps").
 
-### Which Copilot Studio agents work in-app
 
-The in-app chat uses Microsoft's Copilot Studio connector, which only reaches **classic (standard) agents** — ones with Topics in the left menu. Agents from the newer *GitHub Copilot harness* experience (left menu: Skills, Connected agents, Authoring canvas, no Topics; Settings → Advanced shows an Entra Agent ID) are **not callable** by that connector today (Microsoft: microsoft/PowerAppsCodeApps discussion 434), and a Power Automate wrapper doesn't help because it uses the same connector. Options: (1) create a classic agent in the same environment, add the same SharePoint knowledge, set Authentication to *Authenticate with Microsoft*, publish and share it, then use **Find my agents**; (2) add the new-experience agent as a **link** (opens its chat; the app copies the context for you).
-
-### Chat with new-experience Copilot Studio agents (v1.9.9)
-
-Agents built in the newer Copilot Studio experience (Skills / Connected agents, no Topics) can't be reached through the Copilot Studio connector. Microsoft's Direct-to-Engine API does support them (rolling out through October 2026). In **Assistant → Setup → Add Copilot Studio agent (new or classic)** enter the **Environment ID** (pre-filled with this app's environment) and the **schema name** (Copilot Studio → Settings → Advanced → Metadata). The app talks to the agent through the **HTTP with Microsoft Entra ID (preauthorized)** connector:
-0. **Admin, once:** run `scripts\Setup-CopilotStudioConnector.ps1 -EnvironmentId <id>` (PowerShell 7 + Azure CLI, an account allowed to create app registrations and grant consent). Microsoft's own *HTTP with Microsoft Entra ID* connectors (preauthorized or not) sign in through Microsoft-owned apps, and Entra refuses to consent those for the Power Platform API, so Copilot Studio always answers 403 `InsufficientDelegatedPermissions: CopilotStudio.Copilots.Invoke`. The script creates **your own** Entra app (delegated permission `CopilotStudio.Copilots.Invoke`, admin consent, client secret) and the custom connector **SPX Copilot Direct**. If `pac connector create` is not available it prints the manual import steps.
-1. Power Apps → Connections → New connection → **SPX Copilot Direct** → sign in (each user does this once).
-2. `Deploy.cmd` (answer 2) or `Deploy.cmd -AddEntraHttp`, republish.
-3. The agent must be published with *Authenticate with Microsoft*. Agent Builder / Microsoft 365 Copilot agents still have no API: add them as a link.
 
 ### Crash fix (v1.9.9)
 
@@ -224,5 +447,10 @@ A filter the server could not apply (multi-value people/lookup columns, relative
 - **No more reload loops / white page:** the memory watchdog now compares with the browser's own heap limit (not a fixed number — inside the Power Apps player that figure includes the host page), recovers by itself when pressure drops, and "Continue" restarts the app view in place instead of reloading the embedded frame. An unexpected error shows a "Try again" panel (the first failure restarts the app view automatically), an empty screen is caught by a "view went blank" overlay, damaged approval records are ignored instead of crashing the page, and Power Apps not answering is no longer retried for minutes. **Diagnostics → Stability** shows memory, guard state and the last errors recorded on this device — send me that if it ever happens again.
 - **Pick the agent from a drop-down:** Assistant → Setup → Add Copilot Studio agent lists the agents that exist in your environment (read from the Dataverse *bot* table, which `Deploy.cmd` adds when you choose option 2 or 3). Users need read access to the Bot table to see the list; otherwise type the schema name.
 
-### Updating the Copilot connector definition (v1.9.14)
-Copilot Studio's routes are long (`/copilotstudio/agenticruntime/3p/...`). The connector now offers one operation per segment count (`Path4`…`Path14`). For an existing connector: Power Apps → Custom connectors → **SPX Copilot Direct** → Edit → **Swagger editor** → paste the content of `apiDefinition.swagger.json` (create it with `scripts\Setup-CopilotStudioConnector.ps1 -EnvironmentId <id> -SwaggerOnly`) → **Update connector**, then run `Deploy.cmd` again (option 2) and republish. Nothing else changes (same app registration, same connection).
+---
+
+<div align="center">
+
+### 💜 Created by **Kirolos — Power of Automation**
+
+</div>

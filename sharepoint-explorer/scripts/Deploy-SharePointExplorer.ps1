@@ -363,7 +363,7 @@ try {
   if ($wantWc) {
     Step 'Wiring the SPX Copilot Direct connector (chat with new-experience agents)'
     try { if (Add-Src $wcApi $wcConn.Id 'webcontents' @()) { Ok 'Entra HTTP connector added'; $spf = Get-SchemaPath; $wcSchemaText = if ($spf) { [System.IO.File]::ReadAllText((Join-Path $root $spf)) } else { $null } } else { Warn 'Could not add the Entra HTTP connector - continuing without it.'; $wantWc = $false } } catch { Warn "Entra HTTP step skipped: $($_.Exception.Message)"; $wantWc = $false }
-    if ($wantWc -and -not (Schema-Has 'Path4')) { Warn 'The connector "SPX Copilot Direct" in Power Apps still has the OLD definition (no Path4..Path14 operations). Power Apps > Custom connectors > SPX Copilot Direct > Edit > Swagger editor: paste the file apiDefinition.swagger.json (create it with scripts\Setup-CopilotStudioConnector.ps1 -EnvironmentId <id> -SwaggerOnly), click Update connector, then run Deploy.cmd again.' }
+    if ($wantWc -and -not (Schema-Has 'Path4')) { Warn 'The connector "SPX Copilot Direct" in Power Apps still has the OLD definition (no Path4..Path12 operations). Power Apps > Custom connectors > SPX Copilot Direct > Edit > Swagger editor: paste the file apiDefinition.swagger.json (create it with scripts\Setup-CopilotStudioConnector.ps1 -EnvironmentId <id> -SwaggerOnly), click Update connector, then run Deploy.cmd again.' }
   }
   # agent drop-down in the app: the Dataverse "bot" table (read-only use; failures never stop the deployment)
   $wantBots = ($wantWc -or $wantCs); $botsText = $null

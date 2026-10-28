@@ -32,12 +32,12 @@ function Step($t) { Write-Host "`n==> $t" -ForegroundColor Cyan }
 function Ok($t) { Write-Host "    $t" -ForegroundColor Green }
 function Build-Swagger {
 $h = ($EnvironmentId -replace '-', '').ToLower(); $envHost = "$($h.Substring(0, $h.Length - 2)).$($h.Substring($h.Length - 2)).environment.api.powerplatform.com"
-$sse = @('text/event-stream', 'application/json')
+$sse = @('application/json')
 $agentP = @{ name = 'agent'; in = 'path'; required = $true; type = 'string'; description = 'Agent schema name, e.g. cr56c_spocode' }
 $convP = @{ name = 'conversationId'; in = 'path'; required = $true; type = 'string' }
-$apiV = @{ name = 'api-version'; in = 'query'; required = $false; type = 'string'; default = '2022-03-01-preview'; 'x-ms-visibility' = 'internal' }
+$apiV = @{ name = 'api-version'; in = 'query'; required = $false; type = 'string' }
 $bodyAny = @{ name = 'body'; in = 'body'; required = $true; schema = @{ type = 'object' } }
-$resp = @{ '200' = @{ description = 'OK'; schema = @{ type = 'string' } }; default = @{ description = 'Error'; schema = @{ type = 'string' } } }
+$resp = @{ '200' = @{ description = 'OK' }; default = @{ description = 'Error' } }
 $swagger = [ordered]@{
   swagger = '2.0'; info = @{ title = $ConnectorName; description = 'Talks to Copilot Studio agents (Direct-to-Engine) as the signed-in user.'; version = '1.0' }
   host = $envHost; basePath = '/'; schemes = @('https'); consumes = @('application/json'); produces = $sse
@@ -48,8 +48,8 @@ $swagger = [ordered]@{
   security = @(@{ oauth2_auth = @() })
 }
 # Copilot Studio returns long routes (e.g. /copilotstudio/agenticruntime/3p/.../conversations). A path parameter would encode the slashes, so the connector
-# offers one operation per segment count (Path4 ... Path14); every segment is its own path parameter and the slashes stay slashes.
-foreach ($n in 4..14) {
+# offers one operation per segment count (Path4 ... Path12); every segment is its own path parameter and the slashes stay slashes.
+foreach ($n in 4..12) {
   $segs = 1..$n | ForEach-Object { @{ name = "s$_"; in = 'path'; required = $true; type = 'string' } }
   $swagger.paths["/" + ((1..$n | ForEach-Object { "{s$_}" }) -join '/')] = @{ post = @{ operationId = "Path$n"; summary = "Call a $n-segment Copilot Studio route"; parameters = @($segs + @($apiV, $bodyAny)); responses = $resp } }
 }
