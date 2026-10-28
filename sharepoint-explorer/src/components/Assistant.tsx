@@ -52,6 +52,7 @@ export function AssistantPanel({ visible, engine, cfg, who, selected, canSetup, 
   const [busy, setBusy] = useState(false)
   const [withCtx, setWithCtx] = useState(true)
   const [manual, setManual] = useState('')
+  const [embed, setEmbed] = useState(false)
   const log = useRef<HTMLDivElement>(null)
   const chat = chats.get(key) ?? { msgs: [] }
   useEffect(() => { log.current?.scrollTo({ top: log.current.scrollHeight }) }, [chat.msgs.length, busy])
@@ -99,8 +100,10 @@ export function AssistantPanel({ visible, engine, cfg, who, selected, canSetup, 
             {manual && <textarea className="input" readOnly rows={5} value={manual} aria-label="Prompt to copy" onFocus={(e) => e.currentTarget.select()} />}
             <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
               <button className="btn" onClick={async () => { const t = withContext(ctxJson(), text || 'Help me with this.'); if (await copyText(t)) toast('good', 'Prompt with context copied — paste it into the agent chat.'); else { setManual(t); toast('warn', 'Could not copy automatically — select the text below and press Ctrl+C.') } }}><Icon n="copy" size={14} />Copy prompt with context</button>
+              {goodUrl(a.url) && /^https:\/\/copilotstudio\.microsoft\.com\/.*\/webchat/i.test(a.url ?? '') && <button className="btn" onClick={() => setEmbed((v) => !v)}><Icon n="sparkle" size={14} />{embed ? 'Hide chat here' : 'Chat here (in this app)'}</button>}
               {goodUrl(a.url) ? <a className="btn primary" href={goodUrl(a.url)!.href} target="_blank" rel="noopener noreferrer"><Icon n="ext" size={14} />Open {a.name}</a> : <button className="btn primary" disabled title="The saved link is not a valid https:// URL"><Icon n="ext" size={14} />Open {a.name}</button>}
             </div>
+            {embed && goodUrl(a.url) && <><iframe title={`${a.name} chat`} src={goodUrl(a.url)!.href} style={{ width: '100%', height: '55vh', border: '1px solid var(--line, #3a4a6a)', borderRadius: 8, background: '#fff' }} allow="clipboard-write" referrerPolicy="no-referrer" /><p className="muted small" style={{ margin: 0 }}>Blank or a sign-in error? Your tenant blocks embedding here — use “Open {a.name}” instead.</p></>}
           </div>
         ) : (
           <>
@@ -214,7 +217,7 @@ function AssistantEditor({ engine, a, onSave, onClose }: { engine: Engine; a: As
     catch (e) { setTest({ ok: false, text: `Could not list agents: ${(e as Error).message}` }) } finally { setFinding(false) }
   }
   const [botId, setBotId] = useState('')
-  const asLink = () => set({ kind: 'link', url: `https://copilotstudio.microsoft.com/environments/${(d.environmentId ?? '').trim()}/bots/${botId}/overview` })
+  const asLink = () => set({ kind: 'link', url: `https://copilotstudio.microsoft.com/environments/${(d.environmentId ?? '').trim()}/bots/${(d.agent ?? '').trim()}/webchat?__version__=2` })
   const runTest = async () => {
     const name = d.agent!.trim(); setTesting(true); setClock(0); setTest(null)
     const out: { ok: boolean | null; text: string }[] = []; const push = (ok: boolean | null, text: string) => { out.push({ ok, text }); setSteps([...out]) }
@@ -259,7 +262,7 @@ function AssistantEditor({ engine, a, onSave, onClose }: { engine: Engine; a: As
           <AgentPicker engine={engine} schema={d.agent} onPick={(b) => { setBotId(b.id); set({ agent: b.schema, name: d.name || b.name }) }} />
           <label className="small">Environment ID <span className="muted">(Copilot Studio → Settings → Advanced → Metadata → Environment ID; this app’s own environment is filled in)</span><input className="input" value={d.environmentId ?? ''} onChange={(e) => set({ environmentId: e.target.value })} placeholder="e4c5fd77-2cb4-e3d1-8488-75cd3bd8521b" autoComplete="off" /></label>
           {!engine.backend.agentConnector('entra-http') && <div className="banner warn small" role="note"><Icon n="info" /><div style={{ flex: 1 }}><b>One-time setup needed before this can work:</b> the custom connector “SPX Copilot Direct” is not attached to this app yet.<ol style={{ margin: '4px 0 0', paddingLeft: 18 }}><li>Admin once: run <code>scripts\Setup-CopilotStudioConnector.ps1 -EnvironmentId {d.environmentId || '<id>'}</code>, then Power Apps → Connections → New connection → <b>SPX Copilot Direct</b> and sign in.</li>
-          <li>Run <code>Deploy.cmd</code> and answer <b>2</b> to the AI question (or <code>Deploy.cmd -AddEntraHttp</code>), then reopen the app.</li></ol>{botId && envOk && <div style={{ marginTop: 6 }}>No admin available right now? <button type="button" className="btn sm" onClick={asLink}>Add this agent as a link instead (works immediately)</button></div>}</div></div>}
+          <li>Run <code>Deploy.cmd</code> and answer <b>2</b> to the AI question (or <code>Deploy.cmd -AddEntraHttp</code>), then reopen the app.</li></ol>{(d.agent ?? '').trim() && envOk && <div style={{ marginTop: 6 }}>No admin available right now? <button type="button" className="btn sm" onClick={asLink}>Add this agent as a link instead (works immediately)</button></div>}</div></div>}
           {d.environmentId && !envOk && <div className="small" style={{ color: 'var(--bad)' }}>That is not a valid environment ID (a GUID).</div>}
           <label className="small">Agent schema name <span className="muted">(same Metadata page → Schema name; case-sensitive)</span><input className="input" value={d.agent ?? ''} onChange={(e) => set({ agent: e.target.value })} placeholder="cr56c_spocode" autoComplete="off" /></label>
           <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
