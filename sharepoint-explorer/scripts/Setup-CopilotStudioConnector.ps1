@@ -54,7 +54,7 @@ az ad app permission add --id $appId --api $ppApi --api-permissions "$scopeId=Sc
 Start-Sleep -Seconds 5
 az ad app permission admin-consent --id $appId | Out-Null
 Ok 'Delegated permission added and admin consent granted'
-$secret = az ad app credential reset --id $appId --display-name 'copilot-connector' --years 2 --query password -o tsv
+$secret = az ad app credential reset --append --id $appId --display-name 'copilot-connector' --years 2 --query password -o tsv
 Ok 'Client secret created (kept only in the generated connector file below)'
 
 Step 'Writing connector files'
@@ -103,10 +103,28 @@ if ($code -ne 0) {
   Write-Warning 'pac could not create the connector. Create it by hand instead: Power Apps > Custom connectors > New custom connector > Import an OpenAPI file > apiDefinition.swagger.json; Security: OAuth 2.0, Identity provider Azure Active Directory, Client id/secret from apiProperties.json, Resource URL https://api.powerplatform.com, Scope https://api.powerplatform.com/CopilotStudio.Copilots.Invoke; then copy the redirect URL it shows into the Entra app registration (Authentication > Web). Name it exactly: ' + $ConnectorName
 }
 
-if ($ExtraRedirectUri) {
-  az ad app update --id $appId --web-redirect-uris 'https://global.consent.azure-apim.net/redirect' $ExtraRedirectUri | Out-Null
-  Ok "Redirect URI added: $ExtraRedirectUri"
+Step 'Redirect address of the connector (Entra must know it, otherwise sign-in fails with AADSTS50011)'
+$base = 'https://global.consent.azure-apim.net/redirect'
+$uris = @($base)
+if ($ExtraRedirectUri) { $uris += $ExtraRedirectUri }
+else {
+  $found = $null
+  foreach ($cmd in @(@('connector', 'list', '--environment', $EnvironmentId), @('connector', 'list'))) {
+    try { $t = ((& pac @cmd 2>&1) | ForEach-Object { "$_" }) -join "`n"; if ($t -match '(?i)((?:new-5f)?spx-20copilot-20direct-5f[0-9a-f]+)') { $found = $Matches[1].ToLower(); break } } catch { }
+  }
+  if ($found) { $uris += "$base/$found"; Ok "Detected connector redirect: $base/$found" }
+  else {
+    Write-Warning 'Could not detect the connector''s own redirect address automatically.'
+    Write-Host 'Create the connection once in Power Apps (Connections > New connection > SPX Copilot Direct). The sign-in error shows the address, e.g.' -ForegroundColor Yellow
+    Write-Host "  'https://global.consent.azure-apim.net/redirect/new-5fspx-20copilot-20direct-5f<hash>' - copy it from the error text." -ForegroundColor Yellow
+    $in = (Read-Host 'Paste that address here (or press Enter to skip)').Trim().Trim("'")
+    if ($in -match '^https://global\.consent\.azure-apim\.net/redirect/\S+$') { $uris += $in } elseif ($in) { Write-Warning 'That does not look like a redirect address - skipped.' }
+  }
 }
+$cur = @(az ad app show --id $appId --query 'web.redirectUris' -o json | ConvertFrom-Json)
+$all = @($cur + $uris | Where-Object { $_ } | Select-Object -Unique)
+az ad app update --id $appId --web-redirect-uris @all | Out-Null
+Ok ("Redirect addresses on the app: " + ($all -join ', '))
 Write-Host ''
 Write-Host 'If signing in to the connection fails with AADSTS50011 (redirect URI mismatch), copy the redirect URI from that error and run again with  -ExtraRedirectUri <that URI>  (or add it under Entra > App registrations > $AppName > Authentication).' -ForegroundColor Yellow
 Write-Host 'Next steps' -ForegroundColor Cyan
