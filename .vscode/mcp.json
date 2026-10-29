@@ -1,8 +1,22 @@
 {
+  "inputs": [
+    { "id": "tenantId", "type": "promptString", "description": "Entra tenant ID" },
+    { "id": "clientId", "type": "promptString", "description": "Entra app (client) ID with CopilotStudio.Copilots.Invoke, public client + device code enabled" },
+    { "id": "envHost", "type": "promptString", "description": "Environment API host, e.g. xxxx.xx.environment.api.powerplatform.com" },
+    { "id": "agentSchema", "type": "promptString", "description": "Agent schema name, e.g. cr56c_spocode" }
+  ],
   "servers": {
-    "spx-copilot-agent": {
-      "type": "http",
-      "url": "https://REPLACE-WITH-YOUR-MCP-GATEWAY/mcp"
+    "copilot-studio-agent": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${workspaceFolder}/mcp/copilot-studio-mcp.mjs"],
+      "env": {
+        "TENANT_ID": "${input:tenantId}",
+        "CLIENT_ID": "${input:clientId}",
+        "ENV_HOST": "${input:envHost}",
+        "AGENT_SCHEMA": "${input:agentSchema}",
+        "AGENT_NAME": "spx_agent"
+      }
     }
   }
 }
