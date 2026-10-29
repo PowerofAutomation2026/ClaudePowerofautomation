@@ -16,7 +16,7 @@ const conversations = new Map(); // key -> conversationId
 const form = (o) => new URLSearchParams(o).toString();
 const post = (url, body) =>
   fetch(url, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: form(body) }).then((r) => r.json());
-const authority = () => `https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0`;
+const authority = () => `${process.env.AUTHORITY_URL || "https://login.microsoftonline.com"}/${TENANT_ID}/oauth2/v2.0`;
 
 function store(r) {
   token = { access: r.access_token, refresh: r.refresh_token, exp: Date.now() + (r.expires_in - 60) * 1000 };
@@ -49,7 +49,7 @@ async function getToken() {
 
 async function call(path, body) {
   const t = await getToken();
-  const res = await fetch(`https://${ENV_HOST}${path}?api-version=${API_VERSION}`, {
+  const res = await fetch(`${process.env.ENV_URL || `https://${ENV_HOST}`}${path}?api-version=${API_VERSION}`, {
     method: "POST",
     headers: { authorization: `Bearer ${t}`, "content-type": "application/json", accept: "text/event-stream" },
     body: JSON.stringify(body ?? {}),
