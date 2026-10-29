@@ -1,0 +1,897 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "SPX Copilot Direct",
+    "description": "Talks to Copilot Studio agents (Direct-to-Engine) as the signed-in user. Also exposes an MCP endpoint so the agent can be used as a tool by MCP clients.",
+    "version": "1.0"
+  },
+  "host": "e4c5fd772cb4e3d1848875cd3bd852.1b.environment.api.powerplatform.com",
+  "basePath": "/",
+  "schemes": [
+    "https"
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json",
+    "text/event-stream"
+  ],
+  "paths": {
+    "/copilotstudio/agents/{agent}/conversation-endpoints": {
+      "get": {
+        "summary": "Find the conversation endpoints of an agent",
+        "operationId": "Discover",
+        "parameters": [
+          {
+            "required": true,
+            "type": "string",
+            "description": "Agent schema name, e.g. cr56c_spocode",
+            "name": "agent",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "Error"
+          }
+        }
+      }
+    },
+    "/{s1}/{s2}/{s3}/{s4}": {
+      "post": {
+        "summary": "Call a 4-segment Copilot Studio route",
+        "operationId": "Path4",
+        "parameters": [
+          {
+            "required": true,
+            "type": "string",
+            "name": "s1",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s2",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s3",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s4",
+            "in": "path"
+          },
+          {
+            "required": false,
+            "type": "string",
+            "name": "api-version",
+            "in": "query"
+          },
+          {
+            "required": true,
+            "schema": {
+              "type": "object"
+            },
+            "name": "body",
+            "in": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "Error"
+          }
+        }
+      }
+    },
+    "/{s1}/{s2}/{s3}/{s4}/{s5}": {
+      "post": {
+        "summary": "Call a 5-segment Copilot Studio route",
+        "operationId": "Path5",
+        "parameters": [
+          {
+            "required": true,
+            "type": "string",
+            "name": "s1",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s2",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s3",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s4",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s5",
+            "in": "path"
+          },
+          {
+            "required": false,
+            "type": "string",
+            "name": "api-version",
+            "in": "query"
+          },
+          {
+            "required": true,
+            "schema": {
+              "type": "object"
+            },
+            "name": "body",
+            "in": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "Error"
+          }
+        }
+      }
+    },
+    "/{s1}/{s2}/{s3}/{s4}/{s5}/{s6}": {
+      "post": {
+        "summary": "Call a 6-segment Copilot Studio route",
+        "operationId": "Path6",
+        "parameters": [
+          {
+            "required": true,
+            "type": "string",
+            "name": "s1",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s2",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s3",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s4",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s5",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s6",
+            "in": "path"
+          },
+          {
+            "required": false,
+            "type": "string",
+            "name": "api-version",
+            "in": "query"
+          },
+          {
+            "required": true,
+            "schema": {
+              "type": "object"
+            },
+            "name": "body",
+            "in": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "Error"
+          }
+        }
+      }
+    },
+    "/{s1}/{s2}/{s3}/{s4}/{s5}/{s6}/{s7}": {
+      "post": {
+        "summary": "Call a 7-segment Copilot Studio route",
+        "operationId": "Path7",
+        "parameters": [
+          {
+            "required": true,
+            "type": "string",
+            "name": "s1",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s2",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s3",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s4",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s5",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s6",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s7",
+            "in": "path"
+          },
+          {
+            "required": false,
+            "type": "string",
+            "name": "api-version",
+            "in": "query"
+          },
+          {
+            "required": true,
+            "schema": {
+              "type": "object"
+            },
+            "name": "body",
+            "in": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "Error"
+          }
+        }
+      }
+    },
+    "/{s1}/{s2}/{s3}/{s4}/{s5}/{s6}/{s7}/{s8}": {
+      "post": {
+        "summary": "Call a 8-segment Copilot Studio route",
+        "operationId": "Path8",
+        "parameters": [
+          {
+            "required": true,
+            "type": "string",
+            "name": "s1",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s2",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s3",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s4",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s5",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s6",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s7",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s8",
+            "in": "path"
+          },
+          {
+            "required": false,
+            "type": "string",
+            "name": "api-version",
+            "in": "query"
+          },
+          {
+            "required": true,
+            "schema": {
+              "type": "object"
+            },
+            "name": "body",
+            "in": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "Error"
+          }
+        }
+      }
+    },
+    "/{s1}/{s2}/{s3}/{s4}/{s5}/{s6}/{s7}/{s8}/{s9}": {
+      "post": {
+        "summary": "Call a 9-segment Copilot Studio route",
+        "operationId": "Path9",
+        "parameters": [
+          {
+            "required": true,
+            "type": "string",
+            "name": "s1",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s2",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s3",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s4",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s5",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s6",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s7",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s8",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s9",
+            "in": "path"
+          },
+          {
+            "required": false,
+            "type": "string",
+            "name": "api-version",
+            "in": "query"
+          },
+          {
+            "required": true,
+            "schema": {
+              "type": "object"
+            },
+            "name": "body",
+            "in": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "Error"
+          }
+        }
+      }
+    },
+    "/{s1}/{s2}/{s3}/{s4}/{s5}/{s6}/{s7}/{s8}/{s9}/{s10}": {
+      "post": {
+        "summary": "Call a 10-segment Copilot Studio route",
+        "operationId": "Path10",
+        "parameters": [
+          {
+            "required": true,
+            "type": "string",
+            "name": "s1",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s2",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s3",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s4",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s5",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s6",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s7",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s8",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s9",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s10",
+            "in": "path"
+          },
+          {
+            "required": false,
+            "type": "string",
+            "name": "api-version",
+            "in": "query"
+          },
+          {
+            "required": true,
+            "schema": {
+              "type": "object"
+            },
+            "name": "body",
+            "in": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "Error"
+          }
+        }
+      }
+    },
+    "/{s1}/{s2}/{s3}/{s4}/{s5}/{s6}/{s7}/{s8}/{s9}/{s10}/{s11}": {
+      "post": {
+        "summary": "Call a 11-segment Copilot Studio route",
+        "operationId": "Path11",
+        "parameters": [
+          {
+            "required": true,
+            "type": "string",
+            "name": "s1",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s2",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s3",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s4",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s5",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s6",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s7",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s8",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s9",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s10",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s11",
+            "in": "path"
+          },
+          {
+            "required": false,
+            "type": "string",
+            "name": "api-version",
+            "in": "query"
+          },
+          {
+            "required": true,
+            "schema": {
+              "type": "object"
+            },
+            "name": "body",
+            "in": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "Error"
+          }
+        }
+      }
+    },
+    "/{s1}/{s2}/{s3}/{s4}/{s5}/{s6}/{s7}/{s8}/{s9}/{s10}/{s11}/{s12}": {
+      "post": {
+        "summary": "Call a 12-segment Copilot Studio route",
+        "operationId": "Path12",
+        "parameters": [
+          {
+            "required": true,
+            "type": "string",
+            "name": "s1",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s2",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s3",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s4",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s5",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s6",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s7",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s8",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s9",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s10",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s11",
+            "in": "path"
+          },
+          {
+            "required": true,
+            "type": "string",
+            "name": "s12",
+            "in": "path"
+          },
+          {
+            "required": false,
+            "type": "string",
+            "name": "api-version",
+            "in": "query"
+          },
+          {
+            "required": true,
+            "schema": {
+              "type": "object"
+            },
+            "name": "body",
+            "in": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "Error"
+          }
+        }
+      }
+    },
+    "/copilotstudio/dataverse-backed/authenticated/bots/{agent}/conversations": {
+      "post": {
+        "summary": "Start a conversation with an agent",
+        "operationId": "StartConversation",
+        "parameters": [
+          {
+            "name": "agent",
+            "type": "string",
+            "required": true,
+            "description": "Agent schema name, e.g. cr56c_spocode",
+            "in": "path"
+          },
+          {
+            "name": "api-version",
+            "type": "string",
+            "required": false,
+            "description": "Direct-to-Engine API version",
+            "in": "query",
+            "default": "2022-03-01-preview",
+            "x-ms-visibility": "advanced"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": false,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "emitStartConversationEvent": {
+                  "type": "boolean",
+                  "default": true
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "Error"
+          }
+        }
+      }
+    },
+    "/copilotstudio/dataverse-backed/authenticated/bots/{agent}/conversations/{conversationId}": {
+      "post": {
+        "summary": "Send a message to an agent (execute turn)",
+        "operationId": "SendMessage",
+        "parameters": [
+          {
+            "name": "agent",
+            "type": "string",
+            "required": true,
+            "description": "Agent schema name",
+            "in": "path"
+          },
+          {
+            "name": "conversationId",
+            "type": "string",
+            "required": true,
+            "description": "Id returned by StartConversation",
+            "in": "path"
+          },
+          {
+            "name": "api-version",
+            "type": "string",
+            "required": false,
+            "description": "Direct-to-Engine API version",
+            "in": "query",
+            "default": "2022-03-01-preview",
+            "x-ms-visibility": "advanced"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "activity": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "default": "message"
+                    },
+                    "text": {
+                      "type": "string",
+                      "description": "User message"
+                    },
+                    "conversation": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "text"
+                  ]
+                }
+              },
+              "required": [
+                "activity"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "Error"
+          }
+        }
+      }
+    },
+    "/mcp": {
+      "post": {
+        "summary": "MCP endpoint (Copilot agent)",
+        "operationId": "InvokeMCP",
+        "x-ms-agentic-protocol": "mcp-streamable-1.0",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    }
+  },
+  "securityDefinitions": {
+    "oauth2_auth": {
+      "scopes": {},
+      "authorizationUrl": "https://login.windows.net/common/oauth2/authorize",
+      "tokenUrl": "https://login.windows.net/common/oauth2/authorize",
+      "flow": "accessCode",
+      "type": "oauth2"
+    }
+  },
+  "security": [
+    {
+      "oauth2_auth": []
+    }
+  ]
+}

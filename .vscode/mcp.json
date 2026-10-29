@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "spx-copilot-agent": {
+      "type": "http",
+      "url": "https://REPLACE-WITH-YOUR-MCP-GATEWAY/mcp"
+    }
+  }
+}
