@@ -276,6 +276,19 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   if (!ENV_HOST && !env.ENV_URL) { log("Missing ENV_HOST or ENV_ID"); process.exit(1); }
   if (!agents.length) { log("Missing AGENT_SCHEMA or AGENTS"); process.exit(1); }
   loadCache();
+  if (process.argv.includes("--diagnose")) {
+    // CLI mode used by the installer: sign in (device code, waits), cache the refresh token, then check every agent.
+    const stop = Date.now() + 5 * 60 * 1000;
+    for (;;) {
+      try { await getToken(); break; } catch (e) {
+        if (!/NEEDS_SIGNIN/.test(e.message) || Date.now() > stop) { console.log(`Sign-in: ${e.message}`); process.exit(1); }
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    }
+    const text = await diagnose();
+    console.log(text);
+    process.exit(/FAILED|Sign-in:(?! OK)/.test(text) ? 1 : 0);
+  }
   createInterface({ input: process.stdin }).on("line", async (line) => {
     let req; try { req = JSON.parse(line); } catch { return; }
     if (req.id === undefined) return;
