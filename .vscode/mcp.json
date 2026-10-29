@@ -1,9 +1,10 @@
 {
   "inputs": [
     { "id": "tenantId", "type": "promptString", "description": "Entra tenant ID" },
-    { "id": "clientId", "type": "promptString", "description": "Entra app (client) ID with CopilotStudio.Copilots.Invoke, public client + device code enabled" },
-    { "id": "envHost", "type": "promptString", "description": "Environment API host, e.g. xxxx.xx.environment.api.powerplatform.com" },
-    { "id": "agentSchema", "type": "promptString", "description": "Agent schema name, e.g. cr56c_spocode" }
+    { "id": "clientId", "type": "promptString", "description": "Entra app (client) ID: public client, delegated Power Platform API CopilotStudio.Copilots.Invoke" },
+    { "id": "envId", "type": "promptString", "description": "Power Platform environment ID (GUID from the Copilot Studio URL after /environments/)" },
+    { "id": "agents", "type": "promptString", "description": "Agent schema name, or alias=schema,alias2=schema2 for several (schema is case-sensitive)" },
+    { "id": "harness", "type": "pickString", "description": "Agent harness", "options": ["auto", "github", "standard"], "default": "auto" }
   ],
   "servers": {
     "copilot-studio-agent": {
@@ -13,9 +14,12 @@
       "env": {
         "TENANT_ID": "${input:tenantId}",
         "CLIENT_ID": "${input:clientId}",
-        "ENV_HOST": "${input:envHost}",
-        "AGENT_SCHEMA": "${input:agentSchema}",
-        "AGENT_NAME": "spx_agent"
+        "ENV_ID": "${input:envId}",
+        "AGENTS": "${input:agents}",
+        "HARNESS": "${input:harness}",
+        "SHOW_REASONING": "false",
+        "SHOW_TOOLCALLS": "false",
+        "TOKEN_CACHE": "memory"
       }
     }
   }

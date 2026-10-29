@@ -878,6 +878,125 @@
           }
         }
       }
+    },
+    "/copilotstudio/agenticruntime/3p/dataverse-backed/authenticated/bots/{agent}/conversations": {
+      "post": {
+        "summary": "Start a conversation (GitHub Copilot harness)",
+        "operationId": "StartConversationGitHubHarness",
+        "parameters": [
+          {
+            "name": "agent",
+            "in": "path",
+            "type": "string",
+            "required": true,
+            "description": "Agent schema name (case-sensitive)"
+          },
+          {
+            "name": "api-version",
+            "in": "query",
+            "type": "string",
+            "required": false,
+            "default": "1",
+            "x-ms-visibility": "advanced"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": false,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "emitStartConversationEvent": {
+                  "type": "boolean",
+                  "default": true
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "Error"
+          }
+        }
+      }
+    },
+    "/copilotstudio/agenticruntime/3p/dataverse-backed/authenticated/bots/{agent}/conversations/{conversationId}": {
+      "post": {
+        "summary": "Send a message (GitHub Copilot harness)",
+        "operationId": "SendMessageGitHubHarness",
+        "parameters": [
+          {
+            "name": "agent",
+            "in": "path",
+            "type": "string",
+            "required": true,
+            "description": "Agent schema name (case-sensitive)"
+          },
+          {
+            "name": "conversationId",
+            "in": "path",
+            "type": "string",
+            "required": true
+          },
+          {
+            "name": "api-version",
+            "in": "query",
+            "type": "string",
+            "required": false,
+            "default": "1",
+            "x-ms-visibility": "advanced"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "activity": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "default": "message"
+                    },
+                    "text": {
+                      "type": "string"
+                    },
+                    "conversation": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "text"
+                  ]
+                }
+              },
+              "required": [
+                "activity"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "Error"
+          }
+        }
+      }
     }
   },
   "securityDefinitions": {
