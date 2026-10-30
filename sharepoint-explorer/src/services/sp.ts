@@ -866,7 +866,7 @@ interface Endpoints { createConversation: string; executeTurn: string }
 const endpointCache = new Map<string, Endpoints>()
 async function discover(env: string, schema: string): Promise<Endpoints> {
   const k = `${env}|${schema}`; const hit = endpointCache.get(k); if (hit) return hit
-  if (!/^[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(env)) throw new Error('Enter the Power Platform environment ID (a GUID, e.g. e4c5fd77-2cb4-e3d1-8488-75cd3bd8521b).')
+  if (!/^[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(env)) throw new Error('Enter the Power Platform environment ID (a GUID, e.g. xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).')
   const raw = await invokeHttp('GET', `${envHost(env)}/copilotstudio/agents/${encodeURIComponent(schema)}/conversation-endpoints`)
   let j: any; try { j = JSON.parse(raw) } catch { throw new Error(`Copilot Studio did not return endpoint information: ${raw.slice(0, 200)}`) }
   const pick = (...names: string[]) => { for (const n of names) for (const kk of Object.keys(j ?? {})) if (kk.toLowerCase() === n.toLowerCase() && typeof j[kk] === 'string') return j[kk] as string; return '' }

@@ -28,8 +28,9 @@
 8. [The Swagger (OpenAPI) file](#-the-swagger-openapi-file)
 9. [Beginner guide: add the connector to a NEW code app](#-beginner-guide-add-the-connector-to-a-new-code-app)
 10. [All the links you need](#-all-the-links-you-need)
-11. [FAQ & troubleshooting](#-faq--troubleshooting)
-12. [Full feature reference](#-full-feature-reference)
+11. [Security & privacy checklist](#-security--privacy-checklist)
+12. [FAQ & troubleshooting](#-faq--troubleshooting)
+13. [Full feature reference](#-full-feature-reference)
 
 ---
 
@@ -55,6 +56,26 @@
 <sub>Animated layout preview (illustrative sample data). Open <code>docs/app-layout-demo.svg</code> in any browser to replay it.</sub>
 
 </div>
+
+---
+
+## 🖼️ Screens
+
+<table>
+<tr>
+<td width="50%"><b>Dashboard</b> — auto-built KPIs, charts, smart insights<br><img src="docs/screenshots/01-dashboard.png" alt="Dashboard"></td>
+<td width="50%"><b>Connect</b> — pick any site, list or library<br><img src="docs/screenshots/02-connect.png" alt="Connect screen"></td>
+</tr>
+<tr>
+<td><b>Data grid</b> — virtualised, inline editing, filters, views<br><img src="docs/screenshots/03-data-grid.png" alt="Data grid"></td>
+<td><b>Item details</b> — quick actions, approvals, version history<br><img src="docs/screenshots/04-item-details.png" alt="Item details"></td>
+</tr>
+<tr>
+<td colspan="2"><b>New item form</b> — generated from the list's columns, with tabs for long forms<br><img src="docs/screenshots/05-new-item.png" alt="New item form"></td>
+</tr>
+</table>
+
+<sub>All screenshots use the built-in demo data (no real tenant, site, user or agent information).</sub>
 
 ---
 
@@ -166,7 +187,7 @@ Then:
 <details>
 <summary><b>2 · Custom connector</b></summary>
 
-1. https://make.powerapps.com → your environment → **More → Custom connectors → New custom connector → Import an OpenAPI file** → choose `copilot-connector/apiDefinition.swagger.json` (the host inside is for environment `e4c5fd77-2cb4-e3d1-8488-75cd3bd8521b`; for another environment generate it: `./scripts/Setup-CopilotStudioConnector.ps1 -EnvironmentId <GUID> -SwaggerOnly`).
+1. https://make.powerapps.com → your environment → **More → Custom connectors → New custom connector → Import an OpenAPI file** → choose `copilot-connector/apiDefinition.swagger.json` (the `host` in this shared file is a placeholder — generate the real one for your environment with `./scripts/Setup-CopilotStudioConnector.ps1 -EnvironmentId <GUID> -SwaggerOnly`, which writes `copilot-connector-output/apiDefinition.swagger.json`, or replace `YOUR-ENVIRONMENT-HOST` by hand).
 2. Connector name: **SPX Copilot Direct** (the deploy script looks for this name).
 3. **Security** tab → **OAuth 2.0**:
    | Setting | Value |
@@ -188,11 +209,11 @@ Power Apps → **Custom connectors → SPX Copilot Direct → Edit → Swagger e
 
 ## 📜 The Swagger (OpenAPI) file
 
-`copilot-connector/apiDefinition.swagger.json` is the verified definition (it worked on a real tenant). It declares:
+`copilot-connector/apiDefinition.swagger.json` is the verified definition (it worked on a real tenant; the environment-specific `host` is replaced by a placeholder — use `-SwaggerOnly` to get yours). It declares:
 
 * **`Discover`** — `GET /copilotstudio/agents/{agent}/conversation-endpoints` → returns the agent's real conversation URLs.
 * **`Path4` … `Path12`** — `POST /{s1}/…/{sN}` + optional `api-version` + JSON body. Copilot Studio's routes are long (e.g. `/copilotstudio/agenticruntime/3p/dataverse-backed/authenticated/bots/<schema>/conversations`); a single path parameter would encode the slashes (`%2F` → **404 RouteNotFound**), so there is one operation per segment count and every segment is its own parameter. The app picks the right operation automatically.
-* `host` = `<env GUID without dashes, last 2 chars after a dot>.environment.api.powerplatform.com` (e.g. `e4c5fd772cb4e3d1848875cd3bd852.1b.environment.api.powerplatform.com`).
+* `host` = `<env GUID without dashes, last 2 chars after a dot>.environment.api.powerplatform.com` (e.g. `YOUR-ENVIRONMENT-HOST.environment.api.powerplatform.com`).
 
 ---
 
@@ -223,10 +244,10 @@ pac code init --displayName "My Agent App"
 `pac code init` creates `power.config.json` (it links this folder to your app). If you prefer Microsoft's starter, see https://learn.microsoft.com/power-apps/developer/code-apps/overview.
 
 ### Step 3 — Add the custom connector to the app
-1. Find your connection: `pac connection list` — copy the **Connection ID** and the **API name** of *SPX Copilot Direct* (looks like `shared_new-5fspx-20copilot-20direct-5f1441784a0aeb9a33`; the part after `-5f` is unique to your connector).
+1. Find your connection: `pac connection list` — copy the **Connection ID** and the **API name** of *SPX Copilot Direct* (looks like `shared_new-5fspx-20copilot-20direct-5f<hash>`; the part after `-5f` is unique to your connector).
 2. Add it:
 ```bash
-pac code add-data-source -a shared_new-5fspx-20copilot-20direct-5f1441784a0aeb9a33 -c <connection-id>
+pac code add-data-source -a shared_new-5fspx-20copilot-20direct-5f<hash> -c <connection-id>
 ```
 This writes `.power/schemas/appschemas/dataSourcesInfo.ts` — the app's list of connectors and their operations. Open it and check that the connector lists **`Discover`** and **`Path4` … `Path12`**. If it does not, the connector still has an old definition — see *Updating an existing connector definition* above, then run the command again (delete the `.power` folder first).
 
@@ -238,7 +259,7 @@ Copy [`copilot-connector/example/copilotDirect.ts`](copilot-connector/example/co
 import { useState } from 'react'
 import { askAgent } from './copilotDirect'
 
-const AGENT = 'cr56c_myagent'   // Copilot Studio → agent → Settings → Advanced → Metadata → Schema name
+const AGENT = 'cr123_myagent'   // Copilot Studio → agent → Settings → Advanced → Metadata → Schema name
 
 export default function App() {
   const [q, setQ] = useState(''), [a, setA] = useState(''), [conv, setConv] = useState<string>()
@@ -320,6 +341,16 @@ Every call carries the **signed-in user's token** (issued for your own app regis
 | Power Platform CLI docs | https://learn.microsoft.com/power-platform/developer/cli/introduction |
 | Code apps docs | https://learn.microsoft.com/power-apps/developer/code-apps/overview |
 | Custom connector OAuth (Entra) docs | https://learn.microsoft.com/connectors/custom-connectors/azure-active-directory-authentication |
+
+---
+
+## 🔐 Security & privacy checklist
+
+* **Nothing tenant-specific is shipped.** The package contains placeholders only (`xxxxxxxx-xxxx-…`, `YOUR-ENVIRONMENT-HOST`, `<app-client-id>`, `cr123_…`). Your environment ID, tenant ID, client ID, connector name and agent schema stay on your machine and in Power Platform.
+* **Secrets:** the client secret exists only in the generated `copilot-connector-output/apiProperties.json` and inside the custom connector. That folder is git-ignored — never commit or e-mail it. Rotate the secret before it expires (2 years) or if it leaks (`az ad app credential reset --id <app-client-id> --append`).
+* **Before you share screenshots or logs**, blank out: site URLs, environment/tenant/app IDs, user names and e-mail addresses, agent names/schema names, and the `redirect_uri` inside sign-in errors.
+* **Least privilege:** the Entra app only holds the delegated `CopilotStudio.Copilots.Invoke` permission; everything runs as the signed-in user, so SharePoint and Copilot permissions are the user's own.
+* `power.config.json`, `.power/` and `.deploy-state` are git-ignored because they link a folder to your tenant's app.
 
 ---
 

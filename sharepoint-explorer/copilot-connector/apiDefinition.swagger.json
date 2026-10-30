@@ -5,7 +5,7 @@
     "description": "Talks to Copilot Studio agents (Direct-to-Engine) as the signed-in user.",
     "version": "1.0"
   },
-  "host": "e4c5fd772cb4e3d1848875cd3bd852.1b.environment.api.powerplatform.com",
+  "host": "YOUR-ENVIRONMENT-HOST.environment.api.powerplatform.com",
   "basePath": "/",
   "schemes": [
     "https"
@@ -25,7 +25,7 @@
           {
             "required": true,
             "type": "string",
-            "description": "Agent schema name, e.g. cr56c_spocode",
+            "description": "Agent schema name, e.g. cr123_spocode",
             "name": "agent",
             "in": "path"
           }

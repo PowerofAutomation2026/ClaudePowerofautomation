@@ -6,3 +6,7 @@ dist-zip
 .deploy-state
 power.config.json
 src/generated
+copilot-connector-output
+copilot-connector/apiProperties.json
+*.secret
+.env

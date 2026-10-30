@@ -20,7 +20,7 @@ param(
   [Parameter(Mandatory)][string]$EnvironmentId,
   [string]$AppName = 'SharePointExplorer-CopilotStudio',
   [string]$ConnectorName = 'SPX Copilot Direct',
-  [string]$OutDir = '.\copilot-connector',
+  [string]$OutDir = '.\copilot-connector-output',
   [string]$ExtraRedirectUri,
   [string]$AppId,
   [switch]$SwaggerOnly
@@ -33,7 +33,7 @@ function Ok($t) { Write-Host "    $t" -ForegroundColor Green }
 function Build-Swagger {
 $h = ($EnvironmentId -replace '-', '').ToLower(); $envHost = "$($h.Substring(0, $h.Length - 2)).$($h.Substring($h.Length - 2)).environment.api.powerplatform.com"
 $sse = @('application/json')
-$agentP = @{ name = 'agent'; in = 'path'; required = $true; type = 'string'; description = 'Agent schema name, e.g. cr56c_spocode' }
+$agentP = @{ name = 'agent'; in = 'path'; required = $true; type = 'string'; description = 'Agent schema name, e.g. cr123_spocode' }
 $convP = @{ name = 'conversationId'; in = 'path'; required = $true; type = 'string' }
 $apiV = @{ name = 'api-version'; in = 'query'; required = $false; type = 'string' }
 $bodyAny = @{ name = 'body'; in = 'body'; required = $true; schema = @{ type = 'object' } }
