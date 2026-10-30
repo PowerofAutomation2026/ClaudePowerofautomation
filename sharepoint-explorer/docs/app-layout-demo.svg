@@ -35,7 +35,7 @@
     <!-- app header -->
     <rect y="34" width="960" height="46" fill="#fff" stroke="#dbe3f0"/>
     <rect x="16" y="46" width="22" height="22" rx="5" fill="#0b3d91"/>
-    <text x="46" y="62" font-size="13" font-weight="700" fill="#10213f">PNC SharePoint Team</text>
+    <text x="46" y="62" font-size="13" font-weight="700" fill="#10213f">SharePoint Team</text>
     <g font-size="11" fill="#33466b">
       <rect x="210" y="48" width="86" height="22" rx="11" fill="#e8f0fe" stroke="#9db9ef"/><text x="226" y="63" font-weight="700">Dashboard</text>
       <text x="318" y="63">Data</text><text x="362" y="63">Connect</text>

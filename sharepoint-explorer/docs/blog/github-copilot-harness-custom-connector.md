@@ -20,7 +20,7 @@
 * Microsoft's own **HTTP with Microsoft Entra ID** connectors don't work either: they always end in **403 `InsufficientDelegatedPermissions`**.
 * What *does* work: a **custom connector that signs users in through your own Entra app registration**, calling Copilot Studio's direct conversation endpoints.
 * Result: a code app where users pick a harness agent from a drop-down and chat with it, in context, with their own permissions.
-* Everything — scripts, swagger, helper code and a beginner-friendly guide — is open in the repo: **<https://github.com/powerofautomation2027/-PNC-SharePoint-Team-Explorer/blob/main/README.md>**
+* Everything — scripts, swagger, helper code and a beginner-friendly guide — is open in the repo: **[Open the full guide on GitHub](https://github.com/powerofautomation2027/-PNC-SharePoint-Team-Explorer/blob/main/README.md)**
 
 > I looked for an existing walkthrough for this and didn't find one at the time of writing, so this post documents the path that worked for me. Treat it as a field report, not official guidance — Microsoft is still rolling the harness runtime out region by region.
 
@@ -137,7 +137,7 @@ const reply = activities(await post(
 2. Run `scripts/Setup-CopilotStudioConnector.ps1 -EnvironmentId <your-environment-id>` to create the Entra app and connector automatically.
 3. Create the connection once, run `Deploy.cmd` (choose option 2), and add your agent.
 
-👉 **<https://github.com/powerofautomation2027/-PNC-SharePoint-Team-Explorer/blob/main/README.md>**
+👉 **[Open the full guide on GitHub](https://github.com/powerofautomation2027/-PNC-SharePoint-Team-Explorer/blob/main/README.md)**
 
 ## Caveats (being honest)
 

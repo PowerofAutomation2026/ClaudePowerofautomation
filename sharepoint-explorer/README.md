@@ -1,6 +1,6 @@
 <div align="center">
 
-# ⚡ PNC SharePoint Team — Explorer
+# ⚡ SharePoint Team — Explorer
 
 ### Connect **any SharePoint list or library** with one click — dashboards, approvals, e-mail and an **AI assistant** that talks to your **Copilot Studio agents** (classic *and* new experience).
 
@@ -745,7 +745,7 @@ A view changes what is *shown*; it is not a security boundary: SharePoint permis
 * **Record page** for list items: status pills, progress ring, people and due date at a glance, and **click-to-change** status/Yes-No fields right in the details panel.
 * **Links**: “Open in SharePoint” now encodes paths per segment and uses DispForm / `?web=1` for Office files / the library view for folders (the old links returned 404).
 * **Personal views for everyone**: any user (including read-only) can save their own views; they are kept on the device and also in the cloud when the user may write to the settings list. Sharing a view with a group or admins still needs a data admin or owner.
-* **Look and feel**: animated welcome banner, KPI sparklines and a health gauge, accent colour picker (PNC, teal, violet, rose, emerald) in Display.
+* **Look and feel**: animated welcome banner, KPI sparklines and a health gauge, accent colour picker (blue, teal, violet, rose, emerald) in Display.
 
 ## Features
 | | |
