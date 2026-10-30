@@ -36,7 +36,7 @@
   .credit{margin-top:34px;font-size:20px;color:#ffb454;font-weight:600}
 </style></head><body>
 <div class="bg"></div>
-<div class="brand">⚡ PNC SharePoint Team <b>Explorer</b></div>
+<div class="brand">⚡ SharePoint Team <b>Explorer</b></div>
 <div id="stage"></div>
 <div class="dots" id="dots"></div>
 <script>
@@ -58,7 +58,7 @@ function mk(html){const d=document.createElement('div');d.className='slide';d.in
 const slides=[];
 slides.push(mk(`<div class="center"><h1>Your SharePoint,<br><em>supercharged</em></h1><p>Dashboards, approvals, e-mail and an AI assistant that talks to your Copilot Studio agents — in one Power Apps code app.</p>
 <div class="chips"><span style="transition-delay:.5s">📊 Live dashboards</span><span style="transition-delay:.65s">✅ Approvals</span><span style="transition-delay:.8s">🤖 Copilot agents</span><span style="transition-delay:.95s">⚡ Millions of rows</span><span style="transition-delay:1.1s">🛡️ Production-grade</span></div></div>`));
-shots.forEach(([f,h,p])=>slides.push(mk(`<div class="win"><div class="bar"><i></i><i></i><i></i></div><div class="shot"><img src="../screenshots/${f}" alt=""></div></div><div class="cap"><h2>${h}</h2><p>${p}</p></div>`)));
+shots.forEach(([f,h,p])=>slides.push(mk(`<div class="win"><div class="bar"><i></i><i></i><i></i></div><div class="shot"><img src="frames/${f}" alt=""></div></div><div class="cap"><h2>${h}</h2><p>${p}</p></div>`)));
 slides.push(mk(`<div class="center"><h1>Ready in <em>15 minutes</em></h1><p>Double-click Deploy.cmd · connect a list · share the app</p><div class="credit">Created by Kirolos — Power of Automation</div></div>`));
 slides.forEach((_,i)=>dots.appendChild(document.createElement('i')));
 const dur=[4200,...shots.map(()=>4600),5000];
