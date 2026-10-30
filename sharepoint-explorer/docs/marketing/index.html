@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>SharePoint Explorer — marketing video source</title>
+<meta name="viewport" content="width=1280">
+<style>
+  *{box-sizing:border-box;margin:0}
+  html,body{width:1280px;height:720px;overflow:hidden;background:#071433;font-family:"Segoe UI",Inter,Arial,sans-serif;color:#fff}
+  .bg{position:absolute;inset:-20%;background:radial-gradient(circle at 20% 20%,#1769c9 0,transparent 45%),radial-gradient(circle at 80% 80%,#7a4fd6 0,transparent 40%),#071433;animation:drift 18s ease-in-out infinite alternate}
+  @keyframes drift{to{transform:translate(4%,3%) scale(1.08)}}
+  .brand{position:absolute;left:36px;top:26px;font-weight:700;letter-spacing:.3px;font-size:18px;opacity:.9}
+  .brand b{color:#ffb454}
+  .slide{position:absolute;inset:0;opacity:0;transition:opacity .3s ease}
+  .slide.on{opacity:1;transition:opacity .5s ease .3s}
+  .win{position:absolute;left:150px;top:78px;width:980px;height:551px;border-radius:14px;overflow:hidden;background:#fff;box-shadow:0 30px 80px #0009,0 0 0 1px #ffffff22;transform:translateY(24px) scale(.96);transition:transform .9s cubic-bezier(.2,.8,.2,1)}
+  .on .win{transform:none}
+  .win .bar{height:26px;background:#e9eef7;display:flex;gap:6px;align-items:center;padding-left:12px}
+  .win .bar i{width:10px;height:10px;border-radius:50%;background:#c3cde0}
+  .win .shot{position:absolute;top:26px;left:0;width:100%;height:calc(100% - 26px);overflow:hidden}
+  .win img{width:100%;display:block;transform-origin:50% 30%;transform:scale(1)}
+  .on .win img{animation:kb 4.6s ease-out forwards}
+  @keyframes kb{to{transform:scale(1.07)}}
+  .cap{position:absolute;left:0;right:0;bottom:44px;text-align:center;transform:translateY(14px);opacity:0;transition:all .7s .25s ease}
+  .on .cap{transform:none;opacity:1}
+  .cap h2{font-size:30px;font-weight:700;text-shadow:0 2px 14px #000a}
+  .cap p{font-size:16px;margin-top:4px;color:#cfe0ff;text-shadow:0 2px 10px #000a}
+  .dots{position:absolute;left:0;right:0;bottom:14px;display:flex;gap:8px;justify-content:center}
+  .dots i{width:8px;height:8px;border-radius:50%;background:#ffffff44;transition:all .4s}
+  .dots i.on{background:#ffb454;width:26px;border-radius:5px}
+  .center{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;height:100%;padding:0 80px}
+  .center h1{font-size:62px;line-height:1.05;font-weight:800;letter-spacing:-1px;transform:translateY(30px);opacity:0;transition:all .9s .1s cubic-bezier(.2,.8,.2,1)}
+  .center h1 em{font-style:normal;background:linear-gradient(90deg,#ffb454,#ff6fb5);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .center p{font-size:22px;margin-top:18px;color:#cfe0ff;max-width:880px;transform:translateY(30px);opacity:0;transition:all .9s .35s ease}
+  .on .center h1,.on .center p{transform:none;opacity:1}
+  .chips{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:28px;max-width:900px}
+  .chips span{padding:8px 16px;border-radius:999px;background:#ffffff1c;border:1px solid #ffffff33;font-size:15px;opacity:0;transform:translateY(14px);transition:all .6s ease}
+  .on .chips span{opacity:1;transform:none}
+  .credit{margin-top:34px;font-size:20px;color:#ffb454;font-weight:600}
+</style></head><body>
+<div class="bg"></div>
+<div class="brand">⚡ PNC SharePoint Team <b>Explorer</b></div>
+<div id="stage"></div>
+<div class="dots" id="dots"></div>
+<script>
+const shots=[
+ ['01-dashboard.png','A dashboard that builds itself','KPIs, charts, smart insights and data health — from any list or library'],
+ ['02-connect.png','Connect anything in three clicks','Pick a site, a list or library, press Connect — the whole app rebuilds around its columns'],
+ ['03-data-grid.png','Millions of rows, zero freeze','Virtualised grid, server-side search, inline editing, colour rules, saved views'],
+ ['04-item-details.png','Everything about an item, one panel','Share, favourite, manage access, version history and approval status'],
+ ['05-new-item.png','Forms generated from your schema','Tabs for long forms, validation, attachments — nothing to configure'],
+ ['10-board.png','Board, cards and calendar views','See the same data the way your team prefers to work'],
+ ['08-dashboard-designer.png','Admins design the live dashboard','Numbers, gauges, bars, donuts, timelines and top-N — saved for everyone'],
+ ['09-approvals.png','Multi-layer approvals, automatic triggers','Conditional layers, escalation, delegation, full history and audit export'],
+ ['06-assistant-setup.png','Pick your Copilot Studio agent','Classic and new-experience agents, with a step-by-step connection test'],
+ ['07-assistant-chat.png','Chat with your agent, in context','The current list, filters and selection travel with every question']
+];
+const stage=document.getElementById('stage'),dots=document.getElementById('dots');
+const total=shots.length+2;
+function mk(html){const d=document.createElement('div');d.className='slide';d.innerHTML=html;stage.appendChild(d);return d}
+const slides=[];
+slides.push(mk(`<div class="center"><h1>Your SharePoint,<br><em>supercharged</em></h1><p>Dashboards, approvals, e-mail and an AI assistant that talks to your Copilot Studio agents — in one Power Apps code app.</p>
+<div class="chips"><span style="transition-delay:.5s">📊 Live dashboards</span><span style="transition-delay:.65s">✅ Approvals</span><span style="transition-delay:.8s">🤖 Copilot agents</span><span style="transition-delay:.95s">⚡ Millions of rows</span><span style="transition-delay:1.1s">🛡️ Production-grade</span></div></div>`));
+shots.forEach(([f,h,p])=>slides.push(mk(`<div class="win"><div class="bar"><i></i><i></i><i></i></div><div class="shot"><img src="../screenshots/${f}" alt=""></div></div><div class="cap"><h2>${h}</h2><p>${p}</p></div>`)));
+slides.push(mk(`<div class="center"><h1>Ready in <em>15 minutes</em></h1><p>Double-click Deploy.cmd · connect a list · share the app</p><div class="credit">Created by Kirolos — Power of Automation</div></div>`));
+slides.forEach((_,i)=>dots.appendChild(document.createElement('i')));
+const dur=[4200,...shots.map(()=>4600),5000];
+let i=-1;
+function show(n){slides.forEach((s,k)=>s.classList.toggle('on',k===n));[...dots.children].forEach((d,k)=>d.classList.toggle('on',k===n));window.__slide=n}
+function next(){i=(i+1);if(i>=slides.length){window.__done=true;return}show(i);setTimeout(next,dur[i])}
+const q=new URLSearchParams(location.search);
+if(q.has('loop')){let n=0;(function loop(){show(n%slides.length);setTimeout(()=>{n++;loop()},dur[n%slides.length])})()}else setTimeout(next,600)
+</script></body></html>

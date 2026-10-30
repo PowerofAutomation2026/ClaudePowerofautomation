@@ -17,7 +17,22 @@
 
 ---
 
+## 🎬 One-minute tour
+
+<div align="center">
+
+<a href="docs/marketing/sharepoint-explorer-marketing.mp4"><img src="docs/marketing/sharepoint-explorer-marketing.gif" alt="Marketing tour of SharePoint Explorer: dashboards, grid, approvals, Copilot Studio agents" width="860"></a>
+
+<sub>▶ Click the animation for the full-quality MP4 (<code>docs/marketing/sharepoint-explorer-marketing.mp4</code>). Source of the video: <code>docs/marketing/index.html</code> — all frames use demo data only.</sub>
+
+</div>
+
+> **Images or video not showing?** They are loaded from the `docs/` folder next to this README. Keep the folder structure when you copy the README (or open it from the unzipped package / the repository on GitHub); a README opened on its own cannot show them.
+
+---
+
 ## 📑 Contents
+0. [One-minute tour](#-one-minute-tour)
 1. [Feature showcase](#-feature-showcase)
 2. [Screens](#-screens)
 3. [How it works](#-how-it-works)
