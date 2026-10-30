@@ -59,6 +59,41 @@
   footer{border-top:1px solid var(--line);padding:28px 16px 40px;text-align:center}
   footer p{margin:.4em auto}
   @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation:none!important;transition:none!important}}
+
+  .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  .hero{position:relative;overflow:hidden}
+  .hero::before,.hero::after{content:"";position:absolute;border-radius:50%;filter:blur(40px);opacity:.45;pointer-events:none}
+  .hero::before{width:320px;height:320px;background:#ff6fb5;right:-90px;top:-90px;animation:float 9s ease-in-out infinite alternate}
+  .hero::after{width:260px;height:260px;background:#4aa3ff;left:-80px;bottom:-110px;animation:float 11s ease-in-out infinite alternate-reverse}
+  @keyframes float{to{transform:translate(24px,18px) scale(1.12)}}
+  .hero .wrap{position:relative;z-index:1}
+  .hero h1{background:linear-gradient(90deg,#fff,#ffe3b8 60%,#ffc2e1);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .progress{position:fixed;left:0;top:0;height:4px;width:0;background:linear-gradient(90deg,#ffb454,#ff6fb5);z-index:20;transition:width .1s linear}
+  .journey{margin:24px 0}
+  figure.flow{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px 12px 10px;box-shadow:0 14px 40px #0b1b4a18}
+  .flowsvg{width:100%;height:auto;display:block}
+  .flowsvg text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;fill:var(--fg)}
+  .flowsvg .ic{font-size:26px}
+  .flowsvg .lb{font-size:15px;font-weight:700}
+  .flowsvg .sm{font-size:12px;fill:var(--muted)}
+  .flowsvg .n{fill:color-mix(in srgb,var(--accent) 18%,var(--card));stroke:var(--accent);stroke-width:3}
+  .flowsvg .n.ok{stroke:#1f9d62;fill:color-mix(in srgb,#1f9d62 20%,var(--card));animation:glow 2.4s ease-in-out infinite}
+  .flowsvg .wall{fill:color-mix(in srgb,#e5484d 14%,var(--card));stroke:#e5484d;stroke-width:3;transform-box:fill-box;transform-origin:center;animation:shake 7s ease-in-out infinite}
+  .flowsvg .w2 .wall{animation-delay:1.1s}.flowsvg .w3 .wall{animation-delay:2.4s}
+  .flowsvg .dash{animation:dashmove 1.2s linear infinite}
+  @keyframes dashmove{to{stroke-dashoffset:-24}}
+  @keyframes glow{50%{stroke-width:6}}
+  @keyframes shake{0%,12%,100%{transform:none}4%{transform:translateX(-3px)}8%{transform:translateX(3px)}}
+  ul.stats{list-style:none;margin:14px 0 0;padding:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
+  ul.stats li{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 10px;text-align:center}
+  ul.stats strong{display:block;font-size:1.9rem;line-height:1.1;background:linear-gradient(90deg,#ff9a3c,#ff4f9a);-webkit-background-clip:text;background-clip:text;color:transparent}
+  ul.stats span{font-size:.85rem;color:var(--muted)}
+  h2.wallh{display:flex;align-items:center;gap:12px}
+  h2.wallh .badge{flex:none;display:inline-grid;place-items:center;min-width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,#ff9a3c,#ff4f9a);color:#fff;font-size:1.1rem}
+  .reveal{opacity:1;transform:none}
+  .js .reveal{opacity:0;transform:translateY(18px);transition:opacity .6s ease,transform .6s ease}
+  .js .reveal.in{opacity:1;transform:none}
+  @media (prefers-reduced-motion:reduce){.hero::before,.hero::after{animation:none}.js .reveal{opacity:1;transform:none}.flowsvg .packet{display:none}}
   @media print{header.hero{background:none;color:#000}.skip,nav.toc{display:none}pre{white-space:pre-wrap}}
 </style>
 </head>
@@ -92,13 +127,33 @@
   </details>
 </nav>
 
-<figure>
-  <video controls playsinline preload="metadata" aria-describedby="vid-desc">
-    <source src="../marketing/sharepoint-explorer-marketing.mp4" type="video/mp4">
-    Your browser can’t play this video. <a href="../marketing/sharepoint-explorer-marketing.mp4">Download the MP4</a>.
-  </video>
-  <figcaption id="vid-desc">One-minute silent tour of the app: dashboard, connecting a list, data grid, item details, forms, board view, dashboard designer, approvals, and chatting with a Copilot Studio agent. Every caption is shown on screen. Demo data only.</figcaption>
-</figure>
+<section class="journey" aria-labelledby="journey-h">
+  <h2 id="journey-h" class="sr-only">The journey at a glance</h2>
+  <figure class="flow">
+    <svg viewBox="0 55 720 140" role="img" aria-labelledby="flow-t flow-d" class="flowsvg">
+      <title id="flow-t">The journey: from a blocked agent to a working chat</title>
+      <desc id="flow-d">A message travels from the code app through three obstacles — a 403 permission error, a redirect address mismatch and a 404 route error — and finally reaches the Copilot Studio agent, which answers.</desc>
+      <defs>
+        <linearGradient id="g1" x1="0" x2="1"><stop offset="0" stop-color="#ffb454"/><stop offset="1" stop-color="#ff6fb5"/></linearGradient>
+        <linearGradient id="g2" gradientUnits="userSpaceOnUse" x1="60" y1="0" x2="660" y2="0"><stop offset="0" stop-color="#7cc4ff"/><stop offset="1" stop-color="#8f7bff"/></linearGradient>
+      </defs>
+      <path id="route" d="M60 105 H660" stroke="url(#g2)" stroke-width="4" stroke-linecap="round" stroke-dasharray="2 10" fill="none" class="dash"/>
+      <g class="node"><circle cx="60" cy="105" r="30" class="n"/><text x="60" y="110" text-anchor="middle" class="ic">📱</text><text x="60" y="160" text-anchor="middle" class="lb">Code app</text></g>
+      <g class="node w1"><rect x="190" y="75" width="60" height="60" rx="14" class="wall"/><text x="220" y="112" text-anchor="middle" class="ic">🚫</text><text x="220" y="160" text-anchor="middle" class="lb">403</text><text x="220" y="178" text-anchor="middle" class="sm">permission</text></g>
+      <g class="node w2"><rect x="330" y="75" width="60" height="60" rx="14" class="wall"/><text x="360" y="112" text-anchor="middle" class="ic">↩️</text><text x="360" y="160" text-anchor="middle" class="lb">AADSTS50011</text><text x="360" y="178" text-anchor="middle" class="sm">redirect</text></g>
+      <g class="node w3"><rect x="470" y="75" width="60" height="60" rx="14" class="wall"/><text x="500" y="112" text-anchor="middle" class="ic">🧭</text><text x="500" y="160" text-anchor="middle" class="lb">404</text><text x="500" y="178" text-anchor="middle" class="sm">route</text></g>
+      <g class="node win"><circle cx="660" cy="105" r="30" class="n ok"/><text x="660" y="110" text-anchor="middle" class="ic">🤖</text><text x="660" y="160" text-anchor="middle" class="lb">Agent answers</text></g>
+      <circle r="9" fill="url(#g1)" class="packet"><animateMotion dur="7s" repeatCount="indefinite" path="M60 105 H660" keyPoints="0;1" keyTimes="0;1" calcMode="linear"/></circle>
+    </svg>
+    <figcaption>Three walls between a code app and a GitHub Copilot harness agent — and the one connector that gets through all of them.</figcaption>
+  </figure>
+  <ul class="stats" aria-label="Key facts">
+    <li><strong>3</strong><span>walls solved</span></li>
+    <li><strong>1</strong><span>custom connector</span></li>
+    <li><strong>~70</strong><span>lines of helper code</span></li>
+    <li><strong>0</strong><span>secrets in the browser</span></li>
+  </ul>
+</section>
 
 <section id="tldr" class="tldr" aria-labelledby="tldr-h">
   <h2 id="tldr-h" style="margin-top:.6em">Summary</h2>
@@ -117,14 +172,14 @@
 <p>I had built a Power Apps <strong>code app</strong> that turns any SharePoint list or library into a live dashboard with approvals, e-mail and search. The natural next feature was an <strong>AI assistant</strong>: pick a Copilot Studio agent, ask “what needs attention right now?”, and have the agent see the list the user is looking at.</p>
 <p>Classic agents were easy, because the built-in <strong>Microsoft Copilot Studio</strong> connector has an <em>Execute Copilot</em> action. Then I created an agent in the new experience: same environment, published, “Authenticate with Microsoft”. The connector couldn’t find it. Agents built on the GitHub Copilot harness run on a different runtime that the classic connector doesn’t speak to.</p>
 
-<h2 id="wall1">Wall 1: “There’s an HTTP connector for that”</h2>
+<h2 id="wall1" class="wallh"><span class="badge" aria-hidden="true">1</span><span>Wall 1: “There’s an HTTP connector for that”</span></h2>
 <p>Copilot Studio has a documented direct-to-engine API, so the obvious idea is a generic HTTP connector. Power Platform ships two: <strong>HTTP with Microsoft Entra ID</strong> (preauthorized and not). The result:</p>
 <pre tabindex="0"><code>403 InsufficientDelegatedPermissions
 Missing CopilotStudio.Copilots.Invoke</code></pre>
 <p>The token needs the delegated permission <code>CopilotStudio.Copilots.Invoke</code> on the <strong>Power Platform API</strong>. Those connectors sign users in through Microsoft-owned apps, and Entra doesn’t let you grant one Microsoft app consent for another Microsoft API (you’ll see <code>AADSTS65002</code>). A tenant-wide grant script can’t fix that.</p>
 <p><strong>Lesson:</strong> don’t fight it. Use an app registration you own.</p>
 
-<h2 id="wall2">Wall 2: “Fine, a custom connector. But sign-in fails”</h2>
+<h2 id="wall2" class="wallh"><span class="badge" aria-hidden="true">2</span><span>Wall 2: “Fine, a custom connector. But sign-in fails”</span></h2>
 <p>A custom connector can use OAuth 2.0 with Azure Active Directory and your own client ID. Create the app registration, add the delegated permission, grant admin consent, create a secret, import a swagger file. Then sign-in fails:</p>
 <pre tabindex="0"><code>AADSTS50011: The redirect URI
 'https://global.consent.azure-apim.net/redirect/new-5fcontoso-20copilot-20direct-5f0123…'
@@ -135,7 +190,7 @@ does not match the redirect URIs configured for the application</code></pre>
   "https://global.consent.azure-apim.net/redirect/&lt;your-connector-unique-name&gt;"</code></pre>
 <p><code>--web-redirect-uris</code> replaces the whole list, so always pass both.</p>
 
-<h2 id="wall3">Wall 3: “Signed in! … 404 RouteNotFound”</h2>
+<h2 id="wall3" class="wallh"><span class="badge" aria-hidden="true">3</span><span>Wall 3: “Signed in! … 404 RouteNotFound”</span></h2>
 <p>Discovery worked on the first call:</p>
 <pre tabindex="0"><code>GET /copilotstudio/agents/{agent}/conversation-endpoints
 → createConversation + executeTurn URLs</code></pre>
@@ -212,5 +267,19 @@ const reply = activities(await post(
   <p>If this saved you a day of AADSTS errors, share it with someone building code apps.</p>
   <p><strong>Created by Kirolos — Power of Automation</strong></p>
 </footer>
+<div class="progress" id="progress" aria-hidden="true"></div>
+<script>
+document.documentElement.classList.add('js');
+(function(){var bar=document.getElementById('progress');
+function upd(){var h=document.documentElement;var m=h.scrollHeight-h.clientHeight;bar.style.width=(m>0?Math.min(100,h.scrollTop/m*100):0)+'%'}
+addEventListener('scroll',upd,{passive:true});upd();
+var els=[].slice.call(document.querySelectorAll('main h2,main .tldr,main .note,main pre,main .tablewrap,main figure.flow'));
+els.forEach(function(e){e.classList.add('reveal')});
+if(!('IntersectionObserver' in window)){els.forEach(function(e){e.classList.add('in')});return}
+var io=new IntersectionObserver(function(es){es.forEach(function(x){if(x.isIntersecting){x.target.classList.add('in');io.unobserve(x.target)}})},{rootMargin:'0px 0px -8% 0px'});
+els.forEach(function(e){io.observe(e)});
+setTimeout(function(){els.forEach(function(e){var r=e.getBoundingClientRect();if(r.top<innerHeight)e.classList.add('in')})},50);
+})();
+</script>
 </body>
 </html>
