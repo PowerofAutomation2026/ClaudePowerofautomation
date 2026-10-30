@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 430" role="img" aria-label="Illustration: custom connector Security tab with sample values">
+<style>text{font-family:Segoe UI,Arial,sans-serif}.k{fill:#5b6b86;font-size:11px}.v{fill:#10213f;font-size:12px}</style>
+<rect width="900" height="430" rx="12" fill="#fff" stroke="#dbe3f0"/>
+<text x="24" y="38" font-size="16" font-weight="700" fill="#10213f">SPX Copilot Direct — Security (sample values)</text>
+<text x="24" y="58" font-size="11" fill="#5b6b86">make.powerapps.com → Custom connectors → your connector → Edit → 2. Security</text>
+<g>
+<text class="k" x="24" y="92">Authentication type</text><rect x="24" y="98" width="400" height="28" rx="5" fill="#f3f6fb" stroke="#c9d6ee"/><text class="v" x="36" y="117">OAuth 2.0</text>
+<text class="k" x="456" y="92">Identity provider</text><rect x="456" y="98" width="420" height="28" rx="5" fill="#f3f6fb" stroke="#c9d6ee"/><text class="v" x="468" y="117">Azure Active Directory</text>
+<text class="k" x="24" y="152">Client id</text><rect x="24" y="158" width="400" height="28" rx="5" fill="#f3f6fb" stroke="#c9d6ee"/><text class="v" x="36" y="177">00000000-0000-0000-0000-000000000000  (your app's Application ID)</text>
+<text class="k" x="456" y="152">Client secret</text><rect x="456" y="158" width="420" height="28" rx="5" fill="#f3f6fb" stroke="#c9d6ee"/><text class="v" x="468" y="177">••••••••••••••••  (the secret VALUE you copied once)</text>
+<text class="k" x="24" y="212">Login URL</text><rect x="24" y="218" width="400" height="28" rx="5" fill="#f3f6fb" stroke="#c9d6ee"/><text class="v" x="36" y="237">https://login.windows.net</text>
+<text class="k" x="456" y="212">Tenant ID</text><rect x="456" y="218" width="420" height="28" rx="5" fill="#f3f6fb" stroke="#c9d6ee"/><text class="v" x="468" y="237">11111111-2222-3333-4444-555555555555  (your Directory ID)</text>
+<text class="k" x="24" y="272">Resource URL</text><rect x="24" y="278" width="400" height="28" rx="5" fill="#f3f6fb" stroke="#c9d6ee"/><text class="v" x="36" y="297">https://api.powerplatform.com</text>
+<text class="k" x="456" y="272">Enable on-behalf-of login</text><rect x="456" y="278" width="420" height="28" rx="5" fill="#f3f6fb" stroke="#c9d6ee"/><text class="v" x="468" y="297">false</text>
+<text class="k" x="24" y="332">Scope</text><rect x="24" y="338" width="852" height="28" rx="5" fill="#f3f6fb" stroke="#c9d6ee"/><text class="v" x="36" y="357">https://api.powerplatform.com/CopilotStudio.Copilots.Invoke</text>
+<text class="k" x="24" y="392">Redirect URL (shown after “Create connector” — copy it into the app registration)</text><rect x="24" y="398" width="852" height="28" rx="5" fill="#fff7e6" stroke="#f0c36d"/><text class="v" x="36" y="417">https://global.consent.azure-apim.net/redirect/new-5fcontoso-20copilot-20direct-5f0123456789abcdef</text>
+</g>
+</svg>

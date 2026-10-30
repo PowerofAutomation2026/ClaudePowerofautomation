@@ -18,64 +18,132 @@
 ---
 
 ## 📑 Contents
-1. [What you get](#-what-you-get)
-2. [How it works](#-how-it-works)
-3. [Requirements](#-requirements)
-4. [Quick start (15 minutes)](#-quick-start-15-minutes)
-5. [AI assistant — pick your agent type](#-ai-assistant--pick-your-agent-type)
-6. [Classic Copilot Studio agents (no extra setup)](#-classic-copilot-studio-agents-no-extra-setup)
-7. [New-experience agents: custom connector + app registration](#-new-experience-agents-custom-connector--app-registration)
-8. [The Swagger (OpenAPI) file](#-the-swagger-openapi-file)
-9. [Beginner guide: add the connector to a NEW code app](#-beginner-guide-add-the-connector-to-a-new-code-app)
-10. [All the links you need](#-all-the-links-you-need)
-11. [Security & privacy checklist](#-security--privacy-checklist)
-12. [FAQ & troubleshooting](#-faq--troubleshooting)
-13. [Full feature reference](#-full-feature-reference)
+1. [Feature showcase](#-feature-showcase)
+2. [Screens](#-screens)
+3. [How it works](#-how-it-works)
+4. [Requirements](#-requirements)
+5. [Quick start (15 minutes)](#-quick-start-15-minutes)
+6. [AI assistant — pick your agent type](#-ai-assistant--pick-your-agent-type)
+7. [Classic Copilot Studio agents](#-classic-copilot-studio-agents-no-extra-setup)
+8. [New-experience agents (admin setup)](#-new-experience-agents-custom-connector--app-registration)
+9. [The Swagger (OpenAPI) file](#-the-swagger-openapi-file)
+10. [**Developer guide — from scratch, step by step**](#-developer-guide--from-scratch-step-by-step)
+11. [Authentication & URL reference](#-authentication--url-reference)
+12. [Security & privacy checklist](#-security--privacy-checklist)
+13. [FAQ & troubleshooting](#-faq--troubleshooting)
+14. [Full feature reference](#-full-feature-reference)
 
 ---
 
-## ✨ What you get
+## ✨ Feature showcase
 
-| | Feature | Highlights |
-|---|---|---|
-| 🔌 | **Connect anything** | Pick a site → any list or library → **Connect**. All users then see the same source. Several sources can be published. |
-| 📊 | **Dashboards** | Auto-built from the schema, or **admin-designed** (numbers, gauges, bars, donuts, timelines, top-N, notes) and saved for everyone. |
-| ✅ | **Approvals** | Multi-layer workflows per list/library, conditional layers, escalation, delegation, **automatic triggers** on create/modify with criteria, full history and audit CSV. |
-| ✉️ | **Library e-mail** | Send files/folders as links (Outlook web, default mail app, copy, `.eml`). |
-| 🤖 | **AI assistant** | Chat with **Copilot Studio agents inside the app** (classic and new experience) with the current list/selection as context; Agent Builder / M365 Copilot agents as one-click links. |
-| 🔎 | **Search & export** | Instant search up to 25k items, server-side beyond; CSV / JSON / PDF, streaming export of everything matching. |
-| ✏️ | **Inline editing & colour rules** | Excel-style editing, undo, conditional formatting. |
-| 🛡️ | **Production safety nets** | Request circuit breaker, memory watchdog, safe mode, auto-recovery, error log — built for "heavy duty". |
-| ♿ | **Accessibility** | Light / dark / high-contrast, keyboard grid, ARIA, axe-core clean. |
-| 🚀 | **Zero-touch deploy** | `Deploy.cmd` installs tools, wires connectors, builds and publishes. |
+<table>
+<tr><td width="33%" valign="top">
 
-<div align="center">
+### 🔌 Connect & explore
+* Any **site → list or library → Connect**
+* Several sources, switch from the header
+* Grid, **card**, **board** and **calendar** views
+* Libraries: folders, file types, storage, largest files
+* **Millions of rows**: virtualised grid, keyset paging, server-side search
+* Saved **views**, favourites, share links, record page
 
-![Animated demo of the app layout: dashboard, live charts and the AI assistant panel](docs/app-layout-demo.svg)
+</td><td width="33%" valign="top">
 
-<sub>Animated layout preview (illustrative sample data). Open <code>docs/app-layout-demo.svg</code> in any browser to replay it.</sub>
+### 📊 Dashboards
+* **Auto-built** KPIs, timeline, breakdowns, data health, insights
+* **Admin designer**: number · gauge · bar · donut · timeline · top-N · note
+* Per-widget filters, click-through to items
+* Live pulse (new/changed items), **Dashboard PDF**
+* Deep scan of the whole list without freezing
 
-</div>
+</td><td width="33%" valign="top">
+
+### ✅ Approvals
+* **Multi-layer** workflows per list/library
+* **Automatic** start on create/modify with criteria
+* Conditional layers, escalation, delegation, bulk actions
+* Approval tag in the grid, step tracker, full **history** + audit CSV
+* Notify approvers by prefilled e-mail
+
+</td></tr>
+<tr><td valign="top">
+
+### 🤖 AI assistant
+* **Copilot Studio agents inside the app** — classic *and* new experience
+* Agent **drop-down** from your environment
+* Sends the current list, filters and selection as context
+* Agent Builder / M365 Copilot agents as one-click links
+* Step-by-step **Test connection** diagnostics
+
+</td><td valign="top">
+
+### ✏️ Work faster
+* **Inline editing** (Excel-style, undo)
+* **Colour rules** (conditional formatting)
+* Forms generated from the schema, tabs for long forms
+* **Import CSV**, duplicate, favourites
+* **Search everywhere** (Ctrl+K), command palette
+
+</td><td valign="top">
+
+### 📤 Share & export
+* CSV (formula-safe), JSON, PDF
+* **Streaming export** of everything matching
+* **E-mail files/folders** (Outlook web, mailto, copy, `.eml`)
+* Roles from SharePoint permissions: reader · contributor · data admin
+* Manage access and sharing from the item panel
+
+</td></tr>
+<tr><td valign="top">
+
+### 🛡️ Production-grade
+* Request **circuit breaker**, memory **watchdog**
+* **Safe mode** + auto-recovery, no white-page loops
+* Error log ring buffer, blank-page overlay
+* Hard caps (40,000 rows in memory) with clear messages
+
+</td><td valign="top">
+
+### ♿ Accessible
+* Light / dark / **high-contrast** / system themes
+* Fully keyboard-operable grid
+* ARIA roles, focus trap, reduced motion
+* **axe-core: 0 violations**
+
+</td><td valign="top">
+
+### 🚀 Zero-touch deploy
+* `Deploy.cmd` installs Node + `pac`, wires connectors, builds, publishes
+* Updates the same app on re-run
+* Owners baked into the bundle
+* `Run-Demo.cmd` — try everything with sample data
+
+</td></tr>
+</table>
 
 ---
 
 ## 🖼️ Screens
 
-<table>
-<tr>
-<td width="50%"><b>Dashboard</b> — auto-built KPIs, charts, smart insights<br><img src="docs/screenshots/01-dashboard.png" alt="Dashboard"></td>
-<td width="50%"><b>Connect</b> — pick any site, list or library<br><img src="docs/screenshots/02-connect.png" alt="Connect screen"></td>
-</tr>
-<tr>
-<td><b>Data grid</b> — virtualised, inline editing, filters, views<br><img src="docs/screenshots/03-data-grid.png" alt="Data grid"></td>
-<td><b>Item details</b> — quick actions, approvals, version history<br><img src="docs/screenshots/04-item-details.png" alt="Item details"></td>
-</tr>
-<tr>
-<td colspan="2"><b>New item form</b> — generated from the list's columns, with tabs for long forms<br><img src="docs/screenshots/05-new-item.png" alt="New item form"></td>
-</tr>
-</table>
+> All images use the built-in **demo data** or **sample values** — no real tenant, site, user or agent information.
 
-<sub>All screenshots use the built-in demo data (no real tenant, site, user or agent information).</sub>
+<div align="center">
+
+![Animated layout of the app](docs/app-layout-demo.svg)
+
+<sub>Animated layout preview — open <code>docs/app-layout-demo.svg</code> in a browser to replay.</sub>
+
+</div>
+
+| | |
+|---|---|
+| **Dashboard** — auto-built KPIs, charts, insights<br><img src="docs/screenshots/01-dashboard.png" alt="Dashboard"> | **Connect** — any site, list or library<br><img src="docs/screenshots/02-connect.png" alt="Connect"> |
+| **Data grid** — virtualised, inline edit, filters<br><img src="docs/screenshots/03-data-grid.png" alt="Data grid"> | **Item details** — actions, approvals, history<br><img src="docs/screenshots/04-item-details.png" alt="Item details"> |
+| **New item** — generated from the schema<br><img src="docs/screenshots/05-new-item.png" alt="New item"> | **Board view**<br><img src="docs/screenshots/10-board.png" alt="Board view"> |
+| **Dashboard designer** (admins)<br><img src="docs/screenshots/08-dashboard-designer.png" alt="Dashboard designer"> | **Approval workflow designer**<br><img src="docs/screenshots/09-approvals.png" alt="Approval designer"> |
+| **Add an agent** — pick, test, save<br><img src="docs/screenshots/06-assistant-setup.png" alt="Assistant setup"> | **Chat with the agent** — list context included<br><img src="docs/screenshots/07-assistant-chat.png" alt="Assistant chat"> |
+| **Entra redirect URIs** (sample values)<br><img src="docs/entra-redirect-uris.svg" alt="Entra redirect URIs"> | **Connector security tab** (sample values)<br><img src="docs/connector-security.svg" alt="Connector security"> |
 
 ---
 
@@ -217,49 +285,152 @@ Power Apps → **Custom connectors → SPX Copilot Direct → Edit → Swagger e
 
 ---
 
-## 🎓 Beginner guide: add the connector to a NEW code app
+## 💻 Developer guide — from scratch, step by step
 
-Goal: a brand-new Power Apps **code app** (any React/TypeScript app) that chats with a **new-experience Copilot Studio agent** (the ones built on the *GitHub Copilot harness*: left menu shows *Skills / Connected agents*, no *Topics*). You do **not** need to know Entra or OpenAPI — follow the numbers.
+Goal: take a **brand-new Power Apps code app** and let it chat with a **new-experience Copilot Studio agent** (built on the *GitHub Copilot harness* — left menu shows *Skills / Connected agents*, no *Topics*). Everything below uses **sample values** — replace the ones in `<angle brackets>` or `ALL_CAPS`.
 
-> **Words to know** — *Code app*: a web app (React, Vite…) that runs inside Power Apps and uses connectors with each user's own sign-in. *Connector*: a ready-made door to a service. *Custom connector*: a door you build yourself from a Swagger file. *App registration*: a name tag your tenant gives an app so it may ask for permissions. *Environment ID*: the GUID of your Power Platform environment.
+> **Words to know** — *Code app*: a web app (React/Vite) that runs inside Power Apps and uses connectors with each user's own sign-in. *Connector*: a ready-made door to a service. *Custom connector*: a door you describe yourself with a Swagger (OpenAPI) file. *App registration*: the identity your tenant gives an app so it may request permissions. *Environment ID*: the GUID of your Power Platform environment.
 
-**Before you start** (one time): install [Node.js LTS](https://nodejs.org), [Azure CLI](https://aka.ms/installazurecliwindows) and the [Power Platform CLI](https://learn.microsoft.com/power-platform/developer/cli/introduction) (`dotnet tool install --global Microsoft.PowerApp.CLI.Tool` or the installer). You need a Power Apps Premium licence and a **published** Copilot Studio agent with **Authentication = Authenticate with Microsoft**.
+### Step 0 — Prerequisites
+| Install | Check |
+|---|---|
+| [Node.js LTS](https://nodejs.org) | `node -v` |
+| [Azure CLI](https://aka.ms/installazurecliwindows) | `az version` |
+| [Power Platform CLI](https://learn.microsoft.com/power-platform/developer/cli/introduction) (`dotnet tool install --global Microsoft.PowerApp.CLI.Tool`) | `pac` |
+| PowerShell 7 | `pwsh -v` |
 
-### Step 1 — Create the connector once per environment (admin)
-Use this repo's script — it creates the Entra app registration **and** the custom connector:
+You also need: a **Power Apps Premium** licence, an account allowed to **create app registrations and grant admin consent**, and a **published** Copilot Studio agent with **Authentication = Authenticate with Microsoft**.
+
+### Step 1 — Set the sample variables
 ```powershell
-./scripts/Setup-CopilotStudioConnector.ps1 -EnvironmentId <your-environment-GUID>
-```
-(or do it by hand: *New-experience agents → Option B* above). Then create the connection: https://make.powerapps.com → **Connections → New connection → SPX Copilot Direct** → sign in. **Done for every app in that environment** — a second app does not need a new connector.
+$ENV_ID    = "00000000-0000-0000-0000-000000000000"   # Power Platform environment ID (make.powerapps.com/environments/<ID>/…)
+$APP_NAME  = "MyApp-CopilotStudio"                    # name of the Entra app registration
+$CONNECTOR = "My Copilot Direct"                      # display name of the custom connector
+$PP_API    = "8578e004-a5c6-46e7-913e-12f58912df43"   # Power Platform API (same for every tenant)
+$SCOPE_ID  = "204440d3-c1d0-4826-b570-99eb6f5e2aeb"   # CopilotStudio.Copilots.Invoke (same for every tenant)
 
-### Step 2 — Create the new code app
+# connector host = environment ID without dashes; the LAST 2 characters come after a dot
+$h = ($ENV_ID -replace '-','').ToLower()
+$HOST_NAME = "$($h.Substring(0,$h.Length-2)).$($h.Substring($h.Length-2)).environment.api.powerplatform.com"
+```
+
+### Step 2 — Create the Entra app registration (authentication)
+```powershell
+az login --allow-no-subscriptions
+$TENANT_ID = az account show --query tenantId -o tsv
+
+az ad sp create --id $PP_API 2>$null            # make sure the Power Platform API exists in your tenant (ignore "already exists")
+
+$APP_ID = az ad app create --display-name $APP_NAME --sign-in-audience AzureADMyOrg `
+            --web-redirect-uris "https://global.consent.azure-apim.net/redirect" --query appId -o tsv
+az ad sp create --id $APP_ID | Out-Null
+
+az ad app permission add --id $APP_ID --api $PP_API --api-permissions "$SCOPE_ID=Scope"   # delegated CopilotStudio.Copilots.Invoke
+az ad app permission admin-consent --id $APP_ID                                          # needs an admin
+
+$SECRET = az ad app credential reset --id $APP_ID --append --display-name connector --years 1 --query password -o tsv
+```
+Keep `$APP_ID`, `$TENANT_ID` and `$SECRET` private (the secret is shown **once**). Portal route: see *Option B* above.
+
+### Step 3 — Write the two connector files
+**`apiDefinition.swagger.json`** — the full, verified file is [`copilot-connector/apiDefinition.swagger.json`](copilot-connector/apiDefinition.swagger.json). Replace `YOUR-ENVIRONMENT-HOST` with `$HOST_NAME` (or generate it: `./scripts/Setup-CopilotStudioConnector.ps1 -EnvironmentId $ENV_ID -SwaggerOnly`). The important parts:
+```jsonc
+{
+  "swagger": "2.0",
+  "info": { "title": "My Copilot Direct", "version": "1.0" },
+  "host": "YOUR-ENVIRONMENT-HOST.environment.api.powerplatform.com",
+  "basePath": "/", "schemes": ["https"],
+  "consumes": ["application/json"], "produces": ["application/json"],
+  "paths": {
+    // 1) ask Copilot Studio where the agent's conversation endpoints are
+    "/copilotstudio/agents/{agent}/conversation-endpoints": {
+      "get": { "operationId": "Discover", "parameters": [ { "name": "agent", "in": "path", "required": true, "type": "string" } ],
+               "responses": { "200": { "description": "OK" }, "default": { "description": "Error" } } }
+    },
+    // 2) generic POST with N path segments — one operation per N (Path4 … Path12) so slashes are NOT encoded
+    "/{s1}/{s2}/{s3}/{s4}/{s5}/{s6}/{s7}/{s8}": {
+      "post": { "operationId": "Path8",
+        "parameters": [ { "name": "s1", "in": "path", "required": true, "type": "string" }, /* … s2 … s8 … */
+                       { "name": "api-version", "in": "query", "required": false, "type": "string" },
+                       { "name": "body", "in": "body", "required": true, "schema": { "type": "object" } } ],
+        "responses": { "200": { "description": "OK" }, "default": { "description": "Error" } } }
+    }
+    /* … Path4, Path5, Path6, Path7, Path9 … Path12 … */
+  }
+}
+```
+**`apiProperties.json`** — tells Power Platform how to sign users in (no secret is stored in git; paste yours locally):
+```json
+{
+  "properties": {
+    "connectionParameters": {
+      "token": {
+        "type": "oauthSetting",
+        "oAuthSettings": {
+          "identityProvider": "aad",
+          "clientId": "<APP_ID>",
+          "clientSecret": "<SECRET>",
+          "scopes": [ "https://api.powerplatform.com/CopilotStudio.Copilots.Invoke" ],
+          "redirectMode": "GlobalPerConnector",
+          "redirectUrl": "https://global.consent.azure-apim.net/redirect",
+          "properties": { "IsFirstParty": "False", "AzureActiveDirectoryResourceId": "https://api.powerplatform.com" },
+          "customParameters": {
+            "loginUri":   { "value": "https://login.microsoftonline.com" },
+            "tenantId":   { "value": "<TENANT_ID>" },
+            "resourceUri":{ "value": "https://api.powerplatform.com" },
+            "enableOnbehalfOfLogin": { "value": "false" }
+          }
+        }
+      }
+    },
+    "iconBrandColor": "#2E7D32", "capabilities": [], "publisher": "My Company", "stackOwner": "My Company"
+  }
+}
+```
+
+### Step 4 — Create the custom connector
+```powershell
+pac auth create --environment $ENV_ID
+pac connector create --api-definition-file .\apiDefinition.swagger.json --api-properties-file .\apiProperties.json --environment $ENV_ID
+```
+No `pac connector` in your version? Use the portal: **Power Apps → Custom connectors → New → Import an OpenAPI file**, then set **Security** as in the picture below.
+
+<div align="center"><img src="docs/connector-security.svg" alt="Connector security tab (sample values)" width="760"></div>
+
+### Step 5 — Register the connector's redirect URI (the step everyone misses)
+Every OAuth custom connector has its **own** redirect URI. Open the connector → **Security** → copy **Redirect URL** (it ends with your connector's unique name, e.g. `…/redirect/new-5fcontoso-20copilot-20direct-5f0123456789abcdef`), then add it to the app registration. `az … update --web-redirect-uris` **replaces** the list, so always pass both:
+```powershell
+az ad app update --id $APP_ID --web-redirect-uris `
+  "https://global.consent.azure-apim.net/redirect" `
+  "https://global.consent.azure-apim.net/redirect/<your-connector-unique-name>"
+az ad app show --id $APP_ID --query web.redirectUris        # verify both are listed
+```
+
+<div align="center"><img src="docs/entra-redirect-uris.svg" alt="Entra redirect URIs (sample values)" width="760"></div>
+
+### Step 6 — Create the connection (each user, once)
+https://make.powerapps.com → **Connections → New connection → My Copilot Direct** → sign in. Then note:
+```powershell
+pac connection list      # copy the Connection ID and the connector's API name (shared_…)
+```
+
+### Step 7 — Create a new code app
 ```bash
 npm create vite@latest my-agent-app -- --template react-ts
-cd my-agent-app
-npm install
-npm install @microsoft/power-apps
-pac auth create --environment <your-environment-GUID>
+cd my-agent-app && npm install && npm install @microsoft/power-apps
 pac code init --displayName "My Agent App"
+pac code add-data-source -a <API_NAME_FROM_STEP_6> -c <CONNECTION_ID>
 ```
-`pac code init` creates `power.config.json` (it links this folder to your app). If you prefer Microsoft's starter, see https://learn.microsoft.com/power-apps/developer/code-apps/overview.
+`add-data-source` writes `.power/schemas/appschemas/dataSourcesInfo.ts`. Open it and confirm the connector lists **`Discover`** and **`Path4` … `Path12`** (if not, the connector definition is old — update it in the Swagger editor and run the command again).
 
-### Step 3 — Add the custom connector to the app
-1. Find your connection: `pac connection list` — copy the **Connection ID** and the **API name** of *SPX Copilot Direct* (looks like `shared_new-5fspx-20copilot-20direct-5f<hash>`; the part after `-5f` is unique to your connector).
-2. Add it:
-```bash
-pac code add-data-source -a shared_new-5fspx-20copilot-20direct-5f<hash> -c <connection-id>
-```
-This writes `.power/schemas/appschemas/dataSourcesInfo.ts` — the app's list of connectors and their operations. Open it and check that the connector lists **`Discover`** and **`Path4` … `Path12`**. If it does not, the connector still has an old definition — see *Updating an existing connector definition* above, then run the command again (delete the `.power` folder first).
-
-### Step 4 — Add the chat helper
-Copy [`copilot-connector/example/copilotDirect.ts`](copilot-connector/example/copilotDirect.ts) into your app as `src/copilotDirect.ts`. It is ~70 lines and does three things: **Discover** the agent's endpoints → start a conversation → send your message and read the answer.
-
+### Step 8 — Add the chat helper and a screen
+Copy [`copilot-connector/example/copilotDirect.ts`](copilot-connector/example/copilotDirect.ts) to `src/copilotDirect.ts`, then:
 ```tsx
 // src/App.tsx
 import { useState } from 'react'
 import { askAgent } from './copilotDirect'
 
-const AGENT = 'cr123_myagent'   // Copilot Studio → agent → Settings → Advanced → Metadata → Schema name
+const AGENT = 'cr123_myagent'   // Copilot Studio → agent → Settings → Advanced → Metadata → Schema name (case-sensitive)
 
 export default function App() {
   const [q, setQ] = useState(''), [a, setA] = useState(''), [conv, setConv] = useState<string>()
@@ -281,44 +452,57 @@ export default function App() {
 }
 ```
 
-### Step 5 — Publish and test
+### Step 9 — Build, publish, test
 ```bash
 npm run build
 pac code push
 ```
-Open the app from https://make.powerapps.com → *Apps* (approve the connection prompt once), type a question and press **Send**.
+Open the app from https://make.powerapps.com → **Apps**, approve the connection prompt once, ask a question. 🎉
 
-### Step 6 — Make it production-ready (optional)
-* Keep the **conversation id** (as above) so the chat remembers earlier messages.
-* Show a friendly message when the helper throws — the messages are written to be read by users.
-* Add a timeout (a long agent turn can take 30 s+) and a **New chat** button (clear the conversation id).
-* Look at `src/services/sp.ts` (functions `askD2E`, `invokeCustom`, `answerOf`) in this repo for streaming-reply merging, error mapping and caching.
+### Step 10 — Make it production-ready
+* Keep the **conversation id** (done above) so the agent remembers earlier turns; add a **New chat** button that clears it.
+* Add a **timeout** (a turn can take 30 s+) and show the thrown messages — they are written for users.
+* Treat replies like `Sorry, something unexpected happened … LatestPublishedVersionNotFound` as errors (the agent is not published). See `askD2E` in `src/services/sp.ts`.
+* Never put the client secret, tenant ID or connection IDs in source control; rotate the secret every year.
 
-### How it works (30 seconds)
+### How the calls flow
 ```mermaid
 sequenceDiagram
   participant App as Your code app
-  participant CC as SPX Copilot Direct (custom connector)
+  participant CC as Custom connector
   participant CS as Copilot Studio runtime
   App->>CC: Discover(agent)
   CC->>CS: GET /copilotstudio/agents/{agent}/conversation-endpoints
   CS-->>App: createConversation + executeTurn URLs
-  App->>CC: Path8(s1..s8, body)  — start conversation
-  CC->>CS: POST /copilotstudio/agenticruntime/3p/…/conversations
+  App->>CC: Path8(s1..s8, body) — start conversation
+  CC->>CS: POST …/conversations
   App->>CC: Path9(s1..s9, body) — your message
   CC->>CS: POST …/conversations/{id}
-  CS-->>App: server-sent events → agent answer
+  CS-->>App: server-sent events → answer
 ```
-Every call carries the **signed-in user's token** (issued for your own app registration with `CopilotStudio.Copilots.Invoke`), so the agent runs with that user's permissions.
+Each call carries **the signed-in user's token**, issued for **your app registration** with the delegated permission `CopilotStudio.Copilots.Invoke`.
 
-### Beginner troubleshooting
-| You see | Fix |
-|---|---|
-| `The SPX Copilot Direct connector is not added to this app` | Step 3 — run `pac code add-data-source …` and rebuild |
-| `no operation for an N-part route` | the connector's definition is old → paste `copilot-connector/apiDefinition.swagger.json` in its *Swagger editor*, **Update connector**, redo Step 3 |
-| `AADSTS50011` at sign-in | add the redirect URI from the error to your app registration (**Authentication → Web**) |
-| `403 InsufficientDelegatedPermissions` | the Entra app needs `CopilotStudio.Copilots.Invoke` **with admin consent** (the setup script does this) |
-| Answer says `LatestPublishedVersionNotFound` | the agent is not **published** — Copilot Studio → **Publish**, set Authentication to *Authenticate with Microsoft* |
+---
+
+## 🔑 Authentication & URL reference
+
+| What | Value (sample) | Where it is used |
+|---|---|---|
+| **Token audience / Resource URL** | `https://api.powerplatform.com` | connector *Security → Resource URL* |
+| **Scope** | `https://api.powerplatform.com/CopilotStudio.Copilots.Invoke` | connector *Security → Scope* · Entra *API permissions* (delegated) |
+| **Power Platform API app ID** | `8578e004-a5c6-46e7-913e-12f58912df43` | `az ad app permission add --api …` |
+| **Permission (scope) ID** | `204440d3-c1d0-4826-b570-99eb6f5e2aeb` | `--api-permissions "<id>=Scope"` |
+| **Login URL** | `https://login.windows.net` (portal) · `https://login.microsoftonline.com` (`apiProperties.json`) | connector *Security* |
+| **Tenant ID** | `11111111-2222-3333-4444-555555555555` | connector *Security → Tenant ID* |
+| **Client ID / secret** | your app's Application ID / secret value | connector *Security* |
+| **Redirect URI #1 (generic)** | `https://global.consent.azure-apim.net/redirect` | Entra → *Authentication → Web* |
+| **Redirect URI #2 (per connector)** | `https://global.consent.azure-apim.net/redirect/<connector-unique-name>` | Entra → *Authentication → Web* (**required**) |
+| **Connector host** | `<30 hex chars>.<last 2 chars>.environment.api.powerplatform.com` | Swagger `host` |
+| **Discovery route** | `GET /copilotstudio/agents/{schema}/conversation-endpoints` | `Discover` operation |
+| **Agent schema name** | `cr123_myagent` | Copilot Studio → *Settings → Advanced → Metadata* |
+| **Environment ID** | `00000000-0000-0000-0000-000000000000` | `pac` commands · Metadata page |
+
+**Rules of thumb:** the platform type of the redirect URIs must be **Web**; they are **case-sensitive** with no trailing slash; the app in an `AADSTS50011` error message must be **the same app** your connector uses; Microsoft's own *HTTP with Microsoft Entra ID* connectors **cannot** be used (they always return 403 for this API).
 
 ---
 
