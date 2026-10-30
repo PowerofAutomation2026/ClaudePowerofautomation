@@ -6,6 +6,8 @@
 
 *By **Kirolos — Power of Automation***
 
+📱 *Prefer a phone-friendly, accessible version? Open [index.html](index.html) (responsive layout, dark mode, video with text description).*
+
 ![Marketing tour of the app](../marketing/sharepoint-explorer-marketing.gif)
 
 </div>

@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="How to talk to a Copilot Studio agent built on the GitHub Copilot harness from a Power Apps code app, using a custom connector and your own Entra app registration.">
+<title>Talking to a GitHub Copilot harness agent from a Power Apps code app</title>
+<style>
+  :root{--bg:#f7f9fc;--fg:#10213f;--muted:#44546f;--card:#fff;--line:#c9d6ee;--accent:#0b57b8;--accent-fg:#fff;--code-bg:#0f1b33;--code-fg:#e8eefc;--warn-bg:#fff4dc;--warn-line:#b26a00;--focus:#ff8a00}
+  @media (prefers-color-scheme:dark){:root{--bg:#0b1220;--fg:#eaf0fb;--muted:#b6c3da;--card:#131d33;--line:#2c3c5c;--accent:#8ab8ff;--accent-fg:#0b1220;--code-bg:#070d1a;--code-fg:#e8eefc;--warn-bg:#33270d;--warn-line:#f0b45a}}
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%;text-size-adjust:100%;scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--fg);font:clamp(17px,1.1vw + 14px,19px)/1.65 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+  .skip{position:absolute;left:12px;top:-60px;background:var(--accent);color:var(--accent-fg);padding:12px 16px;border-radius:8px;z-index:10;font-weight:700}
+  .skip:focus{top:12px}
+  :focus-visible{outline:3px solid var(--focus);outline-offset:3px;border-radius:4px}
+  header.hero{background:linear-gradient(135deg,#0b3d91,#6d3fc4);color:#fff;padding:clamp(28px,8vw,72px) 16px}
+  .wrap{max-width:46rem;margin:0 auto;padding:0 16px}
+  header .wrap{padding:0}
+  .kicker{font-size:.85rem;letter-spacing:.08em;text-transform:uppercase;font-weight:700;color:#ffd9a0}
+  h1{font-size:clamp(1.7rem,6vw,2.8rem);line-height:1.15;margin:.4em 0 .3em;letter-spacing:-.01em}
+  .sub{font-size:clamp(1.05rem,3.4vw,1.3rem);margin:0 0 .8em;color:#e8eefc}
+  .byline{margin:0;font-size:.95rem;color:#e8eefc}
+  main{padding:24px 0 56px}
+  h2{font-size:clamp(1.35rem,4.5vw,1.8rem);line-height:1.25;margin:2.2em 0 .6em;scroll-margin-top:12px}
+  h3{font-size:1.15rem;margin:1.6em 0 .4em}
+  p,li{max-width:70ch}
+  a{color:var(--accent);text-underline-offset:3px;overflow-wrap:anywhere}
+  .btn{display:inline-flex;align-items:center;justify-content:center;min-height:48px;padding:0 20px;border-radius:12px;background:var(--accent);color:var(--accent-fg);font-weight:700;text-decoration:none;margin:.4em 0}
+  nav.toc{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 18px;margin:20px 0}
+  nav.toc summary{min-height:44px;display:flex;align-items:center;font-weight:700;cursor:pointer}
+  nav.toc ol{margin:.2em 0 .6em;padding-left:1.3em}
+  nav.toc a{display:inline-block;padding:8px 0}
+  .tldr{background:var(--card);border:1px solid var(--line);border-left:6px solid var(--accent);border-radius:12px;padding:6px 18px;margin:20px 0}
+  .note{background:var(--warn-bg);border:1px solid var(--warn-line);border-radius:12px;padding:10px 16px;margin:20px 0}
+  pre{background:var(--code-bg);color:var(--code-fg);border-radius:12px;padding:14px 16px;overflow-x:auto;-webkit-overflow-scrolling:touch;font:.82rem/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;margin:14px 0;tab-size:2}
+  code{font:.9em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:color-mix(in srgb,var(--line) 45%,transparent);padding:.1em .35em;border-radius:5px;overflow-wrap:anywhere}
+  pre code{background:none;padding:0;overflow-wrap:normal}
+  figure{margin:22px 0}
+  figcaption{font-size:.9rem;color:var(--muted);margin-top:6px}
+  video,svg.diagram{width:100%;height:auto;border-radius:14px;display:block;background:#071433}
+  svg.diagram{background:var(--card);border:1px solid var(--line)}
+  .tablewrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:16px 0}
+  table{border-collapse:collapse;width:100%;background:var(--card);border-radius:12px;overflow:hidden}
+  caption{text-align:left;font-weight:700;padding:8px 0}
+  th,td{border:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top;font-size:.95rem}
+  th{background:color-mix(in srgb,var(--accent) 14%,var(--card))}
+  @media (max-width:640px){
+    table,thead,tbody,tr,th,td{display:block;width:100%}
+    thead{position:absolute;left:-9999px}
+    tr{border:1px solid var(--line);border-radius:12px;margin:0 0 12px;overflow:hidden;background:var(--card)}
+    td{border:0;border-bottom:1px solid var(--line)}
+    td:last-child{border-bottom:0}
+    td::before{content:attr(data-label);display:block;font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+  }
+  ol.steps{padding-left:1.3em}
+  ol.steps li{margin:.5em 0}
+  footer{border-top:1px solid var(--line);padding:28px 16px 40px;text-align:center}
+  footer p{margin:.4em auto}
+  @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation:none!important;transition:none!important}}
+  @media print{header.hero{background:none;color:#000}.skip,nav.toc{display:none}pre{white-space:pre-wrap}}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to the article</a>
+<header class="hero">
+  <div class="wrap">
+    <p class="kicker">Field report · Power Apps code apps</p>
+    <h1>Talking to a GitHub Copilot harness agent from a Power Apps code app</h1>
+    <p class="sub">The custom connector that bridges the gap — and the three walls I hit on the way.</p>
+    <p class="byline">By <strong>Kirolos — Power of Automation</strong></p>
+  </div>
+</header>
+<main id="main" class="wrap">
+
+<nav class="toc" aria-label="Contents">
+  <details>
+    <summary>On this page</summary>
+    <ol>
+      <li><a href="#tldr">Summary</a></li>
+      <li><a href="#goal">The goal</a></li>
+      <li><a href="#wall1">Wall 1: the built-in HTTP connectors</a></li>
+      <li><a href="#wall2">Wall 2: the redirect address</a></li>
+      <li><a href="#wall3">Wall 3: the 404 “RouteNotFound”</a></li>
+      <li><a href="#architecture">How the calls flow</a></li>
+      <li><a href="#helper">The chat helper</a></li>
+      <li><a href="#cheatsheet">Troubleshooting cheat sheet</a></li>
+      <li><a href="#try">Try it yourself</a></li>
+      <li><a href="#caveats">Caveats</a></li>
+    </ol>
+  </details>
+</nav>
+
+<figure>
+  <video controls playsinline preload="metadata" aria-describedby="vid-desc">
+    <source src="../marketing/sharepoint-explorer-marketing.mp4" type="video/mp4">
+    Your browser can’t play this video. <a href="../marketing/sharepoint-explorer-marketing.mp4">Download the MP4</a>.
+  </video>
+  <figcaption id="vid-desc">One-minute silent tour of the app: dashboard, connecting a list, data grid, item details, forms, board view, dashboard designer, approvals, and chatting with a Copilot Studio agent. Every caption is shown on screen. Demo data only.</figcaption>
+</figure>
+
+<section id="tldr" class="tldr" aria-labelledby="tldr-h">
+  <h2 id="tldr-h" style="margin-top:.6em">Summary</h2>
+  <ul>
+    <li>Copilot Studio’s <strong>new-experience</strong> agents (built on the <strong>GitHub Copilot harness</strong>: <em>Skills</em>, <em>Connected agents</em>, no <em>Topics</em>) can’t be called through Microsoft’s built-in Copilot Studio connector from a code app.</li>
+    <li>Microsoft’s own <strong>HTTP with Microsoft Entra ID</strong> connectors also fail, with a <strong>403 InsufficientDelegatedPermissions</strong> error.</li>
+    <li>What works: a <strong>custom connector that signs users in through your own Entra app registration</strong> and calls Copilot Studio’s direct conversation endpoints.</li>
+    <li>Result: users pick a harness agent from a drop-down and chat with it, with the current list as context and their own permissions.</li>
+  </ul>
+  <p><a class="btn" href="https://github.com/powerofautomation2027/-PNC-SharePoint-Team-Explorer/blob/main/README.md">Open the full guide on GitHub</a></p>
+</section>
+
+<div class="note" role="note"><strong>Field report, not official guidance.</strong> I looked for an existing walkthrough for this and didn’t find one at the time of writing, so this documents the path that worked for me. Microsoft is still rolling the harness runtime out region by region.</div>
+
+<h2 id="goal">The goal</h2>
+<p>I had built a Power Apps <strong>code app</strong> that turns any SharePoint list or library into a live dashboard with approvals, e-mail and search. The natural next feature was an <strong>AI assistant</strong>: pick a Copilot Studio agent, ask “what needs attention right now?”, and have the agent see the list the user is looking at.</p>
+<p>Classic agents were easy, because the built-in <strong>Microsoft Copilot Studio</strong> connector has an <em>Execute Copilot</em> action. Then I created an agent in the new experience: same environment, published, “Authenticate with Microsoft”. The connector couldn’t find it. Agents built on the GitHub Copilot harness run on a different runtime that the classic connector doesn’t speak to.</p>
+
+<h2 id="wall1">Wall 1: “There’s an HTTP connector for that”</h2>
+<p>Copilot Studio has a documented direct-to-engine API, so the obvious idea is a generic HTTP connector. Power Platform ships two: <strong>HTTP with Microsoft Entra ID</strong> (preauthorized and not). The result:</p>
+<pre tabindex="0"><code>403 InsufficientDelegatedPermissions
+Missing CopilotStudio.Copilots.Invoke</code></pre>
+<p>The token needs the delegated permission <code>CopilotStudio.Copilots.Invoke</code> on the <strong>Power Platform API</strong>. Those connectors sign users in through Microsoft-owned apps, and Entra doesn’t let you grant one Microsoft app consent for another Microsoft API (you’ll see <code>AADSTS65002</code>). A tenant-wide grant script can’t fix that.</p>
+<p><strong>Lesson:</strong> don’t fight it. Use an app registration you own.</p>
+
+<h2 id="wall2">Wall 2: “Fine, a custom connector. But sign-in fails”</h2>
+<p>A custom connector can use OAuth 2.0 with Azure Active Directory and your own client ID. Create the app registration, add the delegated permission, grant admin consent, create a secret, import a swagger file. Then sign-in fails:</p>
+<pre tabindex="0"><code>AADSTS50011: The redirect URI
+'https://global.consent.azure-apim.net/redirect/new-5fcontoso-20copilot-20direct-5f0123…'
+does not match the redirect URIs configured for the application</code></pre>
+<p>Every OAuth custom connector gets its <strong>own</strong> redirect address, so the generic one isn’t enough. Once the connector exists, copy its address from the <em>Security</em> tab (or from the error) and add both:</p>
+<pre tabindex="0"><code>az ad app update --id $APP_ID --web-redirect-uris `
+  "https://global.consent.azure-apim.net/redirect" `
+  "https://global.consent.azure-apim.net/redirect/&lt;your-connector-unique-name&gt;"</code></pre>
+<p><code>--web-redirect-uris</code> replaces the whole list, so always pass both.</p>
+
+<h2 id="wall3">Wall 3: “Signed in! … 404 RouteNotFound”</h2>
+<p>Discovery worked on the first call:</p>
+<pre tabindex="0"><code>GET /copilotstudio/agents/{agent}/conversation-endpoints
+→ createConversation + executeTurn URLs</code></pre>
+<p>Those URLs are long (<code>/copilotstudio/agenticruntime/3p/…/conversations</code>). My first swagger used one path parameter, <code>/{route}</code>. Custom connectors <strong>encode slashes inside a path parameter</strong>, so the request left as <code>copilotstudio%2Fagenticruntime%2F…</code> and the service answered <code>RouteNotFound</code>.</p>
+<p><strong>The fix:</strong> give the connector one operation per segment count — <code>Path4</code>, <code>Path5</code> … <code>Path12</code> — each with <code>{s1}/{s2}/…/{sN}</code> as separate path parameters. The app splits whatever URL Copilot Studio returns into segments and picks the matching operation. Slashes stay slashes.</p>
+
+<h2 id="architecture">How the calls flow</h2>
+<figure>
+  <svg class="diagram" viewBox="0 0 640 330" role="img" aria-labelledby="diag-t diag-d">
+    <title id="diag-t">Call flow between the code app, the custom connector and Copilot Studio</title>
+    <desc id="diag-d">The app calls Discover through the connector; Copilot Studio returns the conversation URLs; the app then starts a conversation and sends the user's message through PathN operations; Copilot Studio answers with server-sent events.</desc>
+    <style>text{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;fill:var(--fg)}.b{fill:var(--card);stroke:var(--accent);stroke-width:2}.l{stroke:var(--muted);stroke-width:2;fill:none}.t{font-size:15px}.s{font-size:13px;fill:var(--muted)}g.t text{paint-order:stroke;stroke:var(--card);stroke-width:5px;stroke-linejoin:round}</style>
+    <rect class="b" x="12" y="14" width="170" height="50" rx="10"/><text class="t" x="97" y="44" text-anchor="middle">Code app</text>
+    <rect class="b" x="235" y="14" width="170" height="50" rx="10"/><text class="t" x="320" y="38" text-anchor="middle">Custom connector</text><text class="s" x="320" y="55" text-anchor="middle">your Entra app</text>
+    <rect class="b" x="458" y="14" width="170" height="50" rx="10"/><text class="t" x="543" y="44" text-anchor="middle">Copilot Studio</text>
+    <path class="l" d="M97 64v250M320 64v250M543 64v250" stroke-dasharray="4 5"/>
+    <g class="t"><text x="104" y="98">1 Discover(agent)</text><text x="327" y="120">GET …/conversation-endpoints</text><text x="104" y="150">2 URLs for create + turn</text>
+    <text x="104" y="190">3 PathN: start conversation</text><text x="104" y="226">4 PathN: user's message</text><text x="327" y="250">POST …/conversations/{id}</text><text x="104" y="290">5 Answer (server-sent events)</text></g>
+  </svg>
+  <figcaption>Every call carries the signed-in user’s token, issued for your own app registration with only <code>CopilotStudio.Copilots.Invoke</code>. The client secret lives in the connector, not in the app.</figcaption>
+</figure>
+<details><summary>Text version of the diagram</summary>
+<ol class="steps">
+  <li>The app asks the connector to run <strong>Discover</strong> for the agent’s schema name.</li>
+  <li>The connector calls Copilot Studio; the answer lists the “create conversation” and “execute turn” URLs.</li>
+  <li>The app starts a conversation with a <strong>PathN</strong> operation (N = number of path segments).</li>
+  <li>The app sends the user’s message with another <strong>PathN</strong> operation.</li>
+  <li>Copilot Studio replies with server-sent events; the app merges them into the answer.</li>
+</ol></details>
+
+<h2 id="helper">The chat helper</h2>
+<p>About 70 lines of TypeScript. The core idea:</p>
+<pre tabindex="0"><code>const found = JSON.parse(await call('Discover', { agent: 'cr123_myagent' }))
+const start = activities(await post(found.createConversation,
+  { emitStartConversationEvent: true }))
+const id = start.map(a =&gt; a?.conversation?.id).find(Boolean)
+const reply = activities(await post(
+  found.executeTurn.replace('{conversationId}', id),
+  { activity: { type: 'message', text: 'What needs attention right now?',
+                conversation: { id } }, conversationId: id }))</code></pre>
+<p><code>post()</code> turns a URL into <code>s1…sN</code> parameters; <code>activities()</code> parses the server-sent events. The full, commented file is in the repository.</p>
+
+<h2 id="cheatsheet">Troubleshooting cheat sheet</h2>
+<div class="tablewrap">
+<table>
+  <caption>Symptoms, causes and fixes</caption>
+  <thead><tr><th scope="col">Symptom</th><th scope="col">Cause</th><th scope="col">Fix</th></tr></thead>
+  <tbody>
+    <tr><td data-label="Symptom">403 InsufficientDelegatedPermissions</td><td data-label="Cause">Microsoft HTTP connector</td><td data-label="Fix">Custom connector + your own app registration</td></tr>
+    <tr><td data-label="Symptom">AADSTS50011</td><td data-label="Cause">Per-connector redirect address missing</td><td data-label="Fix">Add it under Authentication → Web (exact, case-sensitive, no trailing slash)</td></tr>
+    <tr><td data-label="Symptom">404 RouteNotFound</td><td data-label="Cause">Slashes encoded in a path parameter</td><td data-label="Fix">Use the Path4…Path12 operations</td></tr>
+    <tr><td data-label="Symptom">“No operation for an N-part route”</td><td data-label="Cause">App built against an old connector definition</td><td data-label="Fix">Update the connector’s swagger, then re-run <code>pac code add-data-source</code></td></tr>
+    <tr><td data-label="Symptom">“Sorry, something unexpected happened… LatestPublishedVersionNotFound”</td><td data-label="Cause">The agent isn’t published</td><td data-label="Fix">Publish it and set “Authenticate with Microsoft”</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="try">Try it yourself</h2>
+<ol class="steps">
+  <li>Read the <strong>developer guide</strong> in the README: ten steps with sample values, from app registration to <code>pac code push</code>.</li>
+  <li>Run <code>scripts/Setup-CopilotStudioConnector.ps1 -EnvironmentId &lt;your-environment-id&gt;</code> to create the Entra app and the connector.</li>
+  <li>Create the connection once, run <code>Deploy.cmd</code> (option 2), then add your agent.</li>
+</ol>
+<p><a class="btn" href="https://github.com/powerofautomation2027/-PNC-SharePoint-Team-Explorer/blob/main/README.md">Open the README on GitHub</a></p>
+
+<h2 id="caveats">Caveats</h2>
+<ul>
+  <li>This relies on Copilot Studio’s direct conversation endpoints, which Microsoft may change; regional rollout of the harness runtime is still in progress.</li>
+  <li>An admin who can create app registrations and grant consent is needed, once.</li>
+  <li>It works for <strong>published</strong> agents set to “Authenticate with Microsoft”.</li>
+</ul>
+</main>
+<footer>
+  <p>If this saved you a day of AADSTS errors, share it with someone building code apps.</p>
+  <p><strong>Created by Kirolos — Power of Automation</strong></p>
+</footer>
+</body>
+</html>
