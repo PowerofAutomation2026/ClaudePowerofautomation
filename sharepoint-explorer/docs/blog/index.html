@@ -94,6 +94,11 @@
   .js .reveal{opacity:0;transform:translateY(18px);transition:opacity .6s ease,transform .6s ease}
   .js .reveal.in{opacity:1;transform:none}
   @media (prefers-reduced-motion:reduce){.hero::before,.hero::after{animation:none}.js .reveal{opacity:1;transform:none}.flowsvg .packet{display:none}}
+  .li-btn{display:inline-flex;align-items:center;gap:10px;min-height:48px;padding:0 20px;border-radius:999px;background:#0a66c2;color:#fff;font-weight:700;text-decoration:none;margin-top:14px;box-shadow:0 6px 18px #0a66c255;transition:transform .2s ease}
+  .li-btn:hover{transform:translateY(-2px)}
+  .li-btn:focus-visible{outline:3px solid #fff;outline-offset:3px}
+  footer .li-btn{margin-top:8px}
+  .li{flex:none}
   @media print{header.hero{background:none;color:#000}.skip,nav.toc{display:none}pre{white-space:pre-wrap}}
 </style>
 </head>
@@ -105,6 +110,7 @@
     <h1>Talking to a GitHub Copilot harness agent from a Power Apps code app</h1>
     <p class="sub">The custom connector that bridges the gap — and the three walls I hit on the way.</p>
     <p class="byline">By <strong>Kirolos — Power of Automation</strong></p>
+    <a class="li-btn" href="https://www.linkedin.com/in/kirolos-erian-39014349/" target="_blank" rel="noopener noreferrer"><svg class="li" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false"><path fill="currentColor" d="M20.45 20.45h-3.56v-5.57c0-1.33-.03-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.35V9h3.41v1.56h.05c.48-.9 1.64-1.85 3.37-1.85 3.6 0 4.27 2.37 4.27 5.46v6.28zM5.34 7.43a2.06 2.06 0 1 1 0-4.12 2.06 2.06 0 0 1 0 4.12zM7.12 20.45H3.56V9h3.56v11.45zM22.22 0H1.77C.79 0 0 .77 0 1.73v20.54C0 23.23.79 24 1.77 24h20.45c.98 0 1.78-.77 1.78-1.73V1.73C24 .77 23.2 0 22.22 0z"/></svg><span>Connect on LinkedIn<span class="sr-only"> (opens in a new tab)</span></span></a>
   </div>
 </header>
 <main id="main" class="wrap">
@@ -266,6 +272,7 @@ const reply = activities(await post(
 <footer>
   <p>If this saved you a day of AADSTS errors, share it with someone building code apps.</p>
   <p><strong>Created by Kirolos — Power of Automation</strong></p>
+  <a class="li-btn" href="https://www.linkedin.com/in/kirolos-erian-39014349/" target="_blank" rel="noopener noreferrer"><svg class="li" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false"><path fill="currentColor" d="M20.45 20.45h-3.56v-5.57c0-1.33-.03-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.35V9h3.41v1.56h.05c.48-.9 1.64-1.85 3.37-1.85 3.6 0 4.27 2.37 4.27 5.46v6.28zM5.34 7.43a2.06 2.06 0 1 1 0-4.12 2.06 2.06 0 0 1 0 4.12zM7.12 20.45H3.56V9h3.56v11.45zM22.22 0H1.77C.79 0 0 .77 0 1.73v20.54C0 23.23.79 24 1.77 24h20.45c.98 0 1.78-.77 1.78-1.73V1.73C24 .77 23.2 0 22.22 0z"/></svg><span>Connect on LinkedIn<span class="sr-only"> (opens in a new tab)</span></span></a>
 </footer>
 <div class="progress" id="progress" aria-hidden="true"></div>
 <script>

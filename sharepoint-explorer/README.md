@@ -13,6 +13,8 @@
 
 **Created by Kirolos — Power of Automation**
 
+[![Connect on LinkedIn](https://img.shields.io/badge/LinkedIn-Connect%20with%20Kirolos-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/kirolos-erian-39014349/)
+
 </div>
 
 ---
@@ -815,5 +817,7 @@ A filter the server could not apply (multi-value people/lookup columns, relative
 <div align="center">
 
 ### 💜 Created by **Kirolos — Power of Automation**
+
+[![Connect on LinkedIn](https://img.shields.io/badge/LinkedIn-Connect%20with%20Kirolos-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/kirolos-erian-39014349/)
 
 </div>

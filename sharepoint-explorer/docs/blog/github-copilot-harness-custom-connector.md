@@ -6,6 +6,8 @@
 
 *By **Kirolos — Power of Automation***
 
+[![Connect on LinkedIn](https://img.shields.io/badge/LinkedIn-Connect-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/kirolos-erian-39014349/)
+
 📱 *Prefer a phone-friendly, accessible version? Open [index.html](index.html) (animated journey graphic, responsive layout, dark mode).*
 
 </div>
@@ -150,5 +152,7 @@ const reply = activities(await post(
 If this saved you a day of AADSTS errors, share it with someone building code apps. 💜
 
 **Created by Kirolos — Power of Automation**
+
+[![Connect on LinkedIn](https://img.shields.io/badge/LinkedIn-Connect%20with%20Kirolos-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/kirolos-erian-39014349/)
 
 </div>
