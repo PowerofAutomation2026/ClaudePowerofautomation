@@ -26,9 +26,10 @@
 6. [Classic Copilot Studio agents (no extra setup)](#-classic-copilot-studio-agents-no-extra-setup)
 7. [New-experience agents: custom connector + app registration](#-new-experience-agents-custom-connector--app-registration)
 8. [The Swagger (OpenAPI) file](#-the-swagger-openapi-file)
-9. [All the links you need](#-all-the-links-you-need)
-10. [FAQ & troubleshooting](#-faq--troubleshooting)
-11. [Full feature reference](#-full-feature-reference)
+9. [Beginner guide: add the connector to a NEW code app](#-beginner-guide-add-the-connector-to-a-new-code-app)
+10. [All the links you need](#-all-the-links-you-need)
+11. [FAQ & troubleshooting](#-faq--troubleshooting)
+12. [Full feature reference](#-full-feature-reference)
 
 ---
 
@@ -46,6 +47,14 @@
 | 🛡️ | **Production safety nets** | Request circuit breaker, memory watchdog, safe mode, auto-recovery, error log — built for "heavy duty". |
 | ♿ | **Accessibility** | Light / dark / high-contrast, keyboard grid, ARIA, axe-core clean. |
 | 🚀 | **Zero-touch deploy** | `Deploy.cmd` installs tools, wires connectors, builds and publishes. |
+
+<div align="center">
+
+![Animated demo of the app layout: dashboard, live charts and the AI assistant panel](docs/app-layout-demo.svg)
+
+<sub>Animated layout preview (illustrative sample data). Open <code>docs/app-layout-demo.svg</code> in any browser to replay it.</sub>
+
+</div>
 
 ---
 
@@ -187,6 +196,111 @@ Power Apps → **Custom connectors → SPX Copilot Direct → Edit → Swagger e
 
 ---
 
+## 🎓 Beginner guide: add the connector to a NEW code app
+
+Goal: a brand-new Power Apps **code app** (any React/TypeScript app) that chats with a **new-experience Copilot Studio agent** (the ones built on the *GitHub Copilot harness*: left menu shows *Skills / Connected agents*, no *Topics*). You do **not** need to know Entra or OpenAPI — follow the numbers.
+
+> **Words to know** — *Code app*: a web app (React, Vite…) that runs inside Power Apps and uses connectors with each user's own sign-in. *Connector*: a ready-made door to a service. *Custom connector*: a door you build yourself from a Swagger file. *App registration*: a name tag your tenant gives an app so it may ask for permissions. *Environment ID*: the GUID of your Power Platform environment.
+
+**Before you start** (one time): install [Node.js LTS](https://nodejs.org), [Azure CLI](https://aka.ms/installazurecliwindows) and the [Power Platform CLI](https://learn.microsoft.com/power-platform/developer/cli/introduction) (`dotnet tool install --global Microsoft.PowerApp.CLI.Tool` or the installer). You need a Power Apps Premium licence and a **published** Copilot Studio agent with **Authentication = Authenticate with Microsoft**.
+
+### Step 1 — Create the connector once per environment (admin)
+Use this repo's script — it creates the Entra app registration **and** the custom connector:
+```powershell
+./scripts/Setup-CopilotStudioConnector.ps1 -EnvironmentId <your-environment-GUID>
+```
+(or do it by hand: *New-experience agents → Option B* above). Then create the connection: https://make.powerapps.com → **Connections → New connection → SPX Copilot Direct** → sign in. **Done for every app in that environment** — a second app does not need a new connector.
+
+### Step 2 — Create the new code app
+```bash
+npm create vite@latest my-agent-app -- --template react-ts
+cd my-agent-app
+npm install
+npm install @microsoft/power-apps
+pac auth create --environment <your-environment-GUID>
+pac code init --displayName "My Agent App"
+```
+`pac code init` creates `power.config.json` (it links this folder to your app). If you prefer Microsoft's starter, see https://learn.microsoft.com/power-apps/developer/code-apps/overview.
+
+### Step 3 — Add the custom connector to the app
+1. Find your connection: `pac connection list` — copy the **Connection ID** and the **API name** of *SPX Copilot Direct* (looks like `shared_new-5fspx-20copilot-20direct-5f1441784a0aeb9a33`; the part after `-5f` is unique to your connector).
+2. Add it:
+```bash
+pac code add-data-source -a shared_new-5fspx-20copilot-20direct-5f1441784a0aeb9a33 -c <connection-id>
+```
+This writes `.power/schemas/appschemas/dataSourcesInfo.ts` — the app's list of connectors and their operations. Open it and check that the connector lists **`Discover`** and **`Path4` … `Path12`**. If it does not, the connector still has an old definition — see *Updating an existing connector definition* above, then run the command again (delete the `.power` folder first).
+
+### Step 4 — Add the chat helper
+Copy [`copilot-connector/example/copilotDirect.ts`](copilot-connector/example/copilotDirect.ts) into your app as `src/copilotDirect.ts`. It is ~70 lines and does three things: **Discover** the agent's endpoints → start a conversation → send your message and read the answer.
+
+```tsx
+// src/App.tsx
+import { useState } from 'react'
+import { askAgent } from './copilotDirect'
+
+const AGENT = 'cr56c_myagent'   // Copilot Studio → agent → Settings → Advanced → Metadata → Schema name
+
+export default function App() {
+  const [q, setQ] = useState(''), [a, setA] = useState(''), [conv, setConv] = useState<string>()
+  const [busy, setBusy] = useState(false)
+  const send = async () => {
+    setBusy(true)
+    try { const r = await askAgent(AGENT, q, conv); setA(r.text); setConv(r.conversationId) }
+    catch (e) { setA('⚠ ' + (e as Error).message) }
+    finally { setBusy(false) }
+  }
+  return (
+    <main style={{ maxWidth: 640, margin: '40px auto', fontFamily: 'Segoe UI, sans-serif' }}>
+      <h1>Ask my agent</h1>
+      <textarea value={q} onChange={(e) => setQ(e.target.value)} rows={3} style={{ width: '100%' }} />
+      <button onClick={send} disabled={busy || !q.trim()}>{busy ? 'Thinking…' : 'Send'}</button>
+      <pre style={{ whiteSpace: 'pre-wrap' }}>{a}</pre>
+    </main>
+  )
+}
+```
+
+### Step 5 — Publish and test
+```bash
+npm run build
+pac code push
+```
+Open the app from https://make.powerapps.com → *Apps* (approve the connection prompt once), type a question and press **Send**.
+
+### Step 6 — Make it production-ready (optional)
+* Keep the **conversation id** (as above) so the chat remembers earlier messages.
+* Show a friendly message when the helper throws — the messages are written to be read by users.
+* Add a timeout (a long agent turn can take 30 s+) and a **New chat** button (clear the conversation id).
+* Look at `src/services/sp.ts` (functions `askD2E`, `invokeCustom`, `answerOf`) in this repo for streaming-reply merging, error mapping and caching.
+
+### How it works (30 seconds)
+```mermaid
+sequenceDiagram
+  participant App as Your code app
+  participant CC as SPX Copilot Direct (custom connector)
+  participant CS as Copilot Studio runtime
+  App->>CC: Discover(agent)
+  CC->>CS: GET /copilotstudio/agents/{agent}/conversation-endpoints
+  CS-->>App: createConversation + executeTurn URLs
+  App->>CC: Path8(s1..s8, body)  — start conversation
+  CC->>CS: POST /copilotstudio/agenticruntime/3p/…/conversations
+  App->>CC: Path9(s1..s9, body) — your message
+  CC->>CS: POST …/conversations/{id}
+  CS-->>App: server-sent events → agent answer
+```
+Every call carries the **signed-in user's token** (issued for your own app registration with `CopilotStudio.Copilots.Invoke`), so the agent runs with that user's permissions.
+
+### Beginner troubleshooting
+| You see | Fix |
+|---|---|
+| `The SPX Copilot Direct connector is not added to this app` | Step 3 — run `pac code add-data-source …` and rebuild |
+| `no operation for an N-part route` | the connector's definition is old → paste `copilot-connector/apiDefinition.swagger.json` in its *Swagger editor*, **Update connector**, redo Step 3 |
+| `AADSTS50011` at sign-in | add the redirect URI from the error to your app registration (**Authentication → Web**) |
+| `403 InsufficientDelegatedPermissions` | the Entra app needs `CopilotStudio.Copilots.Invoke` **with admin consent** (the setup script does this) |
+| Answer says `LatestPublishedVersionNotFound` | the agent is not **published** — Copilot Studio → **Publish**, set Authentication to *Authenticate with Microsoft* |
+
+---
+
 ## 🔗 All the links you need
 
 | What | URL |
@@ -227,7 +341,7 @@ The connector has an old definition. Paste <code>copilot-connector/apiDefinition
 Create the <b>SPX Copilot Direct</b> connection (Connections → New connection) and run <code>Deploy.cmd</code> → 2.
 </details>
 
-<details><summary><b>Agent is “not published yet” / no answer</b></summary>
+<details><summary><b>Agent is “not published yet” / answers “Sorry, something unexpected happened … LatestPublishedVersionNotFound”</b></summary>
 Publish it in Copilot Studio and set <b>Authentication → Authenticate with Microsoft</b>. For new-experience agents Microsoft is still rolling the runtime out by region — a “not supported yet” message can appear until yours has it.
 </details>
 

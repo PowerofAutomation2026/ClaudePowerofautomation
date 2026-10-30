@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" role="img" aria-labelledby="t d">
+  <title id="t">Animated layout of SharePoint Explorer</title>
+  <desc id="d">The dashboard fills with KPI cards and charts, then the AI assistant panel slides in and a Copilot Studio agent answers a question.</desc>
+  <defs>
+    <linearGradient id="hero" x1="0" x2="1"><stop offset="0" stop-color="#0b3d91"/><stop offset="1" stop-color="#1769c9"/></linearGradient>
+    <clipPath id="clip"><rect width="960" height="560" rx="14"/></clipPath>
+    <style>
+      text{font-family:Segoe UI,Arial,sans-serif}
+      .card{fill:#fff;stroke:#dbe3f0}
+      .lbl{font-size:11px;fill:#5b6b86}
+      .num{font-size:24px;font-weight:700;fill:#0b3d91}
+      .bar{transform-box:fill-box;transform-origin:left center;animation:grow 1.4s ease-out both}
+      .b2{animation-delay:.25s}.b3{animation-delay:.5s}.b4{animation-delay:.75s}
+      @keyframes grow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+      .kpi{animation:pop .6s ease-out both}
+      .k2{animation-delay:.15s}.k3{animation-delay:.3s}.k4{animation-delay:.45s}.k5{animation-delay:.6s}
+      @keyframes pop{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+      .panel{animation:slide 14s ease-in-out infinite}
+      @keyframes slide{0%,30%{transform:translateX(360px)}38%,92%{transform:translateX(0)}100%{transform:translateX(360px)}}
+      .q{animation:show 14s infinite}
+      @keyframes show{0%,48%{opacity:0}52%,92%{opacity:1}100%{opacity:0}}
+      .a1{animation:show2 14s infinite}
+      @keyframes show2{0%,60%{opacity:0}64%,92%{opacity:1}100%{opacity:0}}
+      .dots{animation:dots 14s infinite}
+      @keyframes dots{0%,52%{opacity:0}54%,60%{opacity:1}62%,100%{opacity:0}}
+      .pulse{animation:pulse 2s ease-in-out infinite}
+      @keyframes pulse{50%{opacity:.35}}
+    </style>
+  </defs>
+  <g clip-path="url(#clip)">
+    <rect width="960" height="560" fill="#f3f6fb"/>
+    <!-- Power Apps bar -->
+    <rect width="960" height="34" fill="#0f1f4d"/>
+    <text x="16" y="22" font-size="12" fill="#fff">Power Apps  |  SharePoint Explorer</text>
+    <!-- app header -->
+    <rect y="34" width="960" height="46" fill="#fff" stroke="#dbe3f0"/>
+    <rect x="16" y="46" width="22" height="22" rx="5" fill="#0b3d91"/>
+    <text x="46" y="62" font-size="13" font-weight="700" fill="#10213f">PNC SharePoint Team</text>
+    <g font-size="11" fill="#33466b">
+      <rect x="210" y="48" width="86" height="22" rx="11" fill="#e8f0fe" stroke="#9db9ef"/><text x="226" y="63" font-weight="700">Dashboard</text>
+      <text x="318" y="63">Data</text><text x="362" y="63">Connect</text>
+    </g>
+    <circle cx="560" cy="59" r="4" fill="#1b9e5a" class="pulse"/><text x="568" y="63" font-size="11" fill="#1b6b43">Live</text>
+    <rect x="780" y="48" width="74" height="22" rx="11" fill="#fff" stroke="#9db9ef"/><text x="796" y="63" font-size="11" fill="#33466b">Assistant</text>
+    <rect x="862" y="48" width="82" height="22" rx="11" fill="#fff" stroke="#9db9ef"/><text x="876" y="63" font-size="11" fill="#33466b">Search all</text>
+    <!-- hero -->
+    <rect x="24" y="96" width="912" height="92" rx="12" fill="url(#hero)"/>
+    <text x="44" y="128" font-size="20" font-weight="700" fill="#fff">Good morning</text>
+    <text x="44" y="150" font-size="12" fill="#cfe0ff">3,502 items · search, filter, edit and share — updates live</text>
+    <rect x="44" y="160" width="78" height="20" rx="6" fill="#fff"/><text x="56" y="174" font-size="11" fill="#0b3d91">Open items</text>
+    <rect x="130" y="160" width="70" height="20" rx="6" fill="#ffffff33"/><text x="143" y="174" font-size="11" fill="#fff">New item</text>
+    <!-- KPIs -->
+    <g>
+      <g class="kpi"><rect class="card" x="24" y="204" width="140" height="70" rx="10"/><text class="lbl" x="38" y="226">Items in list</text><text class="num" x="38" y="256">3,502</text></g>
+      <g class="kpi k2"><rect class="card" x="176" y="204" width="140" height="70" rx="10"/><text class="lbl" x="190" y="226">New in last 7 days</text><text class="num" x="190" y="256">0</text></g>
+      <g class="kpi k3"><rect class="card" x="328" y="204" width="140" height="70" rx="10"/><text class="lbl" x="342" y="226">Last change</text><text class="num" x="342" y="256">8 d ago</text></g>
+      <g class="kpi k4"><rect class="card" x="480" y="204" width="140" height="70" rx="10"/><text class="lbl" x="494" y="226">Pending approvals</text><text class="num" x="494" y="256">12</text></g>
+      <g class="kpi k5"><rect class="card" x="632" y="204" width="140" height="70" rx="10"/><text class="lbl" x="646" y="226">Data health</text><circle cx="745" cy="244" r="16" fill="none" stroke="#1b9e5a" stroke-width="5"/></g>
+    </g>
+    <!-- charts -->
+    <rect class="card" x="24" y="290" width="360" height="250" rx="10"/><text x="38" y="312" font-size="12" font-weight="700" fill="#10213f">Category</text>
+    <g font-size="10" fill="#33466b">
+      <text x="38" y="342">Operations</text><rect class="bar" x="110" y="333" width="230" height="9" rx="4" fill="#0b6bd1"/>
+      <text x="38" y="372">Software</text><rect class="bar b2" x="110" y="363" width="210" height="9" rx="4" fill="#1aa3c9"/>
+      <text x="38" y="402">Network</text><rect class="bar b3" x="110" y="393" width="196" height="9" rx="4" fill="#e07b00"/>
+      <text x="38" y="432">Hardware</text><rect class="bar b4" x="110" y="423" width="180" height="9" rx="4" fill="#c2328f"/>
+      <text x="38" y="462">Finance</text><rect class="bar b4" x="110" y="453" width="150" height="9" rx="4" fill="#1b9e5a"/>
+      <text x="38" y="492">Security</text><rect class="bar b4" x="110" y="483" width="120" height="9" rx="4" fill="#7a4fd6"/>
+    </g>
+    <rect class="card" x="400" y="290" width="260" height="250" rx="10"/><text x="414" y="312" font-size="12" font-weight="700" fill="#10213f">Status</text>
+    <circle cx="530" cy="415" r="60" fill="none" stroke="#e5ecf7" stroke-width="22"/>
+    <circle cx="530" cy="415" r="60" fill="none" stroke="#0b6bd1" stroke-width="22" stroke-dasharray="226 377" transform="rotate(-90 530 415)"><animate attributeName="stroke-dasharray" from="0 377" to="226 377" dur="1.6s" fill="freeze"/></circle>
+    <circle cx="530" cy="415" r="60" fill="none" stroke="#e07b00" stroke-width="22" stroke-dasharray="90 377" stroke-dashoffset="-226" transform="rotate(-90 530 415)"/>
+    <rect class="card" x="676" y="290" width="260" height="250" rx="10"/><text x="690" y="312" font-size="12" font-weight="700" fill="#10213f">Smart insights</text>
+    <g font-size="10" fill="#33466b"><text x="690" y="340">• 0 new in the last 7 days</text><text x="690" y="362">• 3 items overdue in Approvals</text><text x="690" y="384">• Critical priority: 26%</text></g>
+    <!-- assistant panel -->
+    <g class="panel">
+      <rect x="600" y="34" width="360" height="526" fill="#fff" stroke="#c9d6ee"/>
+      <text x="620" y="62" font-size="13" font-weight="700" fill="#10213f">✦ infosecagent1</text>
+      <text x="620" y="82" font-size="10" fill="#5b6b86">Copilot Studio · in-app chat · runs with your permissions</text>
+      <g class="q"><rect x="700" y="110" width="240" height="40" rx="12" fill="#0b3d91"/><text x="714" y="134" font-size="11" fill="#fff">What needs attention right now?</text></g>
+      <g class="dots" fill="#5b6b86"><circle cx="630" cy="190" r="4"/><circle cx="644" cy="190" r="4"/><circle cx="658" cy="190" r="4"/></g>
+      <g class="a1"><rect x="620" y="170" width="290" height="110" rx="12" fill="#eef3fb"/>
+        <text x="634" y="194" font-size="11" fill="#10213f">3 requests are overdue in the Legal</text>
+        <text x="634" y="212" font-size="11" fill="#10213f">approval step, and 12 items are waiting</text>
+        <text x="634" y="230" font-size="11" fill="#10213f">for you. Start with Software Request</text>
+        <text x="634" y="248" font-size="11" fill="#10213f">#03499 (Critical).</text></g>
+      <rect x="616" y="496" width="250" height="34" rx="8" fill="#fff" stroke="#9db9ef"/><text x="628" y="517" font-size="11" fill="#7a8aa6">Ask anything…</text>
+      <rect x="874" y="496" width="70" height="34" rx="8" fill="#0b3d91"/><text x="892" y="517" font-size="11" fill="#fff">Send</text>
+    </g>
+  </g>
+</svg>

@@ -916,6 +916,11 @@ async function askD2E(env: string, schema: string, message: string, conv?: strin
   const acts = sseActivities(await invokeHttp('POST', url, { activity: { type: 'message', text: message, conversation: { id } }, conversationId: id }))
   const text = answerOf(acts)
   if (!text) throw new Error('The agent finished its turn without a text answer. Check that the agent is published and set to “Authenticate with Microsoft”.')
+  const bad = text.match(/Error code:\s*([A-Za-z0-9_]+)/i)
+  if (bad && /something unexpected happened|we.re looking into it/i.test(text)) {
+    const code = bad[1]
+    throw new Error(/LatestPublishedVersionNotFound|NotPublished/i.test(code) ? 'This agent has no published version yet. In Copilot Studio open the agent, click Publish, wait until it says Published, set Authentication to “Authenticate with Microsoft”, then test again.' : `The agent answered with an error (code ${code}). Check in Copilot Studio that it is published and that Authentication is “Authenticate with Microsoft”.`)
+  }
   return { text, conversationId: id, all: [text] }
 }
 
