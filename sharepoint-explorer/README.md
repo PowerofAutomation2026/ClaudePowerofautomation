@@ -579,6 +579,25 @@ Publish it in Copilot Studio and set <b>Authentication → Authenticate with Mic
 It reads the Dataverse <code>bot</code> table; your role needs read access to it (<code>prvReadbot</code>). You can always type the schema name instead.
 </details>
 
+<details><summary><b>Can I use the custom connector on its own — in a Power Automate flow, a canvas app or another app?</b></summary>
+
+**Yes inside Power Platform; outside it you need your own sign-in.** A custom connector is a normal Power Platform artifact, not something tied to this app.
+
+| Where | Works? | Notes |
+|---|---|---|
+| **Power Automate** (cloud flows) | ✅ | Add the connector in a flow and pick the *Discover* / *PathN* actions. The flow runs as the person who created the connection, so use a dedicated, licensed service account for scheduled flows. |
+| **Canvas apps / model-driven apps** | ✅ | Add it as a data source; each user signs in to their own connection. |
+| **Other code apps** | ✅ | Follow the developer guide, step 7 onwards (`pac code add-data-source`). One connector serves every app in the environment. |
+| **Copilot Studio (as a tool / action)** | ⚠️ not tested | Custom connectors can normally be added as tools; you would expose a friendlier operation than the generic `PathN` ones. |
+| **VS Code, scripts, other web apps** | ➖ not via the connector | The connector is not an API you can call from outside Power Platform. Reuse the **same Entra app registration** with your own OAuth flow (MSAL) and call the Copilot Studio endpoints directly — add that app type's redirect URI to the registration. Not covered by this repo. |
+
+**Practical tips for flows**
+* The `PathN` actions are deliberately generic (they take the route segments Copilot Studio returns). For a flow, add one or two **friendly operations** to the swagger — for example `CreateConversation` and `SendMessage` with fixed paths from your `Discover` result — and hide the generic ones.
+* Replies arrive as **server-sent events text**; parse the `data:` lines (see `copilotDirect.ts`) or use a *Parse JSON* step on the part you need.
+* Agent turns can take a while — set a generous action timeout and handle failures with a retry.
+* Remember the **published agent** and **Authenticate with Microsoft** requirements, and that each connection holds one user's permissions.
+</details>
+
 <details><summary><b>Do I have to use an app registration?</b></summary>
 Only for in-app chat with <i>new-experience</i> agents. Classic agents need none. Without it, use <b>Add this agent as a link instead</b> (opens the agent; optional “Chat here” embeds the Copilot Studio web chat if your tenant allows it).
 </details>
