@@ -450,7 +450,7 @@ function cap(n){return Object.prototype.hasOwnProperty.call(CAP,n)?CAP[n]:n;}
 function list(a,max){max=max||6;return a.length<=max?a.join(', '):a.slice(0,max).join(', ')+' and '+(a.length-max)+' more';}
 
 /* ---------- data ---------- */
-var live={frames:[],seen:new Set(),edges:[],interval:60,ok:null,admin:false,roles:[],drills:null,newAt:Date.now(),failAt:null,meta:{}};
+var live={frames:[],seen:new Set(),edges:[],interval:60,ok:null,admin:false,roles:[],drills:null,newAt:Date.now(),failAt:null,meta:{alerts:null,health:null,warnings:[],sla:null,label:""}};
 var sim={on:false,frames:[],edges:[],sc:null,t0:0,k:0,timer:null,svc:new Map(),level:'ok',clean:0};
 var view={idx:null,sel:null,hover:null,playing:null};
 var needHistory=true;
