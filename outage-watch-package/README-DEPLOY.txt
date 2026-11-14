@@ -1,7 +1,7 @@
 OUTAGE-WATCH  -  ZERO-TOUCH DEPLOYMENT PACKAGE (Windows)
 =========================================================
 Monitors Microsoft 365 and Copilot from the outside, warns early, and shows a live
-blast-radius dashboard. Package version = verified build 1076150 (78 tests pass).
+blast-radius dashboard. Package version = build 925451d (113 unit tests pass; the installer runs them as a gate).
 
 WHAT YOU NEED
   * Windows 10/11 or Windows Server 2016+ with PowerShell 5.1 (built in)
@@ -78,5 +78,9 @@ HONEST LIMITS
     is covered by automated tests that ran on Linux. The PowerShell script itself was NOT
     executed on Windows by its author; it passed static checks only. Use -DryRun first.
   * This build detects and displays; it has not yet seen a real Microsoft outage.
-  * Newer features (alert channels with escalation, maintenance windows, SLA reports,
-    dashboard login) are not in this build.
+  * This build also contains newer modules (alert channels, maintenance windows, history
+    database, Microsoft Service Health comparison, dashboard login, staff status page).
+    They pass unit/mock tests only, were not checked live, and their setup is NOT yet
+    documented in this package. The core deploy above does not depend on them.
+  * The Microsoft Service Health comparison needs credentials and was only tested
+    against a mock server.

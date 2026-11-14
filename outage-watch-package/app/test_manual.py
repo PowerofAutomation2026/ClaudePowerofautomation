@@ -379,5 +379,5 @@ class DrillsAndRoles(unittest.TestCase):
     def test_page_never_posts_simulated_data(self):
         page = server.PAGE
         self.assertEqual(page.count("method:'POST'"), 1)       # only the admin manual-test call
-        self.assertEqual(sorted(set(__import__("re").findall(r"'(api/[a-z-]+)'", page))), ["api/test", "api/test-alert"])
+        self.assertEqual(sorted(set(__import__("re").findall(r"'(api/[a-z-]+)'", page))), ["api/ack", "api/snooze", "api/test", "api/test-alert"])   # all admin-token protected
         self.assertNotIn("sim.frames", page[page.index("function mtCall"):page.index("$('mtForm')")])

@@ -185,6 +185,24 @@ body.sim .wm{display:block}
 .tkey .l{border-top:2px solid var(--ink);height:0;vertical-align:.2rem}
 footer{font-size:.78rem;color:var(--muted)}
 [hidden]{display:none!important}
+/* alerting + SLA */
+.chip.maint{color:var(--blocked)}.chip.div{color:var(--bg);background:var(--suspect);border-color:var(--suspect)}
+#alWarn{margin:0 0 .6rem;padding:0;list-style:none;display:grid;gap:.4rem}
+#alWarn li{border:2px solid var(--suspect);border-radius:.45rem;padding:.5rem .7rem;font-weight:600;background:color-mix(in srgb,var(--suspect) 10%,var(--panel))}
+#alBody p{margin:.25rem 0;overflow-wrap:anywhere}
+#alBody .inc{border-left:.3rem solid var(--down);padding-left:.6rem;font-weight:600}
+#alBody .inc.ack{border-color:var(--up)}
+.alCtl{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-top:.5rem}
+.alCtl input{font:inherit;color:var(--ink);background:var(--panel2);border:1px solid var(--line);border-radius:.45rem;padding:.4rem;min-height:2.4rem;width:6rem}
+#alMsg{font-weight:600;min-height:1.4em;margin:.4rem 0 0}
+#alMsg.err{color:var(--down)}
+.tblWrap{overflow-x:auto;max-width:100%}
+#slaT{border-collapse:collapse;width:100%;font:500 .82rem var(--mono)}
+#slaT th,#slaT td{text-align:right;padding:.3rem .5rem;border-bottom:1px solid var(--line);white-space:nowrap}
+#slaT th:first-child,#slaT td:first-child{text-align:left;white-space:normal;overflow-wrap:anywhere}
+#slaT th{color:var(--muted);font-weight:700}
+#slaT small{display:block;color:var(--muted)}
+#slaT .lo{color:var(--down);font-weight:700}
 /* stale monitor warning */
 #staleBar{border:3px solid var(--down);border-radius:.6rem;padding:.7rem 1rem;font-weight:700;font-size:1.1rem;color:var(--ink);
   background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--down) 22%,var(--panel)) 0 14px,var(--panel) 14px 28px)}
@@ -264,7 +282,7 @@ select{font:inherit;color:var(--ink);background:var(--panel2);border:1px solid v
 </defs></svg>
 <div class="wrap">
 <header>
-  <h1>outage-watch<small>Blast-radius map for Microsoft 365 &amp; Copilot probes</small></h1>
+  <h1>outage-watch<small id="sub">Blast-radius map for Microsoft 365 &amp; Copilot probes</small></h1>
   <div id="clock" aria-label="Clock and data freshness"><time id="clockT">--:--:--</time><span id="clockF"></span></div>
   <div class="tools ctl nosnap">
     <button id="sndBtn" type="button" aria-pressed="false">Sound alert: off</button>
@@ -353,6 +371,26 @@ select{font:inherit;color:var(--ink);background:var(--panel2);border:1px solid v
   <div id="mtOut" hidden></div>
 </section>
 
+<section class="panel nosnap nokiosk" id="al" aria-labelledby="hAl">
+  <h2 id="hAl">Alerting</h2>
+  <ul id="alWarn"></ul>
+  <div id="alBody"></div>
+  <div class="alCtl" id="alCtl" hidden>
+    <button type="button" id="alAck">Acknowledge incident</button>
+    <label for="alSvc">Snooze</label><select id="alSvc"></select>
+    <label for="alMin">for (min)</label><input id="alMin" type="number" min="0" max="10080" value="60" inputmode="numeric">
+    <button type="button" id="alSnooze">Snooze</button><button type="button" id="alUnsnooze">Unsnooze</button>
+  </div>
+  <p id="alMsg" role="status"></p>
+  <p class="hint">Acknowledge stops escalation for the open incident. Snooze mutes alerts for one service (it is still probed and shown). Both need the admin token typed in the Manual test panel above.</p>
+</section>
+
+<section class="panel" id="sla" aria-labelledby="hSla">
+  <h2 id="hSla">Uptime (share of probe rounds answered)</h2>
+  <div class="tblWrap"><table id="slaT"></table></div>
+  <p class="hint" id="slaHint"></p>
+</section>
+
 <section class="panel" aria-labelledby="hTl">
   <h2 id="hTl">Early-warning timeline<span class="simTag">SIMULATION</span></h2>
   <ul class="tkey">
@@ -412,7 +450,7 @@ function cap(n){return Object.prototype.hasOwnProperty.call(CAP,n)?CAP[n]:n;}
 function list(a,max){max=max||6;return a.length<=max?a.join(', '):a.slice(0,max).join(', ')+' and '+(a.length-max)+' more';}
 
 /* ---------- data ---------- */
-var live={frames:[],seen:new Set(),edges:[],interval:60,ok:null,admin:false,roles:[],drills:null,newAt:Date.now(),failAt:null};
+var live={frames:[],seen:new Set(),edges:[],interval:60,ok:null,admin:false,roles:[],drills:null,newAt:Date.now(),failAt:null,meta:{}};
 var sim={on:false,frames:[],edges:[],sc:null,t0:0,k:0,timer:null,svc:new Map(),level:'ok',clean:0};
 var view={idx:null,sel:null,hover:null,playing:null};
 var needHistory=true;
@@ -421,7 +459,7 @@ function normFrame(f){
   var m=new Map(),src=f&&f.services&&typeof f.services==='object'?f.services:{};
   Object.keys(src).forEach(function(n){var v=src[n]||{};
     m.set(n,{state:STATES.indexOf(v.state)>=0?v.state:'down',ms:num(v.ms),code:v.code==null?null:v.code,
-      error:v.error==null?null:String(v.error),baseline:v.baseline==null?null:num(v.baseline),warn:v.warn_ms==null?null:num(v.warn_ms)});});
+      error:v.error==null?null:String(v.error),maint:v.maintenance==null?null:String(v.maintenance),info:v.info==null?null:String(v.info),msStatus:v.ms_status==null?null:String(v.ms_status),baseline:v.baseline==null?null:num(v.baseline),warn:v.warn_ms==null?null:num(v.warn_ms)});});
   return {t:String(f.updated),level:LEVELS.indexOf(f.level)>=0?f.level:'freeze',verdict:String(f.verdict==null?'':f.verdict),services:m};
 }
 function ingest(d){
@@ -440,9 +478,11 @@ function ingest(d){
   if(Array.isArray(d.edges))live.edges=d.edges.filter(function(e){return Array.isArray(e)&&e.length===2&&typeof e[0]==='string'&&typeof e[1]==='string';});
   if(num(d.interval)>0)live.interval=num(d.interval);
   live.admin=d.admin===true;
+  live.meta={alerts:d.alerts||null,health:d.health||null,warnings:Array.isArray(d.warnings)?d.warnings:[],sla:d.sla||null,label:typeof d.label==='string'?d.label:'',auth:d.auth===true};
 }
 function poll(){
   fetch('status.json'+(needHistory?'?history=1':''),{cache:'no-store'}).then(function(r){
+    if(r.status===401){location.replace('login');throw new Error('auth');}
     if(!r.ok)throw new Error('http');return r.json();
   }).then(function(d){ingest(d);live.ok=true;live.failAt=null;needHistory=false;}).catch(function(){live.ok=false;if(!live.failAt)live.failAt=Date.now();needHistory=true;}).then(function(){render();tickAge();});
 }
@@ -625,7 +665,8 @@ function buildGraph(names,edges){
 function nodeSub(v,d){
   if(d.kind==='risk-down')return 'at risk · '+v.ms+' ms';
   if(d.kind==='risk-warn')return 'may be slow · '+v.ms+' ms';
-  if(v.state==='blocked')return 'blocked · your proxy';
+  if(v.maint)return v.state+' \u00b7 maintenance';
+  if(v.state==='blocked')return 'blocked \u00b7 your proxy';
   if(v.state==='down'||v.state==='suspect')return v.state+' · '+(v.code?'HTTP '+v.code:'no answer');
   return v.state+' · '+v.ms+' ms';
 }
@@ -683,6 +724,11 @@ function renderBanner(frame,D,w,idx){
   ['warning','suspect','down','blocked'].forEach(function(k){if(n[k])parts.push(n[k]+' '+k);});
   if(n.risk)parts.push(n.risk+' at risk downstream');
   meta.append(h('span','mono',parts.join(' · ')));
+  var mt=[];frame.services.forEach(function(v,n){if(v.maint)mt.push(n);});
+  if(mt.length)meta.append(h('span','chip maint','MAINTENANCE \u00b7 not alerting: '+list(mt,5)));
+  var hv=live.meta.health,dv=hv&&hv.divergent?Object.keys(hv.divergent):[];
+  if(!sim.on&&dv.length)meta.append(h('span','chip div','DIVERGENCE \u00b7 our probes see trouble, Microsoft status does not (yet): '+
+    dv.map(function(n){return n+' since '+hms(hv.divergent[n]);}).join(', ')));
   var replaying=idx<w.frames.length-1;
   if(replaying)meta.append(h('span','chip replay','REPLAY · past state from '+hms(frame.t)));
   else{var a=h('span',null,'');a.id='age';meta.append(a);}
@@ -784,6 +830,41 @@ function copyText(text,box,msg){
   if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(text).then(function(){msg.textContent='Copied. Review it before sending.';},fallback);
   else fallback();
 }
+var alSig='';
+function renderAlerting(){
+  var m=live.meta,a=m.alerts,warn=$('alWarn'),body=$('alBody'),names=live.frames.length?Array.from(live.frames[live.frames.length-1].services.keys()).sort():[];
+  var sig=JSON.stringify([a,m.warnings,m.health&&m.health.error,live.admin,names]);
+  $('sub').textContent='Blast-radius map for Microsoft 365 & Copilot probes'+(m.label?' \u00b7 '+m.label:'');
+  if(sig===alSig)return;alSig=sig;
+  warn.replaceChildren();m.warnings.forEach(function(t){warn.append(h('li',null,'WARNING: '+String(t)));});
+  body.replaceChildren();
+  if(m.health)body.append(h('p',null,'Microsoft Service Health comparison: '+(m.health.error?'not available ('+m.health.error+'); treated as unknown, never as healthy':'on, last read '+(m.health.age_s==null?'never':m.health.age_s+' s ago'))+'.'));
+  if(!a){body.append(h('p',null,'No alert channels are configured in the config file. See README, "Alerting".'));$('alCtl').hidden=true;return;}
+  body.append(h('p',null,'Channels: '+(a.channels.length?a.channels.map(function(c){return c.name+' ('+c.type+(c.m365?', hosted on Microsoft: may fail in the same outage':'')+')';}).join('; '):'none')+
+    '. Dead-man heartbeat: '+String(a.heartbeat)+'.'));
+  var inc=a.incident;
+  body.append(h('p','inc'+(inc&&inc.acked?' ack':''),!inc?'No open incident.':'Open incident since '+hms(inc.opened_iso)+', level '+inc.level+'. '+
+    (inc.acked?'Acknowledged ('+String(inc.acked_by||'')+'); escalation stopped.':'NOT acknowledged'+(inc.escalated?'; escalation has been sent.':'.'))+
+    ' Notified: '+((inc.notified||[]).join(', ')||'nobody (no channel delivered)')+'.'));
+  var sn=Object.keys(a.snoozed||{});
+  body.append(h('p',null,sn.length?'Snoozed: '+sn.map(function(n){return n+' ('+Math.ceil(a.snoozed[n]/60)+' min left)';}).join(', ')+'.':'Nothing is snoozed.'));
+  if(a.recent&&a.recent.length)body.append(h('p','hint','Recent deliveries: '+a.recent.map(function(x){return x.channel+' '+x.result;}).join(', ')+'.'));
+  $('alCtl').hidden=!live.admin;$('alAck').disabled=!inc||!!inc.acked;
+  var sel=$('alSvc'),keep=sel.value;sel.replaceChildren();
+  names.forEach(function(n){var o=h('option',null,n);o.value=n;sel.append(o);});if(names.indexOf(keep)>=0)sel.value=keep;
+}
+var slaSig='';
+function renderSla(){
+  var d=live.meta.sla,t=$('slaT'),sig=JSON.stringify(d);if(sig===slaSig)return;slaSig=sig;t.replaceChildren();
+  if(!d||!Object.keys(d).length){$('slaHint').textContent='Uptime history is off. Start outage-watch with --db FILE to mirror the log into SQLite and show 24 h / 7 d / 30 d uptime here.';return;}
+  var W=['24h','7d','30d'],hr=h('tr');hr.append(h('th',null,'service'));W.forEach(function(w){hr.append(h('th',null,w));});hr.append(h('th',null,'p50 / p95 ms (24h)'));t.append(hr);
+  Object.keys(d).sort().forEach(function(n){
+    var tr=h('tr');tr.append(h('td',null,n));
+    W.forEach(function(w){var x=d[n][w],td=h('td',x&&x.uptime!=null&&x.uptime<99.9?'lo':null,x&&x.uptime!=null?num(x.uptime).toFixed(2)+'%':'n/a');
+      td.append(h('small',null,x?num(x.samples)+' rounds'+(x.maint?', '+num(x.maint)+' maint.':''):''));tr.append(td);});
+    var x=d[n]['24h'];tr.append(h('td',null,x&&x.p50!=null?num(x.p50)+' / '+num(x.p95):'n/a'));t.append(tr);});
+  $('slaHint').textContent='Answered = up or warning. Blocked probes and samples inside maintenance windows are not counted. Resolution is one probe round. Values below 99.9% are bold and marked by colour.';
+}
 function renderDetail(frame,D){
   var box=$('detail'),n=view.hover||view.sel;box.replaceChildren();
   if(!frame||!n||!frame.services.has(n)){box.append(h('p',null,'No node selected. Tab to a node or click one; Escape clears.'));return;}
@@ -791,6 +872,9 @@ function renderDetail(frame,D){
   var hd=h('h3');hd.append(document.createTextNode(n+(cap(n)!==n?' — '+cap(n):'')));box.append(hd);
   box.append(h('p',null,'Probe: '+v.state+(v.code?', HTTP '+v.code:'')+(v.error?', '+v.error:'')+', '+v.ms+' ms. '+
     (v.baseline==null?'Baseline still being learned.':'Baseline '+v.baseline+' ms, warns above '+v.warn+' ms.')));
+  if(v.info)box.append(h('p',null,'Check detail: '+v.info+'.'));
+  if(v.maint)box.append(h('p','big','In a planned maintenance window ('+v.maint+'): still probed and logged, but it does not alert or raise the freeze level.'));
+  if(v.msStatus)box.append(h('p',null,'Microsoft Service Health reports: '+v.msStatus+' (as read through Microsoft Graph; can lag).'));
   if(d.kind.indexOf('risk')===0)box.append(h('p','big','At risk because '+list(d.via)+' is not healthy.'));
   if(v.state==='blocked')box.append(h('p','big','Your own proxy or firewall refused this probe. That says nothing about the service itself.'));
   if(ups.length)box.append(h('p',null,'Needs: '+list(ups.slice().sort(),8)+'.'));
@@ -874,7 +958,7 @@ function render(){
     D=derive(frame,G.T);
     renderGraph(frame,D,w,view.idx===null);
   }
-  renderBanner(frame,D,w,idx);renderRoles(frame,D);renderWorks(frame,D);renderDetail(frame,D);renderTimeline(w,Math.max(0,idx));renderReplay(w,Math.max(0,idx));
+  renderAlerting();renderSla();renderBanner(frame,D,w,idx);renderRoles(frame,D);renderWorks(frame,D);renderDetail(frame,D);renderTimeline(w,Math.max(0,idx));renderReplay(w,Math.max(0,idx));
   var lf=live.frames[live.frames.length-1];
   if(lf){var li=LEVELS.indexOf(lf.level);if(lastLiveLevel>=0&&li>lastLiveLevel)beep(li===2?3:1);lastLiveLevel=li;}
   if(frame&&view.idx===null){var key=(sim.on?'Simulation: ':'')+'level '+frame.level;
@@ -934,7 +1018,8 @@ function simScenario(sc){if(drill&&drill.ended==null)return;sim.sc=sc==='heal'?n
 var mtBusy=false,MT_ERR={400:'Request rejected: that service is not in the configured target list.',401:'Token rejected.',
   403:'Refused by outage-watch (manual test disabled or cross-origin request).',429:'Too soon. Manual runs are limited to one every few seconds; try again shortly.',
   500:'outage-watch hit an internal error running the test.'};
-function mtMsg(t,err){var m=$('mtMsg');m.textContent=t;m.className=err?'err':'';}
+var mtMsgEl='mtMsg';
+function mtMsg(t,err){var m=$(mtMsgEl);m.textContent=t;m.className=err?'err':'';}
 function mtHead(chip,text){var hd=h('h3');hd.append(h('span','mtChip',chip),document.createTextNode(text));return hd;}
 function mtShowTest(d){
   var out=$('mtOut'),ul=h('ul');out.replaceChildren();
@@ -956,17 +1041,24 @@ function mtShowAlert(d){
     h('p','hint',d.ok?'Check that the message arrived in your alert channel.':'Nothing was delivered successfully. Check --webhook / --on-change on the outage-watch command line.'));
   out.hidden=false;
 }
-function mtCall(path,body,label,show){
+function mtCall(path,body,label,show,msgEl){
   var tok=$('mtTok').value;
   if(mtBusy)return;
+  mtMsgEl=msgEl||'mtMsg';
   if(!tok){mtMsg('Paste the admin token first.',true);$('mtTok').focus();return;}
   mtBusy=true;mtMsg(label+' \u2026');
   var p;try{p=fetch(path,{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json','Authorization':'Bearer '+tok},body:JSON.stringify(body)});}catch(e){p=Promise.reject(e);}
   p.then(function(r){return r.json().catch(function(){return {};}).then(function(d){return {s:r.status,d:d};});})
-   .then(function(o){if(o.s===200){show(o.d);mtMsg('Done. Result below is a manual test, separate from the continuous data above.');}
+   .then(function(o){if(o.s===200){var txt=show(o.d);mtMsg(txt||'Done. Result below is a manual test, separate from the continuous data above.');if(txt){needHistory=false;poll();}}
+     else if(o.s===404)mtMsg('Alerting is not configured on this outage-watch.',true);
      else mtMsg(MT_ERR[o.s]||'Request failed (HTTP '+o.s+').',true);})
    .catch(function(){mtMsg('Could not reach outage-watch.',true);}).then(function(){mtBusy=false;});
 }
+$('alAck').addEventListener('click',function(){mtCall('api/ack',{},'Acknowledging',function(d){return d.acked?'Incident acknowledged. Escalation stopped.':'There was no open, unacknowledged incident.';},'alMsg');});
+function snooze(min){var n=$('alSvc').value;if(!n)return;mtCall('api/snooze',{service:n,minutes:min},min?'Snoozing '+n:'Removing snooze for '+n,
+  function(){return min?n+' snoozed for '+min+' min. It is still probed and shown.':'Snooze removed for '+n+'.';},'alMsg');}
+$('alSnooze').addEventListener('click',function(){var m=Number($('alMin').value);if(!(m>0&&m<=10080)){mtMsgEl='alMsg';mtMsg('Minutes must be between 1 and 10080.',true);return;}snooze(m);});
+$('alUnsnooze').addEventListener('click',function(){snooze(0);});
 $('mtForm').addEventListener('submit',function(e){e.preventDefault();mtCall('api/test',{},'Running manual test',mtShowTest);});
 $('mtAlert').addEventListener('click',function(){mtCall('api/test-alert',{},'Sending test alert',mtShowAlert);});
 $('mtRetest').addEventListener('click',function(){if(!view.sel)return;var n=view.sel;mtCall('api/test',{only:[n]},'Retesting '+n,mtShowTest);

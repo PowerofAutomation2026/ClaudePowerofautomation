@@ -67,6 +67,40 @@ DEFAULT_ROLES = {
 }
 
 
+def role_view(state, roles, edges=None, labels=None):
+    """Plain-language task status for the public status page. No URLs, no latency, and no
+    internal service names unless given a public label. Mirrors the dashboard's role view.
+    Returns [{"name", "status": ok|shaky|down|unknown|unmonitored, "text"}]."""
+    edges = dependency_edges() if edges is None else edges
+    sev = {"warning": 1, "suspect": 2, "down": 3}
+    ups = {}
+    for a, b in edges:
+        if a in state and b in state:
+            ups.setdefault(b, set()).add(a)
+
+    def causes(n, seen):
+        for u in ups.get(n, ()):
+            if u not in seen:
+                seen.add(u)
+                causes(u, seen)
+        return seen
+    words = {"ok": "Should work", "shaky": "May be slow or unreliable", "down": "Unlikely to work right now",
+             "unknown": "Cannot be checked from our network", "unmonitored": "Not monitored"}
+    out = []
+    for name, need in (roles.items() if isinstance(roles, dict) else roles):
+        need = [n for n in need if n in state]
+        involved = set(need)
+        for n in need:
+            involved |= causes(n, set())
+        worst = max([sev.get(state[n], 0) for n in involved], default=0)
+        st = ("unmonitored" if not need else "down" if worst >= 3 else "shaky" if worst >= 1
+              else "unknown" if any(state[n] == "blocked" for n in need) else "ok")
+        named = sorted({labels[n] for n in involved if sev.get(state[n]) and labels and n in labels})
+        out.append({"name": name, "status": st,
+                    "text": words[st] + (" (" + ", ".join(named) + ")" if named and st in ("shaky", "down") else "")})
+    return out
+
+
 def stress_score(samples, baseline, warn_ms):
     """Transparent early-warning heuristic, 0-100. NOT a prediction and not machine learning.
 
@@ -196,8 +230,69 @@ def tenant_targets(tenant):
     }
 
 
+def _query(url):
+    from urllib.parse import parse_qs, urlsplit
+    u = urlsplit(url)
+    return u, {k: v[0] for k, v in parse_qs(u.query).items()}
+
+
+def probe_tls(name, url, timeout=10.0):
+    """tls://host[:port][?warn_days=21]  Certificate check with normal verification.
+    down = handshake/verification failed (includes an EXPIRED cert); degraded = valid but
+    fewer than warn_days left. `info` carries the days left."""
+    import socket, ssl
+    u, q = _query(url)
+    start, err, info, state = time.monotonic(), None, None, "down"
+    try:
+        warn = int(q.get("warn_days", 21))
+        ctx = ssl.create_default_context(cafile=q.get("cafile"))
+        with socket.create_connection((u.hostname, u.port or 443), timeout=timeout) as raw:
+            with ctx.wrap_socket(raw, server_hostname=u.hostname) as tls:
+                not_after = ssl.cert_time_to_seconds(tls.getpeercert()["notAfter"])
+        days = int((not_after - time.time()) // 86400)
+        info = f"certificate valid for {days} more day(s)"
+        state = "degraded" if days < warn else "up"
+        if state == "degraded":
+            err = f"cert-expires-in-{days}d"
+    except Exception as e:
+        err = type(e).__name__
+    return {"name": name, "state": state, "code": None, "ms": round((time.monotonic() - start) * 1000),
+            "error": err, "info": info}
+
+
+def probe_dns(name, url, timeout=10.0):
+    """dns://hostname[?expect=1.2.3.4,target.example.net]  Resolves with the system resolver
+    (stdlib socket: A/AAAA and the canonical name only; MX/TXT cannot be queried).
+    down = does not resolve; degraded = resolves but matches none of the expected values
+    (an expected value matches an IP exactly, or the canonical name exactly / as a suffix)."""
+    import socket
+    u, q = _query(url)
+    start, err, info, state = time.monotonic(), None, None, "down"
+    try:
+        host = u.hostname
+        ips = sorted({a[4][0] for a in socket.getaddrinfo(host, None)})
+        try:
+            canon = socket.gethostbyname_ex(host)[0].lower().rstrip(".")
+        except OSError:
+            canon = host
+        info = f"resolves to {', '.join(ips[:4])}" + (f" (canonical name {canon})" if canon != host else "")
+        expect = [x.strip().lower().rstrip(".") for x in q.get("expect", "").split(",") if x.strip()]
+        ok = not expect or any(x in ips or canon == x or canon.endswith("." + x) for x in expect)
+        state = "up" if ok else "degraded"
+        if not ok:
+            err = "dns-mismatch"
+    except Exception as e:
+        err = type(e).__name__
+    return {"name": name, "state": state, "code": None, "ms": round((time.monotonic() - start) * 1000),
+            "error": err, "info": info}
+
+
 def probe(name, url, ok_codes, timeout=10.0, slow=3.0):
     """Return one result dict: state is up | degraded | down."""
+    if url.startswith("tls://"):
+        return probe_tls(name, url, timeout)
+    if url.startswith("dns://"):
+        return probe_dns(name, url, timeout)
     start = time.monotonic()
     code, err = None, None
     try:
@@ -465,7 +560,9 @@ def test_alert(webhook=None, on_change=None):
 
 def load_config(path):
     """JSON config: {"targets": {"name": ["https://url", [200,401] | null]}, "interval": 60,
-    "confirm": 2, "recover_after": 3, "factor": 3.0, "floor_ms": 800, "replace_defaults": false}"""
+    "confirm": 2, "recover_after": 3, "factor": 3.0, "floor_ms": 800, "replace_defaults": false,
+    "roles": {...}, "alerts": {...}, "maintenance": [...], "service_health": {...},
+    "public_labels": {...}, "db": "file", "retention_days": 90}. See config.example.json / README."""
     with open(path) as f:
         c = json.load(f)
     if not isinstance(c, dict):
@@ -475,8 +572,12 @@ def load_config(path):
         if not isinstance(spec, list) or len(spec) != 2:
             raise ValueError(f"target {name!r}: expected [url, codes-or-null]")
         url, codes = spec
-        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
-            raise ValueError(f"target {name!r}: url must start with http:// or https://")
+        if not isinstance(url, str) or not url.startswith(("http://", "https://", "tls://", "dns://")):
+            raise ValueError(f"target {name!r}: url must start with http://, https://, tls:// or dns://")
+        if url.startswith(("tls://", "dns://")):
+            u, q = _query(url)
+            if not u.hostname or not q.get("warn_days", "1").isdigit() or "@" in u.netloc:
+                raise ValueError(f"target {name!r}: need tls://host[:port][?warn_days=N] or dns://host[?expect=a,b]")
         if codes is not None and not (isinstance(codes, list) and all(isinstance(x, int) for x in codes)):
             raise ValueError(f"target {name!r}: codes must be a list of ints or null")
         targets[name] = (url, None if codes is None else set(codes))
@@ -488,31 +589,94 @@ def load_config(path):
             isinstance(k, str) and 0 < len(k) <= 80 and isinstance(v, list) and 0 < len(v) <= 30
             and all(isinstance(x, str) for x in v) for k, v in roles.items())):
         raise ValueError('roles must be {"task name": ["service", ...]}')
+    if "alerts" in c:
+        import alerts
+        alerts.validate(c["alerts"])
+    if "maintenance" in c:
+        import maint
+        c["maintenance"] = maint.validate(c["maintenance"])
+    if "service_health" in c:
+        import graphhealth
+        graphhealth.validate(c["service_health"])
+    labels = c.get("public_labels", {})
+    if not (isinstance(labels, dict) and all(isinstance(k, str) and isinstance(v, str) and len(v) <= 60 for k, v in labels.items())):
+        raise ValueError('public_labels must be {"service": "label shown to staff"}')
+    if "retention_days" in c and not (type(c["retention_days"]) is int and 1 <= c["retention_days"] <= 3650):
+        raise ValueError("retention_days must be an integer 1..3650")
+    if "label" in c and not (isinstance(c["label"], str) and 0 < len(c["label"]) <= 60 and c["label"].isprintable()):
+        raise ValueError("label must be printable text up to 60 characters")
+    for k in ("db", "alert_state"):
+        if k in c and not isinstance(c[k], str):
+            raise ValueError(f"{k} must be a file path")
     c["targets"] = targets
     return c
 
 
-def run_cycle(targets, prev, log_path=None, webhook=None, timeout=10.0, monitor=None, automation=None, snapshot=None):
-    """One probe round. Returns (results, new_state_map). Alerts only on change."""
+def run_cycle(targets, prev, log_path=None, webhook=None, timeout=10.0, monitor=None, automation=None,
+              snapshot=None, extras=None):
+    """One probe round. Returns (results, new_state_map). Alerts only on change.
+    extras (all optional): {"alerts": AlertManager, "maintenance": windows, "db": sqlite conn,
+    "retention_days": n, "health": ServiceHealth, "heartbeat_env": name}"""
+    x = extras or {}
     results = [probe(n, u, c, timeout=timeout) for n, (u, c) in targets.items()]
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat(timespec="seconds")
     verdict = diagnose(results)
     state = monitor.step(results) if monitor else {r["name"]: r["state"] for r in results}
-    hit = impact(state)
+    maint_on = {}
+    if x.get("maintenance"):
+        import maint
+        maint_on = maint.active(x["maintenance"], list(state), now_dt)
+    counted = {n: v for n, v in state.items() if n not in maint_on}      # maintenance never raises the level
+    hit = impact(counted)
     if hit:
         verdict += " | at risk: " + ", ".join(hit)
-    note = copilot_note(state)
+    note = copilot_note(counted)
     if note:
         verdict += " | " + note
+    if maint_on:
+        verdict += " | maintenance (not alerting): " + ", ".join(sorted(maint_on))
     if automation:
-        lvl = automation.step(state, now)
+        lvl = automation.step(counted, now)
         if lvl:
             verdict += f" | LEVEL -> {lvl}"
+    level = automation.level if automation else Automation.target_level(counted)
+    health = None
+    if x.get("health"):
+        health = x["health"].compare(state, now)
+        if health["divergent"]:
+            verdict += " | DIVERGENCE: our probes see trouble, Microsoft status does not (yet): " + ", ".join(sorted(health["divergent"]))
+    try:
+        if x.get("alerts"):
+            x["alerts"].step(level, state, hit, maint_on, now_iso=now)
+        if x.get("heartbeat_env"):
+            import alerts
+            alerts.heartbeat(x["heartbeat_env"])
+    except Exception as e:                       # alerting must never break probing
+        print(f"alerting failed: {type(e).__name__}", file=sys.stderr)
     if snapshot:
-        snapshot.update(now, automation.level if automation else "ok", verdict, results, state, monitor)
+        snapshot.update(now, level if automation else "ok", verdict, results, state, monitor,
+                        maintenance=maint_on, health=health,
+                        alerts=x["alerts"].public() if x.get("alerts") else None)
     if log_path:
-        append_log(log_path, {"ts": now, "verdict": verdict, "published": state, "results": results})
-    if prev is not None and state != prev and webhook:
+        rec = {"ts": now, "verdict": verdict, "published": state, "results": results}
+        if maint_on:
+            rec["maintenance"] = sorted(maint_on)
+        if health:
+            rec["ms_health"] = health["ms"]
+        append_log(log_path, rec)
+    if x.get("db") is not None:
+        try:
+            import store
+            store.add_round(x["db"], now, results, state, maint_on)
+            x["_rounds"] = x.get("_rounds", 0) + 1
+            if x["_rounds"] % 50 == 1:
+                store.purge(x["db"], x.get("retention_days", 90))
+            if snapshot and x["_rounds"] % 5 == 1:
+                snapshot.sla = store.sla(x["db"])
+        except Exception as e:
+            print(f"sqlite store failed: {type(e).__name__}", file=sys.stderr)
+    if prev is not None and state != prev and webhook and not x.get("alerts"):
         notify(webhook, f"[outage-watch {now}] {verdict}")
     return results, state
 
@@ -537,6 +701,13 @@ def main(argv=None):
     p.add_argument("--apply", action="store_true", help="with --test: also write the freeze file, run the hook, send the webhook")
     p.add_argument("--test-alert", action="store_true", help="send a labelled TEST message to --webhook and run --on-change once")
     p.add_argument("--drills", metavar="FILE", help="fire-drill scenarios for the dashboard (default: drills.example.json)")
+    p.add_argument("--db", metavar="FILE", help="SQLite mirror of the log for uptime/SLA (also config \"db\")")
+    p.add_argument("--alert-state", metavar="FILE", default=None, help="ack/snooze/incident state (default outagewatch-alerts.json)")
+    p.add_argument("--ack", action="store_true", help="acknowledge the open incident (stops escalation), then quit")
+    p.add_argument("--snooze", nargs=2, metavar=("NAME", "MINUTES"), help="mute alerts for one service (0 = unmute), then quit")
+    p.add_argument("--trust-proxy", metavar="IP", help="accept the identity header from this reverse-proxy address only")
+    p.add_argument("--proxy-user-header", default="X-Forwarded-User", help="identity header set by the trusted proxy")
+    p.add_argument("--public-status", action="store_true", help="serve the staff status page at /status without login")
     p.add_argument("--admin-token", help="enable the dashboard's manual-test API (prefer env OUTAGEWATCH_ADMIN_TOKEN)")
     try:
         a = p.parse_args(argv)
@@ -547,14 +718,6 @@ def main(argv=None):
     if (a.only or a.apply) and not a.test:
         print("--only and --apply need --test", file=sys.stderr)
         return 2
-    if a.test_alert:
-        if not (a.webhook or a.on_change):
-            print("--test-alert needs --webhook and/or --on-change", file=sys.stderr)
-            return 2
-        t = test_alert(a.webhook, a.on_change)
-        print(json.dumps(t, indent=2) if a.json else
-              f"sent: {t['message']}\nwebhook: {t['webhook']}\nhook: {t['hook']}\nhook exit code: {t['hook_exit']}")
-        return 0 if t["ok"] else 1
     cfg = {}
     if a.config:
         try:
@@ -562,6 +725,55 @@ def main(argv=None):
         except (OSError, ValueError) as e:
             print(f"bad config: {e}", file=sys.stderr)
             return 2
+    import alerts
+    astate = alerts.AlertState(a.alert_state or cfg.get("alert_state") or "outagewatch-alerts.json")
+    mgr = alerts.AlertManager(cfg["alerts"], astate, legacy_webhook=a.webhook) if cfg.get("alerts") else None
+    if a.ack:
+        print("incident acknowledged; escalation stopped" if astate.ack("cli") else "no open, unacknowledged incident")
+        return 0
+    if a.snooze:
+        try:
+            minutes = float(a.snooze[1])
+        except ValueError:
+            print("--snooze NAME MINUTES: MINUTES must be a number", file=sys.stderr)
+            return 2
+        astate.snooze(a.snooze[0], minutes)
+        print(f"{a.snooze[0]}: " + (f"alerts muted for {minutes:g} min" if minutes > 0 else "snooze removed"))
+        return 0
+
+    def do_test_alert():
+        t = test_alert(None if mgr else a.webhook, a.on_change)
+        if mgr:
+            t["channels"] = mgr.test(t["ts"])
+            t["webhook"] = "; ".join(f"{k}: {v}" for k, v in t["channels"].items()) or "no channels"
+            t["ok"] = bool(t["channels"]) and all(v == "sent" for v in t["channels"].values()) and \
+                (not a.on_change or t["hook_exit"] == 0)
+        return t
+    if a.test_alert:
+        if not (a.webhook or a.on_change or mgr):
+            print("--test-alert needs --webhook, --on-change or alert channels in --config", file=sys.stderr)
+            return 2
+        t = do_test_alert()
+        print(json.dumps(t, indent=2) if a.json else
+              f"sent: {t['message']}\nwebhook: {t['webhook']}\nhook: {t['hook']}\nhook exit code: {t['hook_exit']}")
+        return 0 if t["ok"] else 1
+    warnings = alerts.independence_warnings(cfg.get("alerts"), a.webhook)
+    for wtext in warnings:
+        print("WARNING: " + wtext, file=sys.stderr)
+    extras = {"alerts": mgr, "maintenance": cfg.get("maintenance"), "retention_days": cfg.get("retention_days", 90),
+              "heartbeat_env": (cfg.get("alerts") or {}).get("heartbeat_url_env")}
+    if a.db or cfg.get("db"):
+        import store
+        try:
+            extras["db"] = store.connect(a.db or cfg["db"])
+        except Exception as e:
+            print(f"cannot open --db: {type(e).__name__}", file=sys.stderr)
+            return 2
+    if cfg.get("service_health"):
+        import graphhealth
+        extras["health"] = graphhealth.ServiceHealth(cfg["service_health"])
+        if not a.once and not a.test:
+            extras["health"].start()
     auto = Automation(a.freeze_file, a.on_change, cfg.get("recover_after", 3)) \
         if (a.freeze_file or a.on_change or a.serve) else None   # the dashboard always shows a real level
     targets = {} if cfg.get("replace_defaults") else dict(DEFAULT_TARGETS)
@@ -601,10 +813,17 @@ def main(argv=None):
             print("warning: --admin-token is visible in the process list; prefer env OUTAGEWATCH_ADMIN_TOKEN", file=sys.stderr)
         admin = {"token": token, "targets": lambda: list(targets),
                  "run_test": lambda only: manual_test(targets, only, a.timeout, mon),
-                 "test_alert": lambda: test_alert(a.webhook, a.on_change)} if token else None
-        snap = Snapshot(dependency_edges(), a.interval, cfg.get("roles") or DEFAULT_ROLES, drills)
+                 "test_alert": do_test_alert,
+                 "ack": (lambda: {"acked": astate.ack("dashboard")}) if mgr else None,
+                 "snooze": (lambda svc, minutes: astate.snooze(svc, minutes) or {"service": svc, "minutes": minutes}) if mgr else None,
+                 } if token else None
+        snap = Snapshot(dependency_edges(), a.interval, cfg.get("roles") or DEFAULT_ROLES, drills,
+                        cfg.get("public_labels"), warnings)
+        snap.label = cfg.get("label", "")
+        access = {"viewer_token": os.environ.get("OUTAGEWATCH_VIEWER_TOKEN") or None, "trusted_proxy": a.trust_proxy,
+                  "proxy_header": a.proxy_user_header, "public_status": a.public_status}
         try:
-            make_server(snap, a.serve, a.bind, admin)
+            make_server(snap, a.serve, a.bind, admin, access)
         except ValueError as e:
             print(f"refusing to start dashboard: {e}", file=sys.stderr)
             return 2
@@ -612,7 +831,7 @@ def main(argv=None):
               f"{'ENABLED, token required' if admin else 'disabled, set OUTAGEWATCH_ADMIN_TOKEN to enable'})")
     prev = None
     while True:
-        results, prev_new = run_cycle(targets, prev, a.log, a.webhook, a.timeout, mon, auto, snap)
+        results, prev_new = run_cycle(targets, prev, a.log, a.webhook, a.timeout, mon, auto, snap, extras)
         for r in results:
             print(f"{r['name']:<16}{prev_new[r['name']]:<9}{r['code']!s:<6}{r['ms']}ms {r['error'] or ''}")
         print("verdict:", diagnose(results))
