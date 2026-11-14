@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Service status</title>
+<link rel="icon" href="data:,">
+<style>
+:root{--bg:#f4f1ea;--panel:#fffdf8;--line:#d8d0c1;--ink:#18202b;--muted:#566173;--ok:#0b7a4e;--shaky:#8a5f00;--down:#c41c38;--unknown:#5a48c8}
+@media (prefers-color-scheme:dark){:root{--bg:#080c12;--panel:#0f151f;--line:#232e3f;--ink:#e9eef5;--muted:#93a2b7;--ok:#3ddc97;--shaky:#ffd166;--down:#ff5d6e;--unknown:#b0a4ff}}
+*{box-sizing:border-box}
+body{margin:0;padding:16px;background:var(--bg);color:var(--ink);font:17px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;overflow-x:hidden}
+main{max-width:40rem;margin:0 auto;display:grid;gap:.8rem}
+h1{margin:.4rem 0 0;font-size:1.5rem}
+#sum{font-size:1.15rem;font-weight:700;margin:0;padding:.8rem 1rem;border-radius:.6rem;border:2px solid var(--c,var(--line));background:var(--panel)}
+ul{list-style:none;margin:0;padding:0;display:grid;gap:.5rem}
+li{display:grid;grid-template-columns:2.2rem minmax(0,1fr);gap:.7rem;align-items:center;background:var(--panel);border:1px solid var(--line);border-left:.4rem solid var(--c);border-radius:.5rem;padding:.7rem .9rem}
+li b{display:block;font-size:1.1rem}
+li span{color:var(--c);font-weight:600;overflow-wrap:anywhere}
+svg{width:2.2rem;height:2.2rem;fill:none;stroke:var(--c);stroke-width:4;stroke-linecap:round;stroke-linejoin:round}
+.s-ok{--c:var(--ok)}.s-shaky{--c:var(--shaky)}.s-down{--c:var(--down)}.s-unknown,.s-unmonitored{--c:var(--unknown)}
+p{margin:0;color:var(--muted);font-size:.9rem}
+#stale{color:var(--down);font-weight:700}
+</style>
+</head>
+<body>
+<main>
+  <h1>Service status</h1>
+  <p id="sum" role="status">Loading the latest check&hellip;</p>
+  <ul id="tasks" aria-label="Status by task"></ul>
+  <p id="when"></p>
+  <p id="stale" role="alert"></p>
+  <p>This page shows the result of our own automated checks. It does not state a cause and is not a statement from Microsoft.</p>
+  <noscript>This page needs JavaScript to show the current status.</noscript>
+</main>
+<script>
+(function(){
+'use strict';
+var NS='http://www.w3.org/2000/svg',lastNew=Date.now(),lastT=null,interval=60,failed=0;
+var ICON={ok:'M-18,0a18,18 0 1,0 36,0a18,18 0 1,0 -36,0ZM-8,1L-2,7L9,-6',shaky:'M0,-20L21,16L-21,16ZM0,-7L0,5M0,11L0,11.5',
+  down:'M-8,-19L8,-19L19,-8L19,8L8,19L-8,19L-19,8L-19,-8ZM-7,-7L7,7M7,-7L-7,7',unknown:'M-18,0a18,18 0 1,0 36,0a18,18 0 1,0 -36,0ZM-4,-5C-4,-11 5,-11 5,-5C5,-1 0,-1 0,4M0,10L0,10.5'};
+function $(i){return document.getElementById(i);}
+function show(d){
+  var ul=$('tasks'),tasks=Array.isArray(d.tasks)?d.tasks:[],bad=0,shaky=0;ul.replaceChildren();
+  tasks.forEach(function(t){
+    var st=['ok','shaky','down','unknown','unmonitored'].indexOf(t.status)>=0?t.status:'unknown',li=document.createElement('li'),box=document.createElement('div'),
+      b=document.createElement('b'),sp=document.createElement('span'),sv=document.createElementNS(NS,'svg'),pa=document.createElementNS(NS,'path');
+    if(st==='down')bad++;if(st==='shaky')shaky++;
+    li.className='s-'+st;b.textContent=String(t.name);sp.textContent=String(t.text);
+    sv.setAttribute('viewBox','-24 -24 48 48');sv.setAttribute('aria-hidden','true');pa.setAttribute('d',ICON[st==='unmonitored'?'unknown':st]);sv.append(pa);
+    box.append(b,sp);li.append(sv,box);ul.append(li);});
+  var sum=$('sum');
+  sum.className=bad?'s-down':shaky?'s-shaky':'s-ok';
+  sum.textContent=!d.updated?'Waiting for the first check.':bad?bad+' of '+tasks.length+' tasks are unlikely to work right now.':shaky?'Some tasks may be slow or unreliable.':'Everything we check looks normal.';
+  if(d.updated&&d.updated!==lastT){lastT=d.updated;lastNew=Date.now();}
+  if(Number(d.interval)>0)interval=Number(d.interval);
+  var dt=new Date(d.updated);
+  $('when').textContent=d.updated&&!isNaN(dt)?'Last checked '+dt.toISOString().slice(11,16)+' UTC'+(d.maintenance?'. Planned maintenance is in progress for some services.':'.'):'';
+}
+function stale(){
+  var s=(Date.now()-lastNew)/1000;
+  $('stale').textContent=failed>1||s>interval*2+30?'Warning: this page has not received a fresh check for '+Math.round(s/60)+' min. The status above may be out of date.':'';
+}
+function poll(){
+  fetch('status-public.json',{cache:'no-store'}).then(function(r){if(!r.ok)throw 0;return r.json();}).then(function(d){failed=0;show(d);}).catch(function(){failed++;}).then(stale);
+}
+poll();setInterval(poll,15000);setInterval(stale,5000);
+})();
+</script>
+</body>
+</html>
