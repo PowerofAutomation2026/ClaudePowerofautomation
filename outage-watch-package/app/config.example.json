@@ -1,0 +1,12 @@
+{
+  "interval": 60,
+  "confirm": 2,
+  "recover_after": 3,
+  "factor": 3.0,
+  "floor_ms": 800,
+  "replace_defaults": false,
+  "targets": {
+    "my-app": ["https://app.example.com/health", [200]],
+    "my-vpn": ["https://vpn.example.com/", null]
+  }
+}
