@@ -74,8 +74,13 @@ def probe(name, url, ok_codes, timeout=10.0, slow=3.0):
         code = e.code
     except Exception as e:  # DNS failure, timeout, TLS error, refused
         err = type(e).__name__
+        reason = str(getattr(e, "reason", e))
+        if "Tunnel connection failed: 40" in reason or "ProxyError" in err:
+            err = "proxy-denied"   # YOUR proxy/firewall refused, not a Microsoft outage
     ms = round((time.monotonic() - start) * 1000)
-    if err is not None or code is None or code >= 500 or code == 429:
+    if err == "proxy-denied":
+        state = "blocked"
+    elif err is not None or code is None or code >= 500 or code == 429:
         state = "down"
     elif ok_codes is not None and code not in ok_codes:
         state = "degraded"
@@ -114,7 +119,10 @@ class Monitor:
         """Feed one round of probe results; returns {name: published_state}."""
         for r in results:
             n = r["name"]
-            if r["state"] == "down":
+            if r["state"] == "blocked":
+                self.fails[n] = 0          # local policy, not an outage: never escalates
+                st = "blocked"
+            elif r["state"] == "down":
                 self.fails[n] = self.fails.get(n, 0) + 1
                 st = "down" if self.fails[n] >= self.confirm else "suspect"
             else:
@@ -151,7 +159,7 @@ class Automation:
 
     @staticmethod
     def target_level(state):
-        v = set(state.values())
+        v = set(state.values()) - {"blocked"}
         if "down" in v or state.get("auth") == "suspect":
             return "freeze"
         if v & {"suspect", "warning"}:
@@ -228,6 +236,9 @@ def impact(state):
 def diagnose(results):
     """Turn per-target states into a plain-language verdict."""
     s = {r["name"]: r["state"] for r in results}
+    blocked = [n for n, v in s.items() if v == "blocked"]
+    if blocked:
+        return "BLOCKED by your proxy/firewall (not a Microsoft outage): " + ", ".join(blocked)
     bad = [n for n, v in s.items() if v != "up"]
     if not bad:
         return "all healthy"

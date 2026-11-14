@@ -3,7 +3,7 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-STATE_NUM = {"up": 0, "warning": 1, "suspect": 2, "down": 3}
+STATE_NUM = {"up": 0, "warning": 1, "suspect": 2, "down": 3, "blocked": 4}
 LEVEL_NUM = {"ok": 0, "caution": 1, "freeze": 2}
 
 

@@ -20,7 +20,7 @@ Lessons built in:
 ```bash
 python3 outagewatch.py --once                      # exit 0 healthy, 1 otherwise
 python3 outagewatch.py --interval 60 --webhook URL # continuous, alerts on change
-python3 -W ignore -m unittest -v                    # 41 tests
+python3 -W ignore -m unittest -v                    # 45 tests
 ```
 A 401/403/redirect counts as alive (the service answered). 5xx, 429, timeouts and DNS/TLS errors count as down.
 
@@ -41,3 +41,9 @@ Copilot services plus automated freeze/caution levels. See PREVENTION.md.
 
 ## Not yet done
 Authenticated mail send/receive round-trip, multi-region probes, Microsoft Service Health API comparison.
+
+## Verified live (2026-11-14)
+Probed all 15 default endpoints from a cloud sandbox: all `up` (HTTP 200/301/302/400/401/404/417 all correctly counted as alive).
+Continuous mode, dashboard, `/metrics`, freeze file, pipeline gate and report ran against the live services.
+A host refused by a local proxy is reported as `blocked` (your network policy), never as a Microsoft outage or a freeze.
+Not live-tested: a real Microsoft outage, so `warning`/`down` detection is covered by tests, not by a live incident.

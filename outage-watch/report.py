@@ -11,7 +11,7 @@ import json
 import sys
 from datetime import datetime
 
-RANK = {"up": 0, "warning": 1, "suspect": 2, "down": 3}
+RANK = {"up": 0, "warning": 1, "suspect": 2, "down": 3, "blocked": 1}
 
 
 def _t(s):

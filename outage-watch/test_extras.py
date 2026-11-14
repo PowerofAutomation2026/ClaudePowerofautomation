@@ -130,5 +130,31 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
 
 
+class BlockedTests(unittest.TestCase):
+    def test_proxy_denial_is_blocked_not_down(self):
+        import urllib.error
+        orig = ow.urllib.request.build_opener
+        class Op:
+            def open(self, *a, **k): raise urllib.error.URLError(OSError("Tunnel connection failed: 403 Forbidden"))
+        ow.urllib.request.build_opener = lambda *a: Op()
+        try:
+            self.assertEqual(ow.probe("t", "https://x.test/", {200})["state"], "blocked")
+        finally:
+            ow.urllib.request.build_opener = orig
+
+    def test_blocked_never_freezes_or_escalates(self):
+        m = ow.Monitor(confirm=1)
+        st = m.step([R("a", "blocked"), R("b")])
+        self.assertEqual(st["a"], "blocked")
+        self.assertEqual(ow.Automation.target_level(st), "ok")
+        self.assertEqual(ow.Automation.target_level({"a": "blocked", "b": "down"}), "freeze")
+
+    def test_diagnose_blocked(self):
+        self.assertIn("not a Microsoft outage", ow.diagnose([R("a", "blocked"), R("b")]))
+
+    def test_dns_failure_still_down(self):
+        self.assertEqual(ow.probe("t", "http://127.0.0.1:1/", {200}, timeout=2)["state"], "down")
+
+
 if __name__ == "__main__":
     unittest.main()
