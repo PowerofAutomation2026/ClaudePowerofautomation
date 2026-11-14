@@ -53,6 +53,7 @@ class Snapshot:
         self._data = {"updated": None, "level": "ok", "verdict": "starting", "services": {}}
         self._static = {"roles": [[k, list(v)] for k, v in (roles or {}).items()], "drills": drills}
         self._roles, self._labels, self._warnings = roles or {}, labels or {}, list(warnings)
+        self.label = ""
         self.sla, self.auth = None, False   # sla: filled from the SQLite store; auth: viewer login in force
         self.public = {"updated": None, "tasks": [], "interval": interval}   # for the staff status page
         self.admin = False   # set by make_server: tells the page whether manual tests are enabled
@@ -88,7 +89,7 @@ class Snapshot:
 
     def get(self, history=False):
         with self._lock:
-            d = dict(self._data, edges=self._edges, interval=self._interval, admin=self.admin, auth=self.auth,
+            d = dict(self._data, edges=self._edges, interval=self._interval, admin=self.admin, auth=self.auth, label=self.label,
                      warnings=self._warnings, sla=self.sla, **getattr(self, "_extra", {}))
             if history:
                 d.update(self._static, history=list(self._hist))
@@ -111,6 +112,8 @@ def metrics_text(d):
     out.append("# HELP outagewatch_stress_score 0-100 heuristic: latency drift, jitter, recent failed probes")
     for n, s in sorted(d["services"].items()):
         out.append(f'outagewatch_stress_score{{service="{_label(n)}"}} {s.get("stress", 0)}')
+    if d.get("label"):
+        out += ["# TYPE outagewatch_info gauge", f'outagewatch_info{{deployment="{_label(d["label"])}"}} 1']
     out += ["# TYPE outagewatch_level gauge", f'outagewatch_level {LEVEL_NUM.get(d["level"], 2)}']
     return "\n".join(out) + "\n"
 

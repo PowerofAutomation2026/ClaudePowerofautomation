@@ -603,6 +603,8 @@ def load_config(path):
         raise ValueError('public_labels must be {"service": "label shown to staff"}')
     if "retention_days" in c and not (type(c["retention_days"]) is int and 1 <= c["retention_days"] <= 3650):
         raise ValueError("retention_days must be an integer 1..3650")
+    if "label" in c and not (isinstance(c["label"], str) and 0 < len(c["label"]) <= 60 and c["label"].isprintable()):
+        raise ValueError("label must be printable text up to 60 characters")
     for k in ("db", "alert_state"):
         if k in c and not isinstance(c[k], str):
             raise ValueError(f"{k} must be a file path")
@@ -817,6 +819,7 @@ def main(argv=None):
                  } if token else None
         snap = Snapshot(dependency_edges(), a.interval, cfg.get("roles") or DEFAULT_ROLES, drills,
                         cfg.get("public_labels"), warnings)
+        snap.label = cfg.get("label", "")
         access = {"viewer_token": os.environ.get("OUTAGEWATCH_VIEWER_TOKEN") or None, "trusted_proxy": a.trust_proxy,
                   "proxy_header": a.proxy_user_header, "public_status": a.public_status}
         try:
