@@ -1,34 +1,121 @@
 {
-  "comment": "Single source of truth for the seeded targets (mirrors DEFAULT_TARGETS / DEPENDS_ON_AUTH / COPILOT_NEEDS / DEFAULT_ROLES in outagewatch.py). alive = null means: any HTTP answer below 500 that is not 429 counts as alive.",
+  "comment": "Single source of truth for the seeded targets (mirrors DEFAULT_TARGETS / DEPENDS_ON_AUTH / COPILOT_NEEDS / FAMILIES / DEFAULT_ROLES in outagewatch.py; tests/golden.test.ts checks it against the real Python). alive = null means: any HTTP answer below 500 that is not 429 counts as alive.",
   "targets": [
-    { "name": "auth", "url": "https://login.microsoftonline.com/common/.well-known/openid-configuration", "alive": [200], "dependsOnAuth": false, "copilotNeeds": false },
-    { "name": "exchange", "url": "https://autodiscover-s.outlook.com/autodiscover/autodiscover.xml", "alive": [200, 401, 403], "dependsOnAuth": true, "copilotNeeds": true },
-    { "name": "outlook-web", "url": "https://outlook.office.com/mail/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false },
-    { "name": "teams", "url": "https://teams.microsoft.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": true },
-    { "name": "m365-portal", "url": "https://www.office.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false },
-    { "name": "admin-center", "url": "https://admin.microsoft.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false },
-    { "name": "graph", "url": "https://graph.microsoft.com/v1.0/$metadata", "alive": [200, 401, 403], "dependsOnAuth": true, "copilotNeeds": true },
-    { "name": "power-platform", "url": "https://api.powerapps.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false },
-    { "name": "intune", "url": "https://enrollment.manage.microsoft.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false },
-    { "name": "m365-copilot", "url": "https://m365.cloud.microsoft/chat", "alive": null, "dependsOnAuth": true, "copilotNeeds": false },
-    { "name": "copilot-substrate", "url": "https://substrate.office.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": true },
-    { "name": "copilot-studio", "url": "https://copilotstudio.microsoft.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false },
-    { "name": "copilot-web", "url": "https://copilot.microsoft.com/", "alive": null, "dependsOnAuth": false, "copilotNeeds": false },
-    { "name": "github-copilot", "url": "https://api.githubcopilot.com/", "alive": null, "dependsOnAuth": false, "copilotNeeds": false },
-    { "name": "office-cdn", "url": "https://res.cdn.office.net/", "alive": null, "dependsOnAuth": false, "copilotNeeds": false }
+    { "name": "auth", "url": "https://login.microsoftonline.com/common/.well-known/openid-configuration", "alive": [200], "dependsOnAuth": false, "copilotNeeds": false, "family": "Identity & platform" },
+    { "name": "exchange", "url": "https://autodiscover-s.outlook.com/autodiscover/autodiscover.xml", "alive": [200, 401, 403], "dependsOnAuth": true, "copilotNeeds": true, "family": "Exchange" },
+    { "name": "outlook-web", "url": "https://outlook.office.com/mail/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "Exchange" },
+    { "name": "teams", "url": "https://teams.microsoft.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": true, "family": "Teams" },
+    { "name": "m365-portal", "url": "https://www.office.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "Office apps" },
+    { "name": "admin-center", "url": "https://admin.microsoft.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "Security, compliance & admin" },
+    { "name": "graph", "url": "https://graph.microsoft.com/v1.0/$metadata", "alive": [200, 401, 403], "dependsOnAuth": true, "copilotNeeds": true, "family": "Identity & platform" },
+    { "name": "power-platform", "url": "https://api.powerapps.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "Power Platform & dashboards" },
+    { "name": "intune", "url": "https://enrollment.manage.microsoft.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "Security, compliance & admin" },
+    { "name": "m365-copilot", "url": "https://m365.cloud.microsoft/chat", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "Copilot" },
+    { "name": "copilot-substrate", "url": "https://substrate.office.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": true, "family": "Copilot" },
+    { "name": "copilot-studio", "url": "https://copilotstudio.microsoft.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "Copilot" },
+    { "name": "copilot-web", "url": "https://copilot.microsoft.com/", "alive": null, "dependsOnAuth": false, "copilotNeeds": false, "family": "Independent" },
+    { "name": "github-copilot", "url": "https://api.githubcopilot.com/", "alive": null, "dependsOnAuth": false, "copilotNeeds": false, "family": "Independent" },
+    { "name": "office-cdn", "url": "https://res.cdn.office.net/", "alive": null, "dependsOnAuth": false, "copilotNeeds": false, "family": "Office apps" },
+    { "name": "onedrive-sync", "url": "https://oneclient.sfx.ms/", "alive": null, "dependsOnAuth": false, "copilotNeeds": false, "family": "SharePoint / OneDrive" },
+    { "name": "onedrive-admin", "url": "https://admin.onedrive.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "SharePoint / OneDrive" },
+    { "name": "office-web-apps", "url": "https://officeapps.live.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "Office apps" },
+    { "name": "forms", "url": "https://forms.office.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "Office apps" },
+    { "name": "planner", "url": "https://tasks.office.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "Office apps" },
+    { "name": "loop", "url": "https://loop.cloud.microsoft/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "Office apps" },
+    { "name": "viva-engage", "url": "https://engage.cloud.microsoft/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "Office apps" },
+    { "name": "exchange-365", "url": "https://outlook.office365.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "Exchange" },
+    { "name": "security-portal", "url": "https://security.microsoft.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "Security, compliance & admin" },
+    { "name": "purview", "url": "https://purview.microsoft.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "Security, compliance & admin" },
+    { "name": "entra-portal", "url": "https://entra.microsoft.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "Identity & platform" },
+    { "name": "entra-device-reg", "url": "https://enterpriseregistration.windows.net/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "Identity & platform" },
+    { "name": "azure-portal", "url": "https://portal.azure.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "Identity & platform" },
+    { "name": "teams-admin", "url": "https://admin.teams.microsoft.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "Teams" },
+    { "name": "teams-cdn", "url": "https://statics.teams.cdn.office.net/", "alive": null, "dependsOnAuth": false, "copilotNeeds": false, "family": "Teams" },
+    { "name": "power-apps-maker", "url": "https://make.powerapps.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "Power Platform & dashboards" },
+    { "name": "power-automate", "url": "https://make.powerautomate.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "Power Platform & dashboards" },
+    { "name": "power-bi", "url": "https://app.powerbi.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "Power Platform & dashboards" },
+    { "name": "power-platform-admin", "url": "https://admin.powerplatform.microsoft.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "Power Platform & dashboards" }
   ],
   "tenantTargets": [
-    { "name": "sharepoint", "urlTemplate": "https://{tenant}.sharepoint.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": true },
-    { "name": "onedrive", "urlTemplate": "https://{tenant}-my.sharepoint.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": true }
+    { "name": "sharepoint-online", "urlTemplate": "https://{tenant}.sharepoint.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": true, "family": "SharePoint / OneDrive" },
+    { "name": "onedrive-business", "urlTemplate": "https://{tenant}-my.sharepoint.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": true, "family": "SharePoint / OneDrive" }
   ],
+  "families": [
+    [
+      "Identity & platform",
+      ["auth", "graph", "entra-portal", "entra-device-reg", "azure-portal"]
+    ],
+    [
+      "Exchange",
+      ["exchange", "outlook-web", "exchange-365"]
+    ],
+    [
+      "Teams",
+      ["teams", "teams-admin", "teams-cdn"]
+    ],
+    [
+      "SharePoint / OneDrive",
+      ["sharepoint-online", "onedrive-business", "onedrive-sync", "onedrive-admin"]
+    ],
+    [
+      "Power Platform & dashboards",
+      ["power-platform", "power-apps-maker", "power-automate", "power-bi", "power-platform-admin"]
+    ],
+    [
+      "Office apps",
+      ["m365-portal", "office-web-apps", "forms", "planner", "loop", "viva-engage", "office-cdn"]
+    ],
+    [
+      "Security, compliance & admin",
+      ["security-portal", "purview", "intune", "admin-center"]
+    ],
+    [
+      "Copilot",
+      ["m365-copilot", "copilot-substrate", "copilot-studio"]
+    ],
+    [
+      "Independent",
+      ["copilot-web", "github-copilot"]
+    ]
+  ],
+  "renamed": {
+    "sharepoint": "sharepoint-online",
+    "onedrive": "onedrive-business"
+  },
   "roles": {
     "Email & calendar": ["auth", "exchange", "outlook-web"],
-    "Meetings": ["auth", "teams"],
-    "Files & sharing": ["auth", "sharepoint", "onedrive"],
+    "Meetings": ["auth", "teams", "teams-cdn"],
+    "Files & sharing": ["auth", "sharepoint-online", "onedrive-business", "onedrive-sync"],
     "Copilot assistance": ["auth", "m365-copilot", "copilot-substrate"],
     "Admin tasks": ["auth", "admin-center", "graph"],
     "Device management": ["auth", "intune"],
-    "Low-code apps": ["auth", "power-platform"]
+    "Low-code apps": ["auth", "power-platform", "power-apps-maker", "power-automate"],
+    "Dashboards & reporting": ["auth", "power-bi"],
+    "Forms & tasks": ["auth", "forms", "planner", "loop"],
+    "Security & compliance admin": ["auth", "security-portal", "purview", "entra-portal"],
+    "Teams admin": ["auth", "teams-admin"]
   },
-  "defaults": { "intervalMinutes": 5, "retentionDays": 7, "probeTimeoutSeconds": 10, "confirm": 2, "window": 20, "minHistory": 5, "factor": 3.0, "floorMs": 800, "slowMs": 3000, "recoverAfter": 3 }
+  "previousRoles": [
+    {
+      "Email & calendar": ["auth", "exchange", "outlook-web"],
+      "Meetings": ["auth", "teams"],
+      "Files & sharing": ["auth", "sharepoint", "onedrive"],
+      "Copilot assistance": ["auth", "m365-copilot", "copilot-substrate"],
+      "Admin tasks": ["auth", "admin-center", "graph"],
+      "Device management": ["auth", "intune"],
+      "Low-code apps": ["auth", "power-platform"]
+    }
+  ],
+  "defaults": {
+    "intervalMinutes": 10,
+    "retentionDays": 7,
+    "probeTimeoutSeconds": 10,
+    "confirm": 2,
+    "window": 20,
+    "minHistory": 5,
+    "factor": 3.0,
+    "floorMs": 800,
+    "slowMs": 3000,
+    "recoverAfter": 3
+  }
 }

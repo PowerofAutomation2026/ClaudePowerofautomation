@@ -11,7 +11,7 @@ import json, os, random, sys, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 here = os.path.dirname(os.path.abspath(__file__))
-app = sys.argv[1] if len(sys.argv) > 1 else os.path.join(here, "..", "..", "..", "outage-watch-package", "app")
+app = sys.argv[1] if len(sys.argv) > 1 else os.path.join(here, "..", "..", "..", "outage-watch")
 sys.path.insert(0, os.path.abspath(app))
 import outagewatch as ow  # noqa: E402
 
@@ -38,6 +38,8 @@ out["catalog"] = {
     "depends_on_auth": sorted(ow.DEPENDS_ON_AUTH), "copilot_needs": sorted(ow.COPILOT_NEEDS),
     "roles": ow.DEFAULT_ROLES, "edges": ow.dependency_edges(),
     "tenant": {n: u for n, (u, c) in ow.tenant_targets("contoso").items()},
+    "tenant_services": list(ow.TENANT_SERVICES), "neutral": list(ow.NEUTRAL), "families": [[f, list(n)] for f, n in ow.FAMILIES],
+    "tenant_valid": [[t, ow.valid_tenant(t)] for t in ("contoso", "contoso-2", "a", "Contoso", "contoso.com", "-a", "a-", "", "a b", "a" * 63, "a" * 64, "a/../b")],
 }
 
 # 2. raw probe state: the real probe() against a local server (same scenarios as test_outagewatch.py + a grid)
@@ -74,13 +76,17 @@ out["monitor"] = {
     "blocked_never_escalates": {"kw": {}, "steps": run_monitor([[R("a", "blocked")], [R("a", "down")], [R("a", "blocked")], [R("a", "down")], [R("a", "down")]])},
     "degraded_is_warning": {"kw": {}, "steps": run_monitor([[R("a", "degraded")], [R("a")]])},
     "confirm_3": {"kw": {"confirm": 3}, "steps": run_monitor([[R("a", "down")]] * 4, confirm=3)},
+    "unconfigured_never_escalates": {"kw": {}, "steps": run_monitor([[R("sharepoint-online", "unconfigured", 0), R("auth")], [R("sharepoint-online", "down")],
+                                                                     [R("sharepoint-online", "unconfigured", 0)], [R("sharepoint-online", "down")], [R("sharepoint-online", "down")]])},
 }
 
 # 4. seeded random fuzz: Monitor + Automation + impact + copilot_note + diagnose + stress, many rounds
 rng = random.Random(20261114)
-names = ["auth", "exchange", "teams", "graph", "m365-copilot", "copilot-substrate", "office-cdn"]
+names = ["auth", "exchange", "teams", "graph", "m365-copilot", "copilot-substrate", "office-cdn", "sharepoint-online", "onedrive-business",
+         "power-bi", "forms", "planner", "loop", "security-portal", "purview", "entra-portal", "teams-admin", "teams-cdn", "onedrive-sync", "intune"]
+EDGES = ow.dependency_edges()
 fuzz = []
-for case in range(12):
+for case in range(9):
     kw = {"confirm": rng.choice([1, 2, 2, 3]), "window": rng.choice([5, 20]), "min_history": rng.choice([3, 5]),
           "factor": rng.choice([2.0, 3.0]), "floor_ms": rng.choice([200, 800])}
     rec_after = rng.choice([1, 2, 3])
@@ -88,13 +94,15 @@ for case in range(12):
     bad = rng.random()
     hist = {n: [] for n in names}
     steps = []
-    for _ in range(60):
+    for _ in range(50):
         results = []
         for n in names:
             if rng.random() < 0.1:
                 continue                      # target missing from this round
             x = rng.random()
             st = "down" if x < 0.12 * bad * 3 else "degraded" if x < 0.2 else "blocked" if x > 0.97 else "up"
+            if n in ow.TENANT_SERVICES and case % 3 == 0:
+                st = "unconfigured"               # tenant name not set in a third of the cases
             ms = rng.choice([80, 100, 120, 150, 400, 950, 2500, 6000])
             results.append({"name": n, "state": st, "code": 200, "ms": ms, "error": None})
         if not results:
@@ -108,12 +116,11 @@ for case in range(12):
             base = m.baseline(r["name"])
             warn = max(base * m.factor, base + m.floor_ms) if base is not None else None
             stress[r["name"]] = ow.stress_score(hist[r["name"]], base, warn)
-        kind = ("blocked" if verdict.startswith("BLOCKED") else "healthy" if verdict == "all healthy" else
-                "all-failing" if verdict.startswith("everything") else "auth" if verdict.startswith("authentication") else "partial")
         steps.append({"in": [[r["name"], r["state"], r["ms"]] for r in results], "out": state, "changed": lvl,
                       "level": a.level, "target_level": ow.Automation.target_level(state), "impact": ow.impact(state),
-                      "note": ow.copilot_note(state), "diagnose": kind, "stress": stress,
-                      "baseline": {n: m.baseline(n) for n in names}})
+                      "note": ow.copilot_note(state), "diagnose": verdict, "stress": stress,
+                      "roles": [[r["name"], r["status"]] for r in ow.role_view(state, ow.DEFAULT_ROLES, EDGES)],
+                      "baseline": {r["name"]: m.baseline(r["name"]) for r in results}})
     fuzz.append({"kw": kw, "recover_after": rec_after, "steps": steps})
 out["fuzz"] = fuzz
 
@@ -124,16 +131,51 @@ def run_auto(states, recover_after=3):
 
 out["automation"] = {
     "levels": [[s, ow.Automation.target_level(s)] for s in ({"x": "up"}, {"x": "warning"}, {"x": "suspect"}, {"x": "down"},
-                                                           {"auth": "suspect"}, {"x": "blocked"}, {"x": "blocked", "y": "warning"})],
+                                                           {"auth": "suspect"}, {"x": "blocked"}, {"x": "blocked", "y": "warning"},
+                                                           {"a": "unconfigured", "b": "blocked"}, {"a": "unconfigured", "b": "down"})],
     "escalates_immediately_recovers_slowly": run_auto([{"x": "down"}, {"x": "up"}, {"x": "up"}, {"x": "up"}]),
     "flap_resets_recovery": run_auto([{"x": "down"}, {"x": "up"}, {"x": "up"}, {"x": "down"}, {"x": "up"}, {"x": "up"}]),
     "caution_then_freeze_then_caution": run_auto([{"x": "warning"}, {"x": "down"}, {"x": "warning"}, {"x": "warning"}, {"x": "warning"}, {"x": "up"}]),
 }
 out["impact"] = [[s, ow.impact(s)] for s in ({"auth": "suspect", "teams": "up", "office-cdn": "up", "exchange": "up"},
-                                             {"auth": "up", "teams": "down"}, {"auth": "down", "graph": "down", "copilot-web": "up"})]
+                                             {"auth": "up", "teams": "down"}, {"auth": "down", "graph": "down", "copilot-web": "up"},
+                                             {"auth": "down", "sharepoint-online": "unconfigured", "power-bi": "up", "teams-cdn": "up", "onedrive-sync": "up"})]
 out["copilot_note"] = [[s, ow.copilot_note(s)] for s in ({"m365-copilot": "down", "exchange": "down", "teams": "up"},
                                                          {"m365-copilot": "up", "exchange": "down"}, {"m365-copilot": "warning"},
-                                                         {"m365-copilot": "suspect", "graph": "warning", "teams": "down"})]
+                                                         {"m365-copilot": "suspect", "graph": "warning", "teams": "down"},
+                                                         {"m365-copilot": "down", "sharepoint-online": "unconfigured", "graph": "up"},
+                                                         {"m365-copilot": "blocked", "graph": "down"}, {"m365-copilot": "unconfigured", "graph": "down"},
+                                                         {"m365-copilot": "down", "onedrive-business": "blocked", "sharepoint-online": "down"})]
+# 6. verdict rules (scenarios from test_round4.py / test_extras.py): unconfigured ignored, blocked never hides a failure, long lists capped
+ALL = list(ow.DEFAULT_TARGETS)
+un = ow.unconfigured_results(ow.TENANT_SERVICES)
+dz = {
+    "healthy_with_unconfigured": [R("auth"), R("exchange")] + un,
+    "partial_with_unconfigured": [R("a", "down"), R("b")] + un,
+    "blocked_only": [R("a", "blocked"), R("b")],
+    "blocked_does_not_hide_failure": [R("a", "blocked"), R("b", "down"), R("c")],
+    "long_list_is_capped": [R(n, "down") for n in ALL[1:25]] + [R("auth")] + [R(n) for n in ALL[25:]],
+    "many_blocked_capped": [R(n, "blocked") for n in ALL[:12]] + [R(n) for n in ALL[12:]],
+    "everything_failing": [R("auth", "down"), R("graph", "down")],
+    "everything_failing_ignores_neutral": [R("auth", "down"), R("graph", "degraded"), R("x", "blocked")] + un,
+    "auth_degraded": [R("auth", "degraded"), R("graph")],
+    "auth_blocked_other_down": [R("auth", "blocked"), R("graph", "down"), R("teams")],
+    "no_auth_target": [R("graph", "down"), R("teams")],
+    "only_unconfigured": list(un),
+    "all_blocked": [R("a", "blocked"), R("b", "blocked")],
+}
+out["diagnose"] = {k: {"in": [[r["name"], r["state"]] for r in v], "out": ow.diagnose(v)} for k, v in dz.items()}
+# 7. role view (plain-language task status) on fixed states
+rv = {
+    "healthy_no_tenant": dict({n: "up" for n in ALL}, **{n: "unconfigured" for n in ow.TENANT_SERVICES}),
+    "healthy_with_tenant": dict({n: "up" for n in ALL}, **{n: "up" for n in ow.TENANT_SERVICES}),
+    "auth_down": dict({n: "up" for n in ALL}, auth="down", **{n: "unconfigured" for n in ow.TENANT_SERVICES}),
+    "teams_cdn_warning": dict({n: "up" for n in ALL}, **{"teams-cdn": "warning"}),
+    "power_bi_blocked": dict({n: "up" for n in ALL}, **{"power-bi": "blocked"}),
+    "purview_suspect": dict({n: "up" for n in ALL}, purview="suspect"),
+    "small": {"auth": "up", "exchange": "up", "onedrive-sync": "up", "sharepoint-online": "unconfigured"},
+}
+out["role_view"] = {k: {"in": v, "out": [[r["name"], r["status"]] for r in ow.role_view(v, ow.DEFAULT_ROLES, EDGES)]} for k, v in rv.items()}
 with open(os.path.join(here, "golden.json"), "w") as f:
     json.dump(out, f, sort_keys=True, separators=(",", ":"))
 print("wrote golden.json:", len(probe), "probe cases,", sum(len(c["steps"]) for c in fuzz), "fuzz rounds")

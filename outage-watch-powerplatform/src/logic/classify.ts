@@ -10,8 +10,10 @@
  * All judgement happens here, in the browser.
  */
 
-export type RawState = 'up' | 'degraded' | 'down' | 'blocked'
-export type State = 'up' | 'warning' | 'suspect' | 'down' | 'blocked'
+export type RawState = 'up' | 'degraded' | 'down' | 'blocked' | 'unconfigured'
+export type State = 'up' | 'warning' | 'suspect' | 'down' | 'blocked' | 'unconfigured'
+/** States that are NOT a failure: never freeze, never "at risk", never an incident (NEUTRAL in outagewatch.py). */
+export const NEUTRAL: ReadonlySet<string> = new Set(['blocked', 'unconfigured'])
 export type Level = 'ok' | 'caution' | 'freeze'
 
 /** One raw probe fact, exactly as the flow wrote it. */
@@ -30,6 +32,9 @@ export interface TargetSpec {
   alive: number[] | null
   dependsOnAuth: boolean
   copilotNeeds: boolean
+  /** True for a tenant-specific target that has no URL yet (no tenant name given): shown as "unconfigured", never probed. */
+  unconfigured?: boolean
+  family?: string
 }
 
 export interface Thresholds {
@@ -119,9 +124,9 @@ export class Monitor {
     for (const r of results) {
       const n = r.name
       let st: State
-      if (r.state === 'blocked') {
-        this.fails.set(n, 0)            // local policy, not an outage: never escalates
-        st = 'blocked'
+      if (r.state === 'blocked' || r.state === 'unconfigured') {
+        this.fails.set(n, 0)            // local policy / not set up: not an outage, never escalates
+        st = r.state
       } else if (r.state === 'down') {
         const f = (this.fails.get(n) ?? 0) + 1
         this.fails.set(n, f)
@@ -149,7 +154,7 @@ export const LEVELS: Record<Level, number> = { ok: 0, caution: 1, freeze: 2 }
 /** Port of Automation.target_level. */
 export function targetLevel(state: Record<string, State>): Level {
   const v = new Set(Object.values(state))
-  v.delete('blocked')
+  v.delete('blocked'); v.delete('unconfigured')
   if (v.has('down') || state['auth'] === 'suspect') return 'freeze'
   if (v.has('suspect') || v.has('warning')) return 'caution'
   return 'ok'
@@ -185,39 +190,55 @@ const sorted = (a: Iterable<string>) => [...a].sort((x, y) => (x < y ? -1 : x > 
 /** Port of impact(): which sign-in dependent services are at risk. */
 export function impact(state: Record<string, State>, dependsOnAuth: ReadonlySet<string>): string[] {
   const a = state['auth']
-  if (a === 'down' || a === 'suspect') return sorted(Object.keys(state).filter((n) => dependsOnAuth.has(n) && n !== 'auth'))
+  if (a === 'down' || a === 'suspect') return sorted(Object.keys(state).filter((n) => dependsOnAuth.has(n) && n !== 'auth' && state[n] !== 'unconfigured'))
   return []
 }
 
 /** Port of copilot_note(). */
 export function copilotNote(state: Record<string, State>, copilotNeeds: ReadonlySet<string>): string {
-  if ((state['m365-copilot'] ?? 'up') === 'up') return ''
-  const under = sorted([...copilotNeeds].filter((n) => (state[n] ?? 'up') !== 'up'))
+  const c = state['m365-copilot'] ?? 'up'
+  if (c === 'up' || NEUTRAL.has(c)) return ''
+  const under = sorted([...copilotNeeds].filter((n) => { const v = state[n] ?? 'up'; return v !== 'up' && !NEUTRAL.has(v) }))
   return under.length ? 'Copilot affected; underlying services also unhealthy: ' + under.join(', ') : ''
 }
 
-/**
- * Port of diagnose(). The wording of the "blocked" and "everything failing" lines is adapted to where
- * THIS monitor runs (a cloud flow, not your network); the decision logic is unchanged.
- */
-export function diagnose(results: { name: string; state: RawState }[]): string {
-  const blocked = results.filter((r) => r.state === 'blocked').map((r) => r.name)
-  if (blocked.length) return 'BLOCKED on our side (policy/proxy, not a Microsoft outage): ' + blocked.join(', ')
-  const bad = results.filter((r) => r.state !== 'up').map((r) => r.name)
-  if (!bad.length) return 'all healthy'
-  if (bad.length === results.length) return 'everything failing: check the probe flow and its network path first, then Microsoft'
-  if (results.find((r) => r.name === 'auth')?.state !== 'up') return 'authentication degraded: sign-in dependent services will fail (Aug 31 pattern)'
-  return 'partial outage: ' + bad.join(', ')
+/** Capped name list (port of _names()): long lists stay readable. */
+export function names(list: string[], limit = 8): string {
+  return list.slice(0, limit).join(', ') + (list.length > limit ? ` and ${list.length - limit} more` : '')
 }
 
-/** Which branch diagnose() took; used by the golden cross-check so wording changes cannot hide logic drift. */
-export function diagnoseKind(results: { name: string; state: RawState }[]): 'blocked' | 'healthy' | 'all-failing' | 'auth' | 'partial' {
-  if (results.some((r) => r.state === 'blocked')) return 'blocked'
-  const bad = results.filter((r) => r.state !== 'up')
-  if (!bad.length) return 'healthy'
-  if (bad.length === results.length) return 'all-failing'
-  if (results.find((r) => r.name === 'auth')?.state !== 'up') return 'auth'
-  return 'partial'
+export interface DiagnoseText { allFailing: string; blocked: string; needsTenant: string }
+/** Wording of the Python monitor (used by the golden cross-check to compare whole strings). */
+export const PYTHON_TEXT: DiagnoseText = {
+  allFailing: 'everything failing: check YOUR network/DNS first, then Microsoft',
+  blocked: 'BLOCKED by your proxy/firewall (not a Microsoft outage): ',
+  needsTenant: 'needs your tenant name: run with --tenant contoso (the name in contoso.sharepoint.com)',
+}
+/** Same sentences, adapted to where THIS monitor runs (a cloud flow, deployed by Deploy-OutageWatchPP). */
+export const PP_TEXT: DiagnoseText = {
+  allFailing: 'everything failing: check the probe flow and its network path first, then Microsoft',
+  blocked: 'BLOCKED on our side (policy/proxy, not a Microsoft outage): ',
+  needsTenant: 'needs your tenant name: re-run the deploy with -TenantName contoso (the name in contoso.sharepoint.com)',
+}
+
+/**
+ * Port of diagnose(). Rules: unconfigured targets are ignored for the verdict and only counted at the end;
+ * a blocked probe is reported but must never hide a real failure; long lists are capped.
+ */
+export function diagnose(results: { name: string; state: RawState }[], text: DiagnoseText = PP_TEXT): string {
+  const s = results.filter((r) => r.state !== 'unconfigured')
+  const unconf = results.filter((r) => r.state === 'unconfigured').length
+  const blocked = s.filter((r) => r.state === 'blocked').map((r) => r.name)
+  const bad = s.filter((r) => r.state !== 'up' && r.state !== 'blocked').map((r) => r.name)
+  const auth = s.find((r) => r.name === 'auth')?.state
+  let out: string
+  if (!bad.length) out = blocked.length ? '' : 'all healthy'
+  else if (bad.length === s.length) out = text.allFailing
+  else if (auth !== undefined && auth !== 'up' && auth !== 'blocked') out = 'authentication degraded: sign-in dependent services will fail (Aug 31 pattern)'
+  else out = 'partial outage: ' + names(bad)
+  if (blocked.length) out += (out ? ' | ' : '') + text.blocked + names(blocked)
+  if (unconf) out += ` | ${unconf} not set up (${text.needsTenant})`
+  return out
 }
 
 /** Port of stress_score(): transparent 0-100 early-warning heuristic. Not a prediction. */
@@ -309,14 +330,17 @@ export function buildFrames(rows: RawRow[], targets: TargetSpec[], th: Partial<T
   const spec = new Map(targets.map((t) => [t.name, t]))
   const dep = new Set(targets.filter((t) => t.dependsOnAuth).map((t) => t.name))
   const cop = new Set(targets.filter((t) => t.copilotNeeds).map((t) => t.name))
+  const unconfigured = targets.filter((t) => t.unconfigured).map((t) => t.name)
+  const unconfiguredSet = new Set(unconfigured)
   const mon = new Monitor(T)
   const auto = new Automation(T.recoverAfter)
   const frames: Frame[] = []
   const last = new Map<string, ServiceView>()
   for (const round of groupRounds(rows)) {
-    const known = round.rows.filter((r) => spec.has(r.name))
+    const known = round.rows.filter((r) => spec.has(r.name) && !unconfiguredSet.has(r.name))
     if (!known.length) continue
-    const results = known.map((r) => ({ name: r.name, state: rawState(r, spec.get(r.name)!.alive, T.slowMs), ms: r.elapsedMs }))
+    const results: ProbeResult[] = known.map((r) => ({ name: r.name, state: rawState(r, spec.get(r.name)!.alive, T.slowMs), ms: r.elapsedMs }))
+    for (const u of unconfigured) results.push({ name: u, state: 'unconfigured', ms: 0 })   // like unconfigured_results(): present, neutral, never probed
     let verdict = diagnose(results)
     const state = mon.step(results)
     const hit = impact(state, dep)
@@ -332,6 +356,7 @@ export function buildFrames(rows: RawRow[], targets: TargetSpec[], th: Partial<T
       })
     })
     const early = results.filter((r) => r.state === 'up' && state[r.name] === 'warning').map((r) => r.name)
+    for (const u of unconfigured) last.set(u, { state: 'unconfigured', raw: 'unconfigured', ms: 0, code: null, error: null, baseline: null, warnMs: null })
     frames.push({ t: round.t, level: auto.level, levelChanged: changed, verdict, early, services: new Map(last) })
   }
   return frames
