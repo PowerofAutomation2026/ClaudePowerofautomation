@@ -1,27 +1,61 @@
 """Live dashboard + Prometheus metrics for outage-watch (stdlib only)."""
+import base64
+import hashlib
 import json
+import os
+import re
 import threading
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
 STATE_NUM = {"up": 0, "warning": 1, "suspect": 2, "down": 3, "blocked": 4}
 LEVEL_NUM = {"ok": 0, "caution": 1, "freeze": 2}
+HISTORY = 120      # probe rounds kept in memory for the dashboard's replay / sparklines
+SLOW_MS = 3000     # probe() itself reports "degraded" above this, whatever the baseline
+
+
+def _default_edges():
+    try:
+        import outagewatch
+        return outagewatch.dependency_edges()
+    except Exception:
+        return []
 
 
 class Snapshot:
-    """Thread-safe latest status, written by the probe loop, read by the server."""
+    """Thread-safe latest status, written by the probe loop, read by the server.
 
-    def __init__(self):
-        self._lock, self._data = threading.Lock(), {"updated": None, "level": "ok", "verdict": "starting", "services": {}}
+    Extra (backwards compatible) fields for the blast-radius dashboard:
+      services[name].baseline / .warn_ms  learned latency baseline and warning threshold (ms, or null)
+      edges     [[upstream, dependent], ...] dependency graph
+      interval  seconds between probe rounds
+      history   last HISTORY rounds, only with /status.json?history=1
+    """
 
-    def update(self, ts, level, verdict, results, published):
-        svc = {r["name"]: {"state": published.get(r["name"], r["state"]), "code": r["code"],
-                           "ms": r["ms"], "error": r["error"]} for r in results}
+    def __init__(self, edges=None, interval=60):
+        self._lock = threading.Lock()
+        self._edges = _default_edges() if edges is None else [list(e) for e in edges]
+        self._interval, self._hist = interval, deque(maxlen=HISTORY)
+        self._data = {"updated": None, "level": "ok", "verdict": "starting", "services": {}}
+
+    def update(self, ts, level, verdict, results, published, monitor=None):
+        svc = {}
+        for r in results:
+            base = monitor.baseline(r["name"]) if monitor else None
+            warn = SLOW_MS if base is None else round(min(SLOW_MS, max(base * monitor.factor, base + monitor.floor_ms)))
+            svc[r["name"]] = {"state": published.get(r["name"], r["state"]), "code": r["code"], "ms": r["ms"],
+                              "error": r["error"], "baseline": base, "warn_ms": warn}
         with self._lock:
             self._data = {"updated": ts, "level": level, "verdict": verdict, "services": svc}
+            self._hist.append(self._data)
 
-    def get(self):
+    def get(self, history=False):
         with self._lock:
-            return json.loads(json.dumps(self._data))
+            d = dict(self._data, edges=self._edges, interval=self._interval)
+            if history:
+                d["history"] = list(self._hist)
+            return json.loads(json.dumps(d))
 
 
 def _label(v):
@@ -40,60 +74,46 @@ def metrics_text(d):
     return "\n".join(out) + "\n"
 
 
-PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>outage-watch</title>
-<style>
-:root{--bg:#fff;--fg:#1a1a1a;--card:#f4f5f7;--up:#1a7f37;--warning:#b08800;--suspect:#c25e00;--down:#cf222e}
-@media(prefers-color-scheme:dark){:root{--bg:#111;--fg:#eee;--card:#1d1f23;--up:#3fb950;--warning:#d4a72c;--suspect:#f0883e;--down:#f85149}}
-body{margin:0;padding:16px;background:var(--bg);color:var(--fg);font:15px system-ui,sans-serif}
-h1{font-size:20px;margin:0 0 4px}#v{margin:0 0 16px;opacity:.8}
-#g{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
-.c{background:var(--card);border-radius:8px;padding:12px;border-left:6px solid var(--up)}
-.c b{display:block}.s{font-weight:600}
-.warning{border-color:var(--warning)}.suspect{border-color:var(--suspect)}.down{border-color:var(--down)}
-.lvl{display:inline-block;padding:2px 10px;border-radius:12px;color:#fff;font-weight:600}
-.ok{background:var(--up)}.caution{background:var(--warning)}.freeze{background:var(--down)}
-</style></head><body>
-<h1>Microsoft 365 &amp; Copilot health <span id="l" class="lvl ok">ok</span></h1>
-<p id="v"></p><div id="g"></div>
-<script>
-async function tick(){
-  try{
-    const d=await (await fetch('status.json',{cache:'no-store'})).json();
-    const l=document.getElementById('l');l.textContent=d.level;l.className='lvl '+d.level;
-    document.getElementById('v').textContent=d.verdict+(d.updated?'  ·  '+d.updated:'');
-    const g=document.getElementById('g');g.replaceChildren();
-    for(const [n,s] of Object.entries(d.services).sort()){
-      const c=document.createElement('div');c.className='c '+s.state;
-      const b=document.createElement('b');b.textContent=n;
-      const st=document.createElement('span');st.className='s';st.textContent=s.state;
-      const m=document.createElement('div');m.textContent=s.ms+' ms'+(s.code?' · HTTP '+s.code:'')+(s.error?' · '+s.error:'');
-      c.append(b,st,m);g.append(c);
-    }
-  }catch(e){document.getElementById('v').textContent='dashboard cannot reach outage-watch';}
-}
-tick();setInterval(tick,5000);
-</script></body></html>"""
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard.html"), encoding="utf-8") as _f:
+    PAGE = _f.read()
+
+
+def _csp(page):
+    """Strict policy: nothing external; only the page's own inline <script>/<style>, pinned by hash."""
+    def hashes(tag):
+        return " ".join("'sha256-" + base64.b64encode(hashlib.sha256(m.encode()).digest()).decode() + "'"
+                        for m in re.findall(rf"<{tag}>(.*?)</{tag}>", page, re.S)) or "'none'"
+    return ("default-src 'none'; script-src " + hashes("script") + "; style-src " + hashes("style") +
+            "; connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+
+
+CSP = _csp(PAGE)
 
 
 def make_server(snapshot, port, bind="127.0.0.1"):
     class H(BaseHTTPRequestHandler):
-        def _send(self, code, body, ctype):
+        def _send(self, code, body, ctype, extra=()):
             data = body.encode()
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
+            for k, v in extra:
+                self.send_header(k, v)
             self.end_headers()
             self.wfile.write(data)
 
         def do_GET(self):
-            path = self.path.split("?")[0]
+            url = urlsplit(self.path)
+            path = url.path
             if path == "/":
-                self._send(200, PAGE, "text/html; charset=utf-8")
+                self._send(200, PAGE, "text/html; charset=utf-8",
+                           (("Content-Security-Policy", CSP), ("X-Frame-Options", "DENY")))
             elif path == "/status.json":
-                self._send(200, json.dumps(snapshot.get()), "application/json")
+                hist = parse_qs(url.query).get("history", ["0"])[0] == "1"
+                self._send(200, json.dumps(snapshot.get(history=hist)), "application/json")
             elif path == "/metrics":
                 self._send(200, metrics_text(snapshot.get()), "text/plain; version=0.0.4")
             elif path == "/healthz":

@@ -52,6 +52,12 @@ DEPENDS_ON_AUTH = {"exchange", "outlook-web", "teams", "m365-portal", "admin-cen
 COPILOT_NEEDS = {"exchange", "teams", "sharepoint", "onedrive", "graph", "copilot-substrate"}
 
 
+def dependency_edges():
+    """[upstream, dependent] pairs: what is at risk when the upstream service fails."""
+    return ([["auth", n] for n in sorted(DEPENDS_ON_AUTH)] +
+            [[n, "m365-copilot"] for n in sorted(COPILOT_NEEDS)])
+
+
 def tenant_targets(tenant):
     """SharePoint / OneDrive hosts are tenant-specific."""
     return {
@@ -299,7 +305,7 @@ def run_cycle(targets, prev, log_path=None, webhook=None, timeout=10.0, monitor=
         if lvl:
             verdict += f" | LEVEL -> {lvl}"
     if snapshot:
-        snapshot.update(now, automation.level if automation else "ok", verdict, results, state)
+        snapshot.update(now, automation.level if automation else "ok", verdict, results, state, monitor)
     if log_path:
         with open(log_path, "a") as f:
             f.write(json.dumps({"ts": now, "verdict": verdict, "published": state, "results": results}) + "\n")
@@ -341,7 +347,7 @@ def main(argv=None):
     snap = None
     if a.serve:
         from server import Snapshot, make_server
-        snap = Snapshot()
+        snap = Snapshot(dependency_edges(), a.interval)
         make_server(snap, a.serve, a.bind)
         print(f"dashboard: http://{a.bind}:{a.serve}/  (metrics at /metrics)")
     if a.tenant:
