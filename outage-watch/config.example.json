@@ -6,7 +6,65 @@
   "floor_ms": 800,
   "replace_defaults": false,
   "targets": {
-    "my-app": ["https://app.example.com/health", [200]],
-    "my-vpn": ["https://vpn.example.com/", null]
+    "my-app": [
+      "https://app.example.com/health",
+      [
+        200
+      ]
+    ],
+    "my-vpn": [
+      "https://vpn.example.com/",
+      null
+    ],
+    "my-cert": [
+      "tls://app.example.com:443?warn_days=21",
+      null
+    ],
+    "my-autodiscover": [
+      "dns://autodiscover.example.com?expect=autodiscover.outlook.com",
+      null
+    ]
+  },
+  "label": "my-site",
+  "db": "outagewatch.db",
+  "retention_days": 90,
+  "public_labels": {
+    "exchange": "Mail servers"
+  },
+  "maintenance": [
+    {
+      "services": [
+        "my-app"
+      ],
+      "weekly": {
+        "day": "sun",
+        "start": "02:00",
+        "duration_min": 120
+      },
+      "tz": "UTC",
+      "note": "weekly patching"
+    }
+  ],
+  "alerts": {
+    "channels": {
+      "push": {
+        "type": "ntfy",
+        "url_env": "OW_NTFY_URL"
+      }
+    },
+    "routes": {
+      "caution": [
+        "push"
+      ],
+      "freeze": [
+        "push"
+      ]
+    },
+    "escalate_after_min": 15,
+    "escalate_to": [
+      "push"
+    ],
+    "min_interval_s": 30,
+    "heartbeat_url_env": "OW_HEARTBEAT_URL"
   }
 }

@@ -67,3 +67,13 @@ as a no-op. `--test` runs one manual probe round without changing anything (add 
 ## Keep the evidence honest
 The log is hash-chained. After an incident run `python3 report.py outagewatch.jsonl --verify` and store the
 printed head hash outside the host. See README, "Tamper-evident timeline", for what this does and does not prove.
+
+## Make sure the alert survives the outage
+Put at least one alert channel outside Microsoft 365 (ntfy, Telegram, Slack, SMS gateway, SMTP at another
+provider). outage-watch warns at startup when a channel is hosted on Microsoft infrastructure. Add a
+dead-man's-switch URL (`heartbeat_url_env`) so that a dead monitor is noticed too. Decide who acknowledges:
+an unacknowledged incident escalates to `escalate_to` after `escalate_after_min`. See README, "Alerting".
+
+## Planned work is not an incident
+Declare tenant maintenance in `"maintenance"` so it neither freezes pipelines nor pages people, while staying
+in the timeline and excluded from uptime figures.

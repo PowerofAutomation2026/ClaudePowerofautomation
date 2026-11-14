@@ -21,7 +21,8 @@ Lessons built in:
 python3 outagewatch.py --once                      # exit 0 healthy, 1 otherwise
 python3 outagewatch.py --interval 60 --webhook URL # continuous, alerts on change
 python3 outagewatch.py --test                      # manual test: one detailed round, dry run
-python3 -W ignore -m unittest -v                    # 78 tests
+python3 -W ignore -m unittest -v                    # 113 tests
+./deploy/test_deploy.sh                             # 84 checks of the deploy script (real user-mode deploy)
 ```
 A 401/403/redirect counts as alive (the service answered). 5xx, 429, timeouts and DNS/TLS errors count as down.
 
@@ -33,14 +34,19 @@ A 401/403/redirect counts as alive (the service answered). 5xx, 429, timeouts an
 | Manual test and test alert for admins | `--test`, `--test-alert`, or the dashboard with `OUTAGEWATCH_ADMIN_TOKEN` |
 | Fire drills (outage rehearsal, simulation only) | dashboard: Simulation, then Fire drill; edit a copy of `drills.example.json`, pass `--drills` |
 | Tamper-evident log | `python3 report.py outagewatch.jsonl --verify` |
+| Alert channels, routing, escalation, ack/snooze, dead-man's switch | `"alerts"` in the config, see Alerting |
+| Maintenance windows, uptime / SLA with p50/p95 | `"maintenance"` in the config, `--db FILE`, `report.py --sla --csv` |
+| Microsoft status divergence (optional, mock-tested only) | `"service_health"` in the config |
+| Viewer login, trusted reverse proxy, staff status page | `OUTAGEWATCH_VIEWER_TOKEN`, `--trust-proxy`, `--public-status` |
+| TLS certificate and DNS checks | targets `tls://host` and `dns://host` |
+| Docker, compose, systemd, CI, one-command deploy | Deployment and Zero-touch deploy |
 | Prometheus metrics / JSON status | `/metrics`, `/status.json`, `/healthz` on the same port |
 | Config file (add your own services, tune thresholds) | `--config config.example.json` |
 | Incident report with early-warning lead time | `python3 report.py outagewatch.jsonl --md report.md` |
 | Freeze levels, hooks, pipeline gate | see PREVENTION.md |
 
-`--serve` listens on localhost only. The read-only pages (`/`, `/status.json`, `/metrics`) have no
-authentication, so `--bind` to anything but localhost is refused unless an admin token is set, and
-even then put it behind a reverse proxy with auth.
+`--serve` listens on localhost only and, by default, needs no login there. `--bind` to anything but
+localhost is refused unless a viewer token, an admin token or a trusted proxy is configured (see Access control).
 
 ## Dashboard
 A single self-contained page (`dashboard.html`; no CDN, no external requests, strict Content-Security-Policy
@@ -126,3 +132,151 @@ Continuous mode, dashboard, `/metrics`, freeze file, pipeline gate and report ra
 A host refused by a local proxy is reported as `blocked` (your network policy), never as a Microsoft outage or a freeze.
 Not live-tested: a real Microsoft outage, so `warning`/`down` detection is covered by tests, not by a live incident.
 The dashboard was checked in headless Chromium against the live probes (and in simulation for failure states).
+
+## Alerting
+The point: an alert path that lives on Microsoft 365 dies in the outage it should report.
+```json
+"alerts": {
+  "base_url": "https://status.example.org/",
+  "channels": {
+    "push":  {"type": "ntfy",     "url_env": "OW_NTFY_URL"},
+    "slack": {"type": "slack",    "url_env": "OW_SLACK_URL"},
+    "tg":    {"type": "telegram", "token_env": "OW_TG_TOKEN", "chat_id": "123456"},
+    "mail":  {"type": "smtp", "host": "smtp.example.org", "port": 587, "from": "ow@example.org",
+              "to": ["oncall@example.org"], "user_env": "OW_SMTP_USER", "password_env": "OW_SMTP_PASS"}
+  },
+  "routes": {"caution": ["slack"], "freeze": ["slack", "push"]},
+  "escalate_after_min": 15, "escalate_to": ["mail"], "repeat_every_min": 0, "min_interval_s": 30,
+  "heartbeat_url_env": "OW_HEARTBEAT_URL"
+}
+```
+- Types: `webhook`, `slack`, `mattermost`, `discord`, `teams` (adaptive card for a Teams workflow webhook),
+  `telegram`, `ntfy`, `smtp`. **Secrets never go in the config**: give the NAME of an environment variable
+  (`url_env`, `token_env`, `user_env`, `password_env`). A config with an inline `url`, `token` or `password` is rejected.
+- **Independence check.** At startup (stderr) and in the dashboard, any channel hosted on Microsoft
+  infrastructure (`*.office.com`, `*.office365.com`, `*.outlook.com`, `*.azure.com`, `*.microsoft.com`, ...) gets a
+  loud warning. It is a warning, not a block.
+- **One message per incident**, not per service per round: opened, got worse (caution to freeze), reminder
+  (optional), escalation (once, if nobody acknowledged within `escalate_after_min`), resolved. `min_interval_s`
+  rate-limits each channel. Messages say what the probes saw, the level, at-risk services and the dashboard link;
+  they never state a cause.
+- **Ack / snooze.** `python3 outagewatch.py --ack`, `--snooze NAME MINUTES` (0 removes it), or the dashboard's
+  Alerting panel (admin token, same protections as the manual test). Ack stops escalation; snooze mutes one
+  service's alerts while it stays probed and visible. State is a small JSON file (`--alert-state`, default
+  `outagewatch-alerts.json`) so it survives restarts.
+- **Dead-man's switch.** `heartbeat_url_env` names a variable holding a ping URL (healthchecks.io style). It is
+  pinged every round in a background thread; if outage-watch dies the pings stop and that service alerts you.
+  A failing ping never affects probing.
+- `--test-alert` sends a labelled TEST message through every configured channel.
+- Verified: payloads against local mock HTTP and SMTP servers, and one live run against a local receiver.
+  **Not verified against the real Slack, Teams, Discord, Telegram, ntfy, Mattermost or a real mail provider.**
+
+## Maintenance windows and uptime / SLA
+```json
+"maintenance": [
+  {"services": ["exchange"], "start": "2026-12-01T22:00", "end": "2026-12-02T02:00", "tz": "Europe/Berlin", "note": "patching"},
+  {"services": ["*"], "weekly": {"day": "sun", "start": "02:00", "duration_min": 120}, "tz": "UTC"}
+]
+```
+In a window the named services are still probed and logged (record field `maintenance`), shown as
+"maintenance" in the dashboard and reports, but do not raise the freeze level or alert.
+
+`--db outagewatch.db` (or `"db"` in the config) mirrors every round into SQLite; `"retention_days"` (default 90)
+trims it. The dashboard then shows uptime for 24 h / 7 d / 30 d with p50/p95 latency. Reports:
+`python3 report.py LOG --sla [--db FILE] [--csv out.csv] [--include-maintenance]`. Without `--db` the log is
+streamed line by line into a temporary SQLite file, not loaded into memory. Uptime here means the share of
+probe rounds answered (up or warning); blocked probes and maintenance samples are not counted. It is an
+unauthenticated reachability figure with the resolution of your probe interval, not a contractual SLA number.
+The JSONL stays the evidence log; the database is a rebuildable copy.
+
+## Microsoft status divergence (optional, NOT verified against the real API)
+```json
+"service_health": {"tenant_env": "OW_TENANT_ID", "client_id_env": "OW_CLIENT_ID", "client_secret_env": "OW_CLIENT_SECRET",
+                   "poll_s": 300, "map": {"exchange": "Exchange Online"}}
+```
+With an app registration that has the application permission `ServiceHealth.Read.All` (admin consent), outage-watch
+reads `admin/serviceAnnouncement/healthOverviews` from Microsoft Graph. When a probe is warning/suspect/down
+while Microsoft reports that service as `serviceOperational`, the dashboard shows
+"DIVERGENCE: our probes see trouble, Microsoft status does not (yet)" with the time it started, and the
+incident report gets a "Microsoft status confirmed after" column.
+**This was tested only against a local mock of Graph. No credentials were available, so the token flow, the
+endpoint and the default service-name mapping are unverified against the real service; check the mapping
+against your tenant and override it with `map`.** The adapter itself needs sign-in and Graph: if it cannot
+read the status it reports "unknown", which is never counted as "Microsoft says healthy".
+
+## Access control
+- Default: localhost only, no login.
+- `OUTAGEWATCH_VIEWER_TOKEN` (16+ characters, different from the admin token) protects `/`, `/status.json`
+  and `/metrics`. The browser gets a login page; the token is exchanged for an HttpOnly, SameSite=Strict session
+  cookie (12 h). It is never accepted in a URL and never stored by the page. 20 bad attempts lock logins for a
+  minute. Prometheus can send `Authorization: Bearer <viewer token>`. The viewer token cannot call the admin API.
+- `--trust-proxy 10.0.0.5 [--proxy-user-header X-Forwarded-User]`: requests from exactly that address that
+  carry the identity header are treated as signed in. The header is ignored from any other address.
+- Sessions live in memory (a restart signs everyone out). There are no user accounts or roles beyond
+  viewer/admin. Use TLS (a reverse proxy) whenever this leaves localhost.
+
+## Staff status page
+`--public-status` serves `/status` (and `/status-public.json`) without login: one line per task from the role
+view ("Should work", "May be slow or unreliable", "Unlikely to work right now"), the last check time, nothing
+else. No URLs, latency, verdict text or internal service names, unless you give a service a public label:
+`"public_labels": {"exchange": "Mail servers"}`.
+
+## More check types
+- `"cert": ["tls://portal.example.org:443?warn_days=21", null]` checks the certificate with normal verification:
+  `down` if the handshake fails (including an expired certificate), `warning` when fewer than `warn_days` remain.
+- `"autodiscover": ["dns://autodiscover.example.org?expect=autodiscover.outlook.com", null]` resolves with the
+  system resolver: `down` if it does not resolve, `warning` if it resolves to something unexpected. `expect`
+  takes IPs or a canonical-name suffix.
+- Worth watching for Microsoft 365 (use your own domain): `autodiscover.<your domain>` (should point at
+  `autodiscover.outlook.com`) and the host your MX record points to (`<something>.mail.protection.outlook.com`)
+  as a `dns://` target. The stdlib resolver can only look up addresses and canonical names, so the MX record
+  itself, SPF and DKIM (TXT/CNAME selectors) cannot be queried here.
+- Not verified live: outbound TLS/DNS probes to the internet (the build sandbox only allows HTTPS through a
+  proxy). They are tested against localhost and a local TLS server.
+
+## Deployment
+- `Dockerfile` (non-root uid 10001, healthcheck on `/healthz`), `docker-compose.yml` (published on host
+  `127.0.0.1` only, read-only root, all capabilities dropped, tokens from `outagewatch.env`).
+- `deploy/outage-watch.service`: systemd unit example (dedicated user, `EnvironmentFile`, `Restart=on-failure`).
+- Windows: see the separate Windows package in this repository for the scheduled-task install.
+  By hand: Task Scheduler, trigger "At startup", action `python.exe outagewatch.py --serve 8080 ...`,
+  "Restart on failure" in Settings; or wrap the same command with NSSM. Set the tokens as machine environment variables.
+- `.github/workflows/outage-watch-tests.yml` runs the unit tests (Python 3.9 and 3.13) and shellcheck on push.
+- Not run here: `docker build` (no Docker daemon in the build sandbox), the systemd unit (no systemd), the
+  GitHub workflow, and shellcheck (not installed).
+
+## Zero-touch deploy (Linux / macOS)
+```bash
+./deploy/deploy.sh --env-id <environment-guid> --yes        # deploy or upgrade
+./deploy/deploy.sh --env-id <environment-guid> --dry-run    # print every action, change nothing
+./deploy/deploy.sh --env-id <environment-guid> --uninstall  # stop and remove; add --purge to delete data
+```
+The ID can also come from `OUTAGEWATCH_ENV_ID`, or you are asked for it.
+
+**What the environment ID is used for.** outage-watch cannot run inside Power Platform and reads nothing
+from the environment. The ID only (1) names the deployment `outagewatch-<first 8 characters>`, (2) selects the
+state directory `.deploy-state/<id>/` (config, tokens, data, hash-chained log), (3) becomes the label in the
+dashboard and the `outagewatch_info{deployment=...}` metric, and (4) adds one probe for that environment's maker
+portal, `https://make.powerapps.com/environments/<id>/home` (alive on any answer below 500).
+
+**What it does**, as a numbered plan with ok / warn / FAIL: preflight (Python 3.9+, offers `apt`/`brew` install
+only with `--yes` or your consent; detects Docker and systemd), writes a config with safe defaults, generates an
+admin and a viewer token with Python's `secrets` module into `outagewatch.env` (mode 600; never printed, logged
+or passed as arguments), runs the unit tests as a gate, runs a live `--test` and reports up / blocked / down,
+installs and starts (Docker compose if a daemon is reachable, else systemd on Linux, else user mode), waits for
+`/healthz`, smoke-tests `/status.json` and `/metrics` with and without the viewer token and that an
+unauthenticated `POST /api/test` is rejected, then prints where everything is. A re-run is an upgrade that keeps
+tokens, config, data and log. On failure it removes what that run created and says what is left.
+
+**What it will not do.** Open a firewall port, bind beyond localhost unless you pass `--bind`, install a launchd
+job on macOS (user mode only; add your own LaunchAgent that sources the env file), configure alert channels, or
+run as root (it refuses unless `--mode systemd`, where root installs the unit and the service runs as the
+unprivileged `outagewatch` user; `--allow-root` exists for containers).
+
+**Honest limits.** The GUID is validated strictly (8-4-4-4-12 ASCII hex) before it is used anywhere.
+Verified in the build sandbox with `deploy/test_deploy.sh`: hostile-input rejection, dry run, a real user-mode
+deploy (`--no-service`), token file mode, the test gate, smoke tests, rollback on a busy port, upgrade, uninstall
+and purge. With a token configured the app answers an unauthenticated `POST /api/test` with 401 (403 is what it
+answers when the admin API is disabled); the script accepts either. **Not exercised: the Docker path, the
+systemd path, the package-manager install of Python, and macOS** (no Docker daemon, no systemd, Linux only).
+shellcheck was not available, so the script is only `bash -n` checked.
