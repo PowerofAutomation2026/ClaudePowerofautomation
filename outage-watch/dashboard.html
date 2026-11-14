@@ -114,9 +114,11 @@ body.sim .wm{display:block}
 .node:focus-visible .fr,.node.sel .fr{opacity:1}
 .node.sel .fr{stroke-dasharray:3 4}
 .node:focus-visible .fr{stroke-dasharray:none}
+.nl,.ns{paint-order:stroke;stroke:var(--panel);stroke-width:4px;stroke-linejoin:round}
 .nl{font:600 11.5px var(--mono);fill:var(--ink);text-anchor:middle}
 .ns{font:500 10.5px var(--mono);fill:var(--c);text-anchor:middle}
 .node.k-up .ns{fill:var(--muted)}
+.narrow .ns{font-size:9.5px}.narrow .nl{font-size:11px}
 .has-hl .node:not(.hl){opacity:.3}
 .blast{fill:none;stroke:var(--down);stroke-width:3;vector-effect:non-scaling-stroke;transform-box:fill-box;transform-origin:center;opacity:0}
 @media (prefers-reduced-motion:no-preference){
@@ -182,6 +184,24 @@ body.sim .wm{display:block}
 .tkey .d{background:var(--down);width:.35rem}
 .tkey .l{border-top:2px solid var(--ink);height:0;vertical-align:.2rem}
 footer{font-size:.78rem;color:var(--muted)}
+[hidden]{display:none!important}
+/* manual test (admin) */
+.mtChip{display:inline-block;font:800 .72rem var(--mono);letter-spacing:.12em;background:var(--accent);color:var(--bg);padding:.12rem .45rem;border-radius:.2rem;margin-right:.5rem}
+#mtForm{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
+#mtForm label{font-weight:600;font-size:.9rem}
+#mtForm input{font:inherit;font-family:var(--mono);color:var(--ink);background:var(--panel2);border:1px solid var(--line);border-radius:.45rem;padding:.4rem .6rem;min-height:2.4rem;flex:1 1 12rem;min-width:0;max-width:24rem}
+#mtForm p{flex:1 1 100%;margin:0}
+#mtRun{border-color:var(--accent);font-weight:600}
+#mtMsg{margin:.5rem 0 0;font-weight:600;min-height:1.4em}
+#mtMsg.err{color:var(--down)}
+#mtRetest{margin-top:.5rem;border-color:var(--accent)}
+#mtOut{margin-top:.6rem;border:4px double var(--accent);border-radius:.5rem;padding:.7rem .9rem;background:var(--panel2)}
+#mtOut h3{margin:0 0 .4rem;font:600 .92rem var(--sans)}
+#mtOut ul{margin:.4rem 0;padding:0;list-style:none;display:grid;gap:.25rem .9rem;grid-template-columns:repeat(auto-fill,minmax(min(100%,17rem),1fr))}
+#mtOut li{display:grid;grid-template-columns:1.25rem minmax(0,1fr);gap:.45rem;font:600 .88rem var(--mono);overflow-wrap:anywhere}
+#mtOut li small{display:block;font-weight:400;color:var(--muted);font-size:.78rem}
+#mtOut li b{color:var(--c)}
+#mtOut p{margin:.25rem 0;overflow-wrap:anywhere}
 </style>
 </head>
 <body>
@@ -223,6 +243,7 @@ footer{font-size:.78rem;color:var(--muted)}
     <ul class="legend" id="legend" aria-label="Legend"></ul>
     <p class="hint" id="mapHint">Centre: sign-in. Around it: services that need sign-in. Outer arc: Copilot, which also reads the data services. Failure travels along the lines to dependents. Select a node to see its blast radius.</p>
     <div id="detail" aria-live="polite"></div>
+    <button type="button" id="mtRetest" hidden>Retest</button>
     <div class="replay" role="group" aria-label="Replay recent history">
       <button type="button" id="rBack" aria-label="Step back one probe round">&#9664;</button>
       <button type="button" id="rPlay" aria-pressed="false">Play</button>
@@ -240,6 +261,20 @@ footer{font-size:.78rem;color:var(--muted)}
     <p class="hint">Based on unauthenticated reachability probes from the machine running outage-watch, not on signed-in tests. "At risk" means the probe still answers but something it depends on does not.</p>
   </section>
 </div>
+
+<section class="panel" id="mt" aria-labelledby="hMt">
+  <h2 id="hMt">Manual test (admin)</h2>
+  <p id="mtOff" class="hint">Manual tests are disabled. To enable them, start outage-watch with the environment variable OUTAGEWATCH_ADMIN_TOKEN set (16 characters or more).</p>
+  <form id="mtForm" autocomplete="off" hidden>
+    <label for="mtTok">Admin token</label>
+    <input id="mtTok" type="password" autocomplete="off" spellcheck="false" autocapitalize="off">
+    <button type="submit" id="mtRun">Run test now</button>
+    <button type="button" id="mtAlert">Send test alert</button>
+    <p class="hint">Runs one real probe round on demand, as a dry run: it does not change the freeze level, the freeze file, the log or the charts. "Send test alert" posts a message labelled TEST to the configured webhook and runs the hook once with level "test". The token stays in this field (memory only); it is never stored or put in a URL. To retest one service, select its node on the map.</p>
+  </form>
+  <p id="mtMsg" role="status"></p>
+  <div id="mtOut" hidden></div>
+</section>
 
 <section class="panel" aria-labelledby="hTl">
   <h2 id="hTl">Early-warning timeline<span class="simTag">SIMULATION</span></h2>
@@ -290,7 +325,7 @@ function cap(n){return Object.prototype.hasOwnProperty.call(CAP,n)?CAP[n]:n;}
 function list(a,max){max=max||6;return a.length<=max?a.join(', '):a.slice(0,max).join(', ')+' and '+(a.length-max)+' more';}
 
 /* ---------- data ---------- */
-var live={frames:[],seen:new Set(),edges:[],interval:60,ok:null};
+var live={frames:[],seen:new Set(),edges:[],interval:60,ok:null,admin:false};
 var sim={on:false,frames:[],edges:[],sc:null,t0:0,k:0,timer:null,svc:new Map(),level:'ok',clean:0};
 var view={idx:null,sel:null,hover:null,playing:null};
 var needHistory=true;
@@ -314,6 +349,7 @@ function ingest(d){
   }
   if(Array.isArray(d.edges))live.edges=d.edges.filter(function(e){return Array.isArray(e)&&e.length===2&&typeof e[0]==='string'&&typeof e[1]==='string';});
   if(num(d.interval)>0)live.interval=num(d.interval);
+  live.admin=d.admin===true;
 }
 function poll(){
   fetch('status.json'+(needHistory?'?history=1':''),{cache:'no-store'}).then(function(r){
@@ -356,7 +392,7 @@ function classify(names,T){
   return c;
 }
 function splitName(n,narrow){
-  var max=narrow?13:17;
+  var max=narrow?15:17;
   if(n.length<=max)return [n];
   var mid=n.length/2,best=-1,i;
   for(i=1;i<n.length-1;i++)if(/[-_. ]/.test(n[i])&&(best<0||Math.abs(i-mid)<Math.abs(best-mid)))best=i;
@@ -408,14 +444,14 @@ function layoutWide(c,T){
   return {W:W,H:H,pos:pos,guides:guides,caps:caps,paths:paths,wm:{x:cx,y:cy-196}};
 }
 function layoutNarrow(c,T,W){
-  var pos=new Map(),guides=[],caps=[],paths=[],R=24,gap=112,colX=[W/6,W/2,W*5/6],g1=W/3,g2=W*2/3,y=46,i;
+  var pos=new Map(),guides=[],caps=[],paths=[],R=24,gap=122,colX=[W/6,W/2,W*5/6],g1=W/3,g2=W*2/3,y=46,i;
   var ringed=c.root.length+c.r1.length+c.r2.length;
-  if(!ringed){var b0=gridPlace(c.free,pos,0,W,50,3,gap);return {W:W,H:b0+80,pos:pos,guides:[],caps:[],paths:[],narrow:true};}
+  if(!ringed){var b0=gridPlace(c.free,pos,0,W,50,3,gap);return {W:W,H:b0+98,pos:pos,guides:[],caps:[],paths:[],narrow:true};}
   c.root.forEach(function(n,k){pos.set(n,{x:W/2+(k-(c.root.length-1)/2)*96,y:y,zone:'root'});});
   var n1=c.r1.length,slots=[],fs=[],os=[];
   for(i=0;i<n1;i++)slots.push({r:Math.floor(i/3),c:i%3});
   slots.forEach(function(sl){(sl.c>0&&fs.length<c.feed.length?fs:os).push(sl);});
-  var feedSet=new Set(c.feed),fi=0,oi=0,y1=y+gap-6;
+  var feedSet=new Set(c.feed),fi=0,oi=0,y1=y+gap+6;
   c.r1.forEach(function(n){var sl=feedSet.has(n)&&fi<fs.length?fs[fi++]:os[oi++]||fs[fi++];pos.set(n,{x:colX[sl.c],y:y1+sl.r*gap,zone:'r1',row:sl.r,col:sl.c});});
   var rows1=Math.ceil(n1/3),y2=n1?y1+rows1*gap+22:y+gap+10;
   var order2=c.r2.length===2?[1,0]:[1,0,2];
@@ -447,7 +483,7 @@ function layoutNarrow(c,T,W){
     }
     paths.push({a:e[0],b:e[1],d:d,end:end,dir:dir});
   });
-  return {W:W,H:bottom+86,pos:pos,guides:guides,caps:caps,paths:paths,narrow:true,wm:{x:W/2,y:y1+gap/2+8,small:true}};
+  return {W:W,H:bottom+98,pos:pos,guides:guides,caps:caps,paths:paths,narrow:true,wm:{x:W/2,y:y1+gap/2+8,small:true}};
 }
 function buildGraph(names,edges){
   var box=$('graphBox'),bw=box.clientWidth||1000,narrow=bw<640;
@@ -456,7 +492,7 @@ function buildGraph(names,edges){
   var svg=$('graph'),T=topo(names,edges),c=classify(names,T),L=narrow?layoutNarrow(c,T,Math.max(300,bw)):layoutWide(c,T);
   var act=document.activeElement,refocus=act&&act.getAttribute&&svg.contains(act)?act.getAttribute('data-n'):null;
   G={sig:sig,nodes:new Map(),edges:[],pos:L.pos,T:T,order:c.root.concat(c.r1,c.r2,c.free),sev:new Map(),world:null};
-  svg.setAttribute('viewBox','0 0 '+L.W+' '+Math.round(L.H));
+  svg.setAttribute('viewBox','0 0 '+L.W+' '+Math.round(L.H));svg.classList.toggle('narrow',!!L.narrow);
   var lg=s('g',{}),le=s('g',{}),lb=s('g',{id:'blasts'}),ln=s('g',{});
   L.guides.forEach(function(g){lg.append(g.line?s('line',{'class':'guide',x1:g.line[0],y1:g.line[1],x2:g.line[2],y2:g.line[3]}):s('ellipse',{'class':'guide',cx:g.cx,cy:g.cy,rx:g.rx,ry:g.ry}));});
   L.caps.forEach(function(cp){var t=s('text',{'class':'gcap',x:cp.x,y:cp.y,'text-anchor':cp.anchor});t.textContent=cp.t;lg.append(t);});
@@ -472,7 +508,7 @@ function buildGraph(names,edges){
     var lines=splitName(n,L.narrow),ty=40,parts={g:g};
     parts.title=s('title',{});
     parts.shape=s('path',{'class':'shape'});parts.icon=s('path',{'class':'icon'});
-    g.append(parts.title,s('circle',{'class':'halo',r:34}),s('circle',{'class':'fr',r:31}),parts.shape,parts.icon);
+    g.append(parts.title,s('circle',{'class':'halo',r:31}),s('circle',{'class':'fr',r:31}),parts.shape,parts.icon);
     lines.forEach(function(t){var tx=s('text',{'class':'nl',y:ty});tx.textContent=t;g.append(tx);ty+=13;});
     parts.sub=s('text',{'class':'ns',y:ty});g.append(parts.sub);
     ln.append(g);G.nodes.set(n,parts);
@@ -644,6 +680,10 @@ function renderSimBits(){
   var lf=live.frames[live.frames.length-1];
   $('simLive').textContent=sim.on?(lf?'(Real probes right now: level '+lf.level+'.)':'(No real probe data yet.)'):'';
   document.querySelectorAll('[data-sc]').forEach(function(b){b.setAttribute('aria-pressed',sim.on&&sim.sc===b.getAttribute('data-sc')?'true':'false');});
+  $('mtOff').hidden=live.admin;$('mtForm').hidden=!live.admin;
+  var rb=$('mtRetest'),canRe=live.admin&&!!view.sel;
+  if(rb.hidden===canRe){if(!canRe&&document.activeElement===rb)$('graph').focus();rb.hidden=!canRe;}
+  if(canRe)rb.textContent='Retest '+view.sel+' now (manual test, real probe)';
   document.title=(sim.on?'[SIMULATION] ':'')+'outage-watch · blast radius';
 }
 var lastLevelKey='';
@@ -706,6 +746,48 @@ function simStart(){
 }
 function simStop(){if(!sim.on)return;clearInterval(sim.timer);sim.on=false;sim.frames=[];sim.sc=null;stopPlay();view.idx=null;view.sel=null;view.hover=null;render();$('simToggle').focus();}
 function simScenario(sc){sim.sc=sc==='heal'?null:sc;sim.t0=sim.k+1;view.idx=null;stopPlay();renderSimBits();}
+
+/* ---------- manual test (admin; real probes, never mixed into frames) ---------- */
+var mtBusy=false,MT_ERR={400:'Request rejected: that service is not in the configured target list.',401:'Token rejected.',
+  403:'Refused by outage-watch (manual test disabled or cross-origin request).',429:'Too soon. Manual runs are limited to one every few seconds; try again shortly.',
+  500:'outage-watch hit an internal error running the test.'};
+function mtMsg(t,err){var m=$('mtMsg');m.textContent=t;m.className=err?'err':'';}
+function mtHead(chip,text){var hd=h('h3');hd.append(h('span','mtChip',chip),document.createTextNode(text));return hd;}
+function mtShowTest(d){
+  var out=$('mtOut'),ul=h('ul');out.replaceChildren();
+  out.append(mtHead('MANUAL TEST','Run at '+hms(d.ts)+' \u00b7 real one-off probes'+(d.partial?' \u00b7 selected services only':' \u00b7 all services')));
+  (Array.isArray(d.results)?d.results:[]).forEach(function(r){
+    var k=STATES.indexOf(r.state)>=0?r.state:'down',li=h('li','k-'+k),box=h('div'),b=h('b',null,k);
+    box.append(document.createTextNode(String(r.name)+' '),b,h('small',null,(r.code?'HTTP '+r.code+' \u00b7 ':'')+num(r.ms)+' ms'+(r.error?' \u00b7 '+r.error:'')+
+      ' \u00b7 baseline '+(r.baseline==null?'unknown':num(r.baseline)+' ms')));
+    li.append(glyph(k),box);ul.append(li);});
+  out.append(ul,h('p',null,'Verdict: '+String(d.verdict)),
+    h('p',null,'Freeze level this would set: '+String(d.level_would_set)+'. Dry run: nothing was changed.'),
+    h('p','hint','A single failed probe shows as "down" here; the continuous monitor waits for two in a row. "Blocked" means your own proxy or firewall refused the probe.'));
+  out.hidden=false;
+}
+function mtShowAlert(d){
+  var out=$('mtOut');out.replaceChildren();
+  out.append(mtHead('TEST ALERT','Sent at '+hms(d.ts)),h('p','mono',String(d.message)),
+    h('p',null,'Webhook: '+String(d.webhook)+'.'),h('p',null,'Hook: '+String(d.hook)+(d.hook_exit==null?'':', exit code '+d.hook_exit)+'.'),
+    h('p','hint',d.ok?'Check that the message arrived in your alert channel.':'Nothing was delivered successfully. Check --webhook / --on-change on the outage-watch command line.'));
+  out.hidden=false;
+}
+function mtCall(path,body,label,show){
+  var tok=$('mtTok').value;
+  if(mtBusy)return;
+  if(!tok){mtMsg('Paste the admin token first.',true);$('mtTok').focus();return;}
+  mtBusy=true;mtMsg(label+' \u2026');
+  var p;try{p=fetch(path,{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json','Authorization':'Bearer '+tok},body:JSON.stringify(body)});}catch(e){p=Promise.reject(e);}
+  p.then(function(r){return r.json().catch(function(){return {};}).then(function(d){return {s:r.status,d:d};});})
+   .then(function(o){if(o.s===200){show(o.d);mtMsg('Done. Result below is a manual test, separate from the continuous data above.');}
+     else mtMsg(MT_ERR[o.s]||'Request failed (HTTP '+o.s+').',true);})
+   .catch(function(){mtMsg('Could not reach outage-watch.',true);}).then(function(){mtBusy=false;});
+}
+$('mtForm').addEventListener('submit',function(e){e.preventDefault();mtCall('api/test',{},'Running manual test',mtShowTest);});
+$('mtAlert').addEventListener('click',function(){mtCall('api/test-alert',{},'Sending test alert',mtShowAlert);});
+$('mtRetest').addEventListener('click',function(){if(!view.sel)return;var n=view.sel;mtCall('api/test',{only:[n]},'Retesting '+n,mtShowTest);
+  if($('mtTok').value)$('mtOut').scrollIntoView({block:'nearest'});});
 
 /* ---------- interaction ---------- */
 function stopPlay(){if(view.playing){clearInterval(view.playing);view.playing=null;}}

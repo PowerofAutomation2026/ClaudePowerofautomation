@@ -1,16 +1,22 @@
 """Live dashboard + Prometheus metrics for outage-watch (stdlib only)."""
 import base64
 import hashlib
+import hmac
 import json
 import os
 import re
 import threading
+import time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 STATE_NUM = {"up": 0, "warning": 1, "suspect": 2, "down": 3, "blocked": 4}
 LEVEL_NUM = {"ok": 0, "caution": 1, "freeze": 2}
+MAX_BODY = 4096    # bytes accepted by the admin POST endpoints
+MIN_GAP = 5.0      # seconds between manual runs (per endpoint)
+MIN_TOKEN = 16     # shortest admin token accepted
+LOCAL = ("127.0.0.1", "localhost", "::1")
 HISTORY = 120      # probe rounds kept in memory for the dashboard's replay / sparklines
 SLOW_MS = 3000     # probe() itself reports "degraded" above this, whatever the baseline
 
@@ -38,6 +44,7 @@ class Snapshot:
         self._edges = _default_edges() if edges is None else [list(e) for e in edges]
         self._interval, self._hist = interval, deque(maxlen=HISTORY)
         self._data = {"updated": None, "level": "ok", "verdict": "starting", "services": {}}
+        self.admin = False   # set by make_server: tells the page whether manual tests are enabled
 
     def update(self, ts, level, verdict, results, published, monitor=None):
         svc = {}
@@ -52,7 +59,7 @@ class Snapshot:
 
     def get(self, history=False):
         with self._lock:
-            d = dict(self._data, edges=self._edges, interval=self._interval)
+            d = dict(self._data, edges=self._edges, interval=self._interval, admin=self.admin)
             if history:
                 d["history"] = list(self._hist)
             return json.loads(json.dumps(d))
@@ -90,8 +97,80 @@ def _csp(page):
 CSP = _csp(PAGE)
 
 
-def make_server(snapshot, port, bind="127.0.0.1"):
+def make_server(snapshot, port, bind="127.0.0.1", admin=None):
+    """admin (optional) enables the manual-test API:
+    {"token": str, "targets": () -> [names], "run_test": (only) -> dict, "test_alert": () -> dict}.
+    Without it the POST endpoints answer 403 and the page hides its buttons."""
+    token = (admin or {}).get("token")
+    if token is not None and len(token) < MIN_TOKEN:
+        raise ValueError(f"admin token must be at least {MIN_TOKEN} characters")
+    if bind not in LOCAL and not token:
+        raise ValueError(f"--bind {bind} exposes the dashboard beyond localhost; set OUTAGEWATCH_ADMIN_TOKEN "
+                         "(and put it behind an authenticating reverse proxy) or bind to 127.0.0.1")
+    snapshot.admin = bool(token)
+    gate = {"lock": threading.Lock(), "busy": threading.Lock(), "last": {}, "fails": deque(maxlen=20)}
+
     class H(BaseHTTPRequestHandler):
+        def _json(self, code, obj, extra=()):
+            self._send(code, json.dumps(obj), "application/json", extra)
+
+        def _same_origin(self):
+            host, origin = self.headers.get("Host"), self.headers.get("Origin")
+            if not host or self.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
+                return False
+            return origin is None or origin in ("http://" + host, "https://" + host)
+
+        def do_POST(self):
+            path = urlsplit(self.path).path
+            if path not in ("/api/test", "/api/test-alert"):
+                return self._json(404, {"error": "not found"})
+            self.close_connection = True      # we may answer without reading the body
+            if not token:
+                return self._json(403, {"error": "manual test is disabled"})
+            if not self._same_origin():
+                return self._json(403, {"error": "forbidden"})
+            if self.headers.get("Content-Type", "").split(";")[0].strip().lower() != "application/json":
+                return self._json(415, {"error": "unsupported media type"})
+            try:
+                length = int(self.headers.get("Content-Length", ""))
+            except ValueError:
+                return self._json(411, {"error": "length required"})
+            if length < 0 or length > MAX_BODY:
+                return self._json(413, {"error": "payload too large"})
+            now = time.monotonic()
+            with gate["lock"]:
+                locked = len(gate["fails"]) == gate["fails"].maxlen and now - gate["fails"][0] < 60
+            if locked:
+                return self._json(429, {"error": "too many requests"}, (("Retry-After", "60"),))
+            auth = self.headers.get("Authorization", "")
+            if not (auth.startswith("Bearer ") and hmac.compare_digest(auth[7:].encode(), token.encode())):
+                with gate["lock"]:
+                    gate["fails"].append(now)
+                return self._json(401, {"error": "unauthorized"}, (("WWW-Authenticate", "Bearer"),))
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                only = body.get("only") if isinstance(body, dict) else 0
+                known = set(admin["targets"]())
+                if not isinstance(body, dict) or not (only is None or (
+                        isinstance(only, list) and 0 < len(only) <= 50 and
+                        all(isinstance(n, str) and n in known for n in only))):
+                    raise ValueError
+            except Exception:
+                return self._json(400, {"error": "bad request"})
+            if not gate["busy"].acquire(blocking=False):
+                return self._json(429, {"error": "too many requests"}, (("Retry-After", "5"),))
+            try:
+                wait = MIN_GAP - (now - gate["last"].get(path, -MIN_GAP))
+                if wait > 0:
+                    return self._json(429, {"error": "too many requests"}, (("Retry-After", str(int(wait) + 1)),))
+                gate["last"][path] = now
+                out = admin["run_test"](only) if path == "/api/test" else admin["test_alert"]()
+            except Exception:
+                return self._json(500, {"error": "internal error"})
+            finally:
+                gate["busy"].release()
+            self._json(200, out)
+
         def _send(self, code, body, ctype, extra=()):
             data = body.encode()
             self.send_response(code)

@@ -256,12 +256,82 @@ def diagnose(results):
 
 
 def notify(webhook, text):
+    """POST text to the webhook. Returns None on success, else the error type name."""
     body = json.dumps({"text": text}).encode()
     req = urllib.request.Request(webhook, data=body, headers={"Content-Type": "application/json"})
     try:
         urllib.request.urlopen(req, timeout=10).read()
     except Exception as e:
         print(f"webhook failed: {type(e).__name__}", file=sys.stderr)
+        return type(e).__name__
+    return None
+
+
+def manual_test(targets, only=None, timeout=10.0, monitor=None):
+    """One manual probe round for admins. Pure dry run: reads the monitor's baseline but
+    changes nothing (no monitor history, freeze file, hook, webhook or log).
+    `only` limits it to known target NAMES; unknown names raise ValueError.
+    A manual test is a single probe, so a failure is reported as `down` without the
+    two-in-a-row confirmation the continuous mode uses."""
+    from concurrent.futures import ThreadPoolExecutor
+    names = list(targets) if not only else list(dict.fromkeys(only))
+    unknown = [n for n in names if n not in targets]
+    if unknown:
+        raise ValueError("unknown service: " + ", ".join(sorted(map(str, unknown))))
+    with ThreadPoolExecutor(max_workers=min(16, len(names) or 1)) as ex:
+        raw = list(ex.map(lambda n: probe(n, targets[n][0], targets[n][1], timeout=timeout), names))
+    rows, state = [], {}
+    for r in raw:
+        base = monitor.baseline(r["name"]) if monitor else None
+        slow = base is not None and r["ms"] > max(base * monitor.factor, base + monitor.floor_ms)
+        st = "warning" if r["state"] == "degraded" or (r["state"] == "up" and slow) else r["state"]
+        state[r["name"]] = st
+        rows.append({"name": r["name"], "state": st, "code": r["code"], "ms": r["ms"],
+                     "error": r["error"], "baseline": base})
+    verdict = diagnose(raw)
+    hit = impact(state)
+    if hit:
+        verdict += " | at risk: " + ", ".join(hit)
+    level = Automation.target_level(state)
+    return {"kind": "manual-test", "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "partial": len(names) < len(targets), "results": rows, "verdict": verdict,
+            "level_would_set": level, "healthy": level == "ok", "applied": False}
+
+
+def format_test(t):
+    lines = [f"MANUAL TEST  {t['ts']}  ({'selected services only' if t['partial'] else 'all services'})", "",
+             f"{'service':<20}{'state':<9}{'http':<6}{'ms':>7}  {'baseline':>9}  error"]
+    for r in t["results"]:
+        base = f"{r['baseline']} ms" if r["baseline"] is not None else "unknown"
+        lines.append(f"{r['name']:<20}{r['state']:<9}{r['code']!s:<6}{r['ms']:>7}  {base:>9}  {r['error'] or '-'}")
+    lines += ["", f"verdict: {t['verdict']}", f"freeze level this would set: {t['level_would_set']}",
+              "applied: freeze file / hook / webhook updated" if t["applied"] else
+              "dry run: freeze file, hooks, webhook and log NOT touched (use --apply to act on it)"]
+    if any(r["state"] == "blocked" for r in t["results"]):
+        lines.append("note: 'blocked' = your own proxy/firewall refused the probe; it is not counted as a problem")
+    return "\n".join(lines)
+
+
+def test_alert(webhook=None, on_change=None):
+    """Send a clearly labelled TEST alert and run the hook once with OUTAGEWATCH_LEVEL=test."""
+    import os, shlex, subprocess
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    text = f"[outage-watch TEST {now}] This is a manual TEST alert. No outage is implied; no action needed."
+    out = {"kind": "test-alert", "ts": now, "message": text, "webhook": "not configured",
+           "hook": "not configured", "hook_exit": None}
+    if webhook:
+        err = notify(webhook, text)
+        out["webhook"] = "sent" if err is None else f"failed ({err})"
+    if on_change:
+        env = dict(os.environ, OUTAGEWATCH_LEVEL="test", OUTAGEWATCH_SERVICES="")
+        try:
+            out["hook_exit"] = subprocess.run(shlex.split(on_change), env=env, timeout=30, check=False).returncode
+            out["hook"] = "ran"
+        except Exception as e:
+            out["hook"] = f"failed ({type(e).__name__})"
+    out["ok"] = (bool(webhook) or bool(on_change)) and out["webhook"] in ("sent", "not configured") \
+        and (not on_change or out["hook_exit"] == 0)
+    return out
 
 
 def load_config(path):
@@ -328,9 +398,29 @@ def main(argv=None):
     p.add_argument("--serve", type=int, metavar="PORT", help="live dashboard, /status.json and /metrics on PORT")
     p.add_argument("--bind", default="127.0.0.1", help="address for --serve (default localhost only)")
     p.add_argument("--webhook", help="Teams/Slack-style incoming webhook (use one NOT hosted on M365)")
-    a = p.parse_args(argv)
+    p.add_argument("--test", action="store_true", help="manual test: one detailed probe round, dry run (exit 0 ok, 1 problem)")
+    p.add_argument("--only", nargs="+", metavar="NAME", help="with --test: probe only these service names")
+    p.add_argument("--json", action="store_true", help="with --test / --test-alert: print JSON")
+    p.add_argument("--apply", action="store_true", help="with --test: also write the freeze file, run the hook, send the webhook")
+    p.add_argument("--test-alert", action="store_true", help="send a labelled TEST message to --webhook and run --on-change once")
+    p.add_argument("--admin-token", help="enable the dashboard's manual-test API (prefer env OUTAGEWATCH_ADMIN_TOKEN)")
+    try:
+        a = p.parse_args(argv)
+    except SystemExit as e:
+        return e.code
     if a.check_freeze:
         return check_freeze(a.check_freeze)
+    if (a.only or a.apply) and not a.test:
+        print("--only and --apply need --test", file=sys.stderr)
+        return 2
+    if a.test_alert:
+        if not (a.webhook or a.on_change):
+            print("--test-alert needs --webhook and/or --on-change", file=sys.stderr)
+            return 2
+        t = test_alert(a.webhook, a.on_change)
+        print(json.dumps(t, indent=2) if a.json else
+              f"sent: {t['message']}\nwebhook: {t['webhook']}\nhook: {t['hook']}\nhook exit code: {t['hook_exit']}")
+        return 0 if t["ok"] else 1
     cfg = {}
     if a.config:
         try:
@@ -344,16 +434,43 @@ def main(argv=None):
     targets.update(cfg.get("targets", {}))
     if a.interval == 60 and "interval" in cfg:
         a.interval = cfg["interval"]
-    snap = None
-    if a.serve:
-        from server import Snapshot, make_server
-        snap = Snapshot(dependency_edges(), a.interval)
-        make_server(snap, a.serve, a.bind)
-        print(f"dashboard: http://{a.bind}:{a.serve}/  (metrics at /metrics)")
     if a.tenant:
         targets.update(tenant_targets(a.tenant))
     mon = Monitor(confirm=cfg.get("confirm", 2), factor=cfg.get("factor", 3.0),
                   floor_ms=cfg.get("floor_ms", 800))
+    if a.test:
+        try:
+            t = manual_test(targets, a.only, a.timeout)
+        except ValueError as e:
+            print(f"{e} (known: {', '.join(sorted(targets))})", file=sys.stderr)
+            return 2
+        if a.apply:
+            state = {r["name"]: r["state"] for r in t["results"]}
+            if a.freeze_file or a.on_change:
+                Automation(a.freeze_file, a.on_change).step(state, t["ts"])
+            if a.webhook:
+                notify(a.webhook, f"[outage-watch MANUAL TEST {t['ts']}] {t['verdict']} | level {t['level_would_set']}")
+            t["applied"] = True
+        print(json.dumps(t, indent=2) if a.json else format_test(t))
+        return 0 if t["healthy"] else 1
+    snap = None
+    if a.serve:
+        import os
+        from server import Snapshot, make_server
+        token = os.environ.get("OUTAGEWATCH_ADMIN_TOKEN") or a.admin_token
+        if a.admin_token:
+            print("warning: --admin-token is visible in the process list; prefer env OUTAGEWATCH_ADMIN_TOKEN", file=sys.stderr)
+        admin = {"token": token, "targets": lambda: list(targets),
+                 "run_test": lambda only: manual_test(targets, only, a.timeout, mon),
+                 "test_alert": lambda: test_alert(a.webhook, a.on_change)} if token else None
+        snap = Snapshot(dependency_edges(), a.interval)
+        try:
+            make_server(snap, a.serve, a.bind, admin)
+        except ValueError as e:
+            print(f"refusing to start dashboard: {e}", file=sys.stderr)
+            return 2
+        print(f"dashboard: http://{a.bind}:{a.serve}/  (metrics at /metrics; manual test "
+              f"{'ENABLED, token required' if admin else 'disabled, set OUTAGEWATCH_ADMIN_TOKEN to enable'})")
     prev = None
     while True:
         results, prev_new = run_cycle(targets, prev, a.log, a.webhook, a.timeout, mon, auto, snap)
