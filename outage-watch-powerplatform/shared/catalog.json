@@ -1,0 +1,34 @@
+{
+  "comment": "Single source of truth for the seeded targets (mirrors DEFAULT_TARGETS / DEPENDS_ON_AUTH / COPILOT_NEEDS / DEFAULT_ROLES in outagewatch.py). alive = null means: any HTTP answer below 500 that is not 429 counts as alive.",
+  "targets": [
+    { "name": "auth", "url": "https://login.microsoftonline.com/common/.well-known/openid-configuration", "alive": [200], "dependsOnAuth": false, "copilotNeeds": false },
+    { "name": "exchange", "url": "https://autodiscover-s.outlook.com/autodiscover/autodiscover.xml", "alive": [200, 401, 403], "dependsOnAuth": true, "copilotNeeds": true },
+    { "name": "outlook-web", "url": "https://outlook.office.com/mail/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false },
+    { "name": "teams", "url": "https://teams.microsoft.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": true },
+    { "name": "m365-portal", "url": "https://www.office.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false },
+    { "name": "admin-center", "url": "https://admin.microsoft.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false },
+    { "name": "graph", "url": "https://graph.microsoft.com/v1.0/$metadata", "alive": [200, 401, 403], "dependsOnAuth": true, "copilotNeeds": true },
+    { "name": "power-platform", "url": "https://api.powerapps.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false },
+    { "name": "intune", "url": "https://enrollment.manage.microsoft.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false },
+    { "name": "m365-copilot", "url": "https://m365.cloud.microsoft/chat", "alive": null, "dependsOnAuth": true, "copilotNeeds": false },
+    { "name": "copilot-substrate", "url": "https://substrate.office.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": true },
+    { "name": "copilot-studio", "url": "https://copilotstudio.microsoft.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false },
+    { "name": "copilot-web", "url": "https://copilot.microsoft.com/", "alive": null, "dependsOnAuth": false, "copilotNeeds": false },
+    { "name": "github-copilot", "url": "https://api.githubcopilot.com/", "alive": null, "dependsOnAuth": false, "copilotNeeds": false },
+    { "name": "office-cdn", "url": "https://res.cdn.office.net/", "alive": null, "dependsOnAuth": false, "copilotNeeds": false }
+  ],
+  "tenantTargets": [
+    { "name": "sharepoint", "urlTemplate": "https://{tenant}.sharepoint.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": true },
+    { "name": "onedrive", "urlTemplate": "https://{tenant}-my.sharepoint.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": true }
+  ],
+  "roles": {
+    "Email & calendar": ["auth", "exchange", "outlook-web"],
+    "Meetings": ["auth", "teams"],
+    "Files & sharing": ["auth", "sharepoint", "onedrive"],
+    "Copilot assistance": ["auth", "m365-copilot", "copilot-substrate"],
+    "Admin tasks": ["auth", "admin-center", "graph"],
+    "Device management": ["auth", "intune"],
+    "Low-code apps": ["auth", "power-platform"]
+  },
+  "defaults": { "intervalMinutes": 5, "retentionDays": 7, "probeTimeoutSeconds": 10, "confirm": 2, "window": 20, "minHistory": 5, "factor": 3.0, "floorMs": 800, "slowMs": 3000, "recoverAfter": 3 }
+}

@@ -1,0 +1,125 @@
+// Builds the cloud flow (`workflow.clientdata`) for the probe.
+//
+// The flow is deliberately DUMB: it records raw facts (HTTP status, elapsed ms, raw error code) and never
+// decides whether something is "up" or "down". All classification is done client-side (src/logic/classify.ts).
+//
+// Documented parts: the clientdata envelope, connectionReferences, the Dataverse `ListRecords` action shape,
+// the Logic Apps workflow definition language (Recurrence, Foreach, Http, runAfter, retryPolicy, limit.timeout,
+// operationOptions, runtimeConfiguration). NOT documented by Microsoft: the exact parameter names of the
+// Dataverse `CreateRecord` / `DeleteRecord` operations inside clientdata ("item/<column>", "recordId") - they
+// follow what the Power Automate designer itself writes. See DESIGN.md "Unconfirmed".
+import { CONNREF } from './schema.mjs'
+
+const ALWAYS = ['Succeeded', 'Failed', 'Skipped', 'TimedOut']
+const AUTH = "@parameters('$authentication')"
+
+const dv = (operationId, parameters, runAfter) => ({
+  runAfter, metadata: {}, type: 'OpenApiConnection',
+  inputs: { host: { apiId: CONNREF.connectorId, connectionName: CONNREF.api, operationId }, parameters, authentication: AUTH },
+})
+
+/**
+ * @param {{intervalMinutes:number, retentionDays:number, timeoutSeconds:number, heartbeatUrl?:string|null,
+ *          sets:{target:string,result:string}}} o   `sets` are the Dataverse entity set names read back from metadata.
+ */
+export function buildClientData(o) {
+  const probe = {
+    runAfter: {}, metadata: {}, type: 'Http',
+    inputs: {
+      method: 'GET', uri: "@items('For_each_target')?['owatch_url']",
+      headers: { 'User-Agent': 'outage-watch-pp/1.0' },
+      retryPolicy: { type: 'none' },                 // a retried probe would hide the first failure and distort elapsed time
+    },
+    limit: { timeout: `PT${o.timeoutSeconds}S` },
+    operationOptions: 'DisableAsyncPattern',         // never poll a 202 + Location answer
+  }
+  const elapsed = "@div(sub(ticks(coalesce(actions('Probe')?['endTime'],utcNow())),ticks(coalesce(actions('Probe')?['startTime'],utcNow()))),10000)"
+  const errorKind = "@if(equals(actions('Probe')?['status'],'Succeeded'),'',coalesce(actions('Probe')?['code'],actions('Probe')?['status'],'Failed'))"
+  const record = dv('CreateRecord', {
+    entityName: o.sets.result,
+    'item/owatch_name': "@items('For_each_target')?['owatch_name']",
+    'item/owatch_httpstatus': "@outputs('Probe')?['statusCode']",
+    'item/owatch_elapsedms': elapsed,
+    'item/owatch_errorkind': errorKind,
+    'item/owatch_probedat': '@utcNow()',
+    'item/owatch_round': "@outputs('Round')",
+  }, { Probe: ALWAYS })                              // one failing probe must never stop the others, or its own record
+
+  const actions = {
+    Round: { runAfter: {}, metadata: {}, type: 'Compose', inputs: "@utcNow('yyyy-MM-ddTHH:mm:ssZ')" },
+    List_targets: dv('ListRecords', {
+      entityName: o.sets.target, $select: 'owatch_name,owatch_url', $filter: 'owatch_enabled eq true and statecode eq 0', $top: 100,
+    }, { Round: ['Succeeded'] }),
+    For_each_target: {
+      runAfter: { List_targets: ['Succeeded'] }, metadata: {}, type: 'Foreach',
+      foreach: "@outputs('List_targets')?['body/value']",
+      actions: { Probe: probe, Record: record },
+      runtimeConfiguration: { concurrency: { repetitions: 20 } },
+    },
+    Prune_list: dv('ListRecords', {
+      entityName: o.sets.result, $select: 'owatch_resultid',
+      $filter: `owatch_probedat lt @{addDays(utcNow(), -${o.retentionDays})}`, $top: 200,
+    }, { For_each_target: ALWAYS }),
+    Prune_each: {
+      runAfter: { Prune_list: ['Succeeded'] }, metadata: {}, type: 'Foreach',
+      foreach: "@outputs('Prune_list')?['body/value']",
+      actions: { Delete_old: dv('DeleteRecord', { entityName: o.sets.result, recordId: "@items('Prune_each')?['owatch_resultid']" }, {}) },
+      runtimeConfiguration: { concurrency: { repetitions: 10 } },
+    },
+  }
+  if (o.heartbeatUrl) {
+    // Dead man's switch: pings an EXTERNAL watcher only when the whole probe round was written.
+    // If Power Platform (or this flow) dies, the pings stop and the outside service notices the silence.
+    actions.Heartbeat = {
+      runAfter: { For_each_target: ['Succeeded'] }, metadata: {}, type: 'Http',
+      inputs: { method: 'GET', uri: o.heartbeatUrl, retryPolicy: { type: 'none' } },
+      limit: { timeout: 'PT10S' },
+      operationOptions: 'DisableAsyncPattern',
+      runtimeConfiguration: { secureData: { properties: ['inputs', 'outputs'] } },   // keep the URL out of the run history
+    }
+  }
+  return {
+    properties: {
+      connectionReferences: {
+        [CONNREF.api]: { runtimeSource: 'embedded', connection: { connectionReferenceLogicalName: CONNREF.logicalName }, api: { name: CONNREF.api } },
+      },
+      definition: {
+        $schema: 'https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#',
+        contentVersion: '1.0.0.0',
+        parameters: { $connections: { defaultValue: {}, type: 'Object' }, $authentication: { defaultValue: {}, type: 'SecureObject' } },
+        triggers: {
+          Recurrence: { type: 'Recurrence', recurrence: { frequency: 'Minute', interval: o.intervalMinutes }, runtimeConfiguration: { concurrency: { runs: 1 } } },
+        },
+        actions,
+      },
+    },
+    schemaVersion: '1.0.0.0',
+  }
+}
+
+/** Heartbeat URL of an existing deployment (so an upgrade without the flag keeps it). Never log the result. */
+export function existingHeartbeatUrl(clientdataText) {
+  try {
+    const u = JSON.parse(clientdataText)?.properties?.definition?.actions?.Heartbeat?.inputs?.uri
+    return typeof u === 'string' && u.startsWith('https://') ? u : null
+  } catch { return null }
+}
+
+/** Stable JSON for "did the definition change?" comparisons. */
+export function canonical(v) {
+  if (Array.isArray(v)) return '[' + v.map(canonical).join(',') + ']'
+  if (v && typeof v === 'object') return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + canonical(v[k])).join(',') + '}'
+  return JSON.stringify(v)
+}
+
+/**
+ * Rough Power Platform request usage. "Each trigger and action that runs counts as one request" (Microsoft).
+ * Per run: trigger + Round + List_targets + For_each_target + 2 per target (Probe, Record) + Prune_list + Prune_each
+ * + in steady state one Delete_old per row written a retention period ago (= targets) + optional Heartbeat.
+ */
+export function estimateRequests(targets, intervalMinutes, heartbeat) {
+  const perRun = 6 + 3 * targets + (heartbeat ? 1 : 0)
+  const runsPerDay = Math.floor(1440 / intervalMinutes)
+  const perDay = perRun * runsPerDay
+  return { perRun, runsPerDay, perDay, pctOf40k: Math.round((perDay / 40000) * 100), pctOf6k: Math.round((perDay / 6000) * 100), rowsPerDay: targets * runsPerDay }
+}
