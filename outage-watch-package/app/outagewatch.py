@@ -820,6 +820,7 @@ def main(argv=None):
         snap = Snapshot(dependency_edges(), a.interval, cfg.get("roles") or DEFAULT_ROLES, drills,
                         cfg.get("public_labels"), warnings)
         snap.label = cfg.get("label", "")
+        snap.alerts_fn = mgr.public if mgr else None
         access = {"viewer_token": os.environ.get("OUTAGEWATCH_VIEWER_TOKEN") or None, "trusted_proxy": a.trust_proxy,
                   "proxy_header": a.proxy_user_header, "public_status": a.public_status}
         try:
