@@ -151,7 +151,7 @@ export function layoutFamilies(families: Family[], dependsOnAuth: ReadonlySet<st
   const busL = narrow ? 9 : 22; const busR = W - busL
   const x0 = narrow ? 66 : 96; const pitch = narrow ? 114 : 134
   const r = narrow ? 19 : 22
-  const head = 30; const rowH = narrow ? 92 : 96; const gap = 10; const top = 6
+  const head = 30; const rowH = narrow ? 102 : 108; const gap = 10; const top = 6
   const all = new Set(families.flatMap((f) => f.nodes))
   const hasHub = all.has(hub); const hasSink = all.has(sink)
   const pos = new Map<string, Pos>()

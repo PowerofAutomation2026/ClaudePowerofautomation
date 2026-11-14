@@ -3,7 +3,7 @@
 ## Architecture
 
 ```
- Recurrence (5 min)                      Dataverse (solution "OutageWatch")            Code app (browser)
+ Recurrence (10 min)                     Dataverse (solution "OutageWatch")            Code app (browser)
  +--------------------------+   rows    +--------------------------------+   read     +------------------------------+
  | flow "Outage Watch-probe"| --------> | owatch_result  (RAW facts only)| ---------> | classify.ts  (pure, tested)  |
  |  List enabled targets    | <-------- | owatch_target  (what to probe) |            |  Monitor / Automation port   |
@@ -37,6 +37,11 @@
 | Token only to allow-listed Dataverse hosts, `redirect: 'error'` | The org URL is parsed from `pac` output; it is validated against Dataverse host patterns before any request, and a bearer token is never re-sent to a redirect target. |
 | Secrets through process environment variables | Never on a command line (visible in process lists and history), never in a file, never in output. |
 | Heartbeat URL stored in the flow definition, secure inputs/outputs | Dataverse "secret" environment variables need Azure Key Vault (too heavy for zero-touch). In the definition it is readable only by flow owners/system admins and hidden from run history. Not in any table the dashboard reads. |
+| Tenant-specific targets without a tenant name = a row with **no URL, disabled** | No schema change, and safe by construction: the flow's filter (`owatch_enabled eq true and owatch_url ne null`) can never probe it. The dashboard turns "no URL" into the neutral `unconfigured` state; "URL but disabled" means an admin switched it off and it is hidden. |
+| Renamed targets migrated by renaming the **row**, history by an alias in the dashboard | `sharepoint`/`onedrive` rows are PATCHed to the new names (same row id, URL, enabled flag). Rewriting thousands of result rows would cost thousands of requests for data that expires in days; the dashboard maps old names to new when reading (`shared/catalog.json` "renamed"). |
+| Default interval 10 min (was 5) | 34 targets at 5 min = 31,104 requests/day = 78% of 40,000. 10 min = 15,552 = 39%. Slower detection is the price; stated in README, `-DryRun`, and a WARNING above 60%. |
+| "For each" concurrency 50 (documented maximum) | All 36 probes start together: worst-case round is about one timeout (10 s), not 36 (6 min). Trigger concurrency 1 prevents overlap. |
+| Family layout: bands on two buses, no per-edge lines | 36 nodes have 30 sign-in edges and 6 Copilot edges; drawn individually they are unreadable. Each family is a band; a left rail carries "needs sign-in", a right rail "Copilot reads". Rows order sign-in dependants first so a rail never crosses a service it does not belong to (tested). |
 | Pruning inside the flow | Simple and visible. It costs one request per deleted row; a Dataverse bulk-delete job would cost none but was not implemented (unverifiable here). |
 | Dashboard reads through `getClient().retrieveMultipleRecordsAsync` | Same proven pattern as the repository's existing code app (find the generated data source by primary key, not by its display name). Read-only. |
 | States shown as shape + icon + word | Never colour alone; reduced motion respected; dark/light tokens from the Python dashboard. |
@@ -44,7 +49,7 @@
 ## The flow
 
 `Recurrence` (Minute, interval N, concurrency 1) -> `Round` (Compose `utcNow()`) -> `List_targets` (Dataverse
-ListRecords, `owatch_enabled eq true and statecode eq 0`) -> `For_each_target` (concurrency 20):
+ListRecords, `owatch_enabled eq true and owatch_url ne null and statecode eq 0`) -> `For_each_target` (concurrency 50):
 `Probe` (HTTP GET `owatch_url`, `retryPolicy: none`, `limit.timeout: PT10S`, `operationOptions: DisableAsyncPattern`,
 no authentication, no body) -> `Record` (Dataverse CreateRecord; **runAfter Probe: Succeeded, Failed, Skipped,
 TimedOut**) -> `Prune_list` (ListRecords older than retention, top 200; runs after the loop whatever its outcome)
@@ -118,7 +123,7 @@ Nothing in this folder has been run against a real tenant. Specifically:
     docs describe a newer npm-based CLI (`pa app add data-source --connector dataverse --table`). If pac drops the
     old form the dashboard step fails (tables and flow stay deployed).
 11. **Row volume in the dashboard**: `top: 5000` on `retrieveMultipleRecordsAsync`; paging limits of the SDK
-    were not confirmed. 8 hours at the defaults is 1,440 rows.
+    were not confirmed. 12 hours at the defaults is 2,592 rows (36 targets, 72 rounds).
 12. **First run timing**: the smoke test assumes a Recurrence flow runs shortly after being turned on; otherwise
     it reports "not confirmed yet" after the wait, without failing the deployment.
 13. **Deep links** to the flow details page and the "new connection" page (the latter reused from the existing script).
@@ -126,13 +131,30 @@ Nothing in this folder has been run against a real tenant. Specifically:
 15. **Licence enforcement**: whether activation fails immediately without Power Automate Premium, or the flow turns
     on and its runs fail later, was not observed. The smoke test covers the second case.
 
+16. **Empty URL = null.** Unconfigured targets are created with `owatch_url: ""`; Dataverse is assumed to store
+    that as null and the connector to honour `owatch_url ne null`. Even if the filter behaved differently the row
+    is also disabled, so it is still not probed.
+17. **50 parallel HTTP actions.** 50 is the documented concurrency maximum; whether Power Automate or the probed
+    hosts throttle 36 simultaneous anonymous requests from one flow run was not observed. A throttled probe would be
+    recorded as HTTP 429 = failed, i.e. visible, not silent. Lower `PROBE_CONCURRENCY` in `provision/lib/flow.mjs` if so.
+18. **Renaming a row's primary name by PATCH** (`owatch_name`) is an ordinary column update; not run for real.
+19. **The 21 added service URLs** come from `outage-watch/outagewatch.py` (its README lists the sources). They were
+    copied, and checked equal by a test, but not probed from a flow: which status each returns to an anonymous
+    request from Azure (and whether any consistently answers 5xx/429 to datacentre addresses) is unknown until the
+    first real run. The smoke test prints the recorded statuses.
+20. **Golden cases** were generated from `outage-watch/` at commit `4776649`; if the Python changes again,
+    `gen_golden.py` must be re-run (the catalogue test then fails loudly, by design).
+21. **Request counting**: the estimate assumes a "for each" action and each iteration's actions count once each and
+    that the trigger counts; Microsoft's wording is "each trigger and action that runs". Real consumption is visible
+    in the Power Platform admin center and may differ by a few percent.
+
 ## Test map
 
 | File | Proves |
 |---|---|
 | `tests/golden.test.ts` + `tests/golden/golden.json` | TS port == real Python (`gen_golden.py` runs `outagewatch.py`) |
-| `tests/classify.test.ts`, `tests/graph.test.ts` | flow-specific raw cases, frame replay, STALE rule, blast radius, roles, layout at 360 px |
-| `tests/provision.test.ts` | request sequence, idempotency, resume, upgrade, failures, uninstall/purge, CLI exit codes (mock Dataverse over HTTP) |
+| `tests/classify.test.ts`, `tests/graph.test.ts`, `tests/live.test.ts` | flow-specific raw cases, frame replay, STALE rule, blast radius, roles, families, 36-node layout (wide and 360 px), unconfigured/disabled target rows |
+| `tests/provision.test.ts` | request sequence, idempotency, resume, upgrade from the 15-target version, tenant name added later, failures, uninstall/purge, CLI exit codes (mock Dataverse over HTTP) |
 | `tests/flow.test.ts` | clientdata envelope, run-after, no retries, dumb flow, heartbeat, usage estimate, metadata payloads |
 | `tests/validate.test.ts` | GUID (incl. the `.ps1` literal), org-URL allow-list, tenant, heartbeat URL, hostile input |
 | `tests/ps1-static.test.ts` | `.ps1` balanced, PS 5.1-compatible syntax, ASCII, no secrets printed, `.cmd` wrappers |

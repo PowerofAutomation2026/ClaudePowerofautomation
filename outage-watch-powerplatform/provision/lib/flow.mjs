@@ -10,6 +10,9 @@
 // follow what the Power Automate designer itself writes. See DESIGN.md "Unconfirmed".
 import { CONNREF } from './schema.mjs'
 
+/** Documented maximum for "for each" concurrency in Azure Logic Apps / Power Automate. */
+export const PROBE_CONCURRENCY = 50
+
 const ALWAYS = ['Succeeded', 'Failed', 'Skipped', 'TimedOut']
 const AUTH = "@parameters('$authentication')"
 
@@ -48,13 +51,15 @@ export function buildClientData(o) {
   const actions = {
     Round: { runAfter: {}, metadata: {}, type: 'Compose', inputs: "@utcNow('yyyy-MM-ddTHH:mm:ssZ')" },
     List_targets: dv('ListRecords', {
-      entityName: o.sets.target, $select: 'owatch_name,owatch_url', $filter: 'owatch_enabled eq true and statecode eq 0', $top: 100,
+      entityName: o.sets.target, $select: 'owatch_name,owatch_url', $filter: 'owatch_enabled eq true and owatch_url ne null and statecode eq 0', $top: 100,
     }, { Round: ['Succeeded'] }),
     For_each_target: {
       runAfter: { List_targets: ['Succeeded'] }, metadata: {}, type: 'Foreach',
       foreach: "@outputs('List_targets')?['body/value']",
       actions: { Probe: probe, Record: record },
-      runtimeConfiguration: { concurrency: { repetitions: 20 } },
+      // All probes of a round start together (documented maximum: 50 parallel iterations). A round of 36 targets
+      // therefore takes about ONE probe timeout at worst, not 36 of them. More than 50 enabled targets = a second wave.
+      runtimeConfiguration: { concurrency: { repetitions: PROBE_CONCURRENCY } },
     },
     Prune_list: dv('ListRecords', {
       entityName: o.sets.result, $select: 'owatch_resultid',
@@ -118,8 +123,20 @@ export function canonical(v) {
  * + in steady state one Delete_old per row written a retention period ago (= targets) + optional Heartbeat.
  */
 export function estimateRequests(targets, intervalMinutes, heartbeat) {
+  // `targets` = ENABLED targets (disabled / unconfigured ones are never probed and cost nothing)
   const perRun = 6 + 3 * targets + (heartbeat ? 1 : 0)
   const runsPerDay = Math.floor(1440 / intervalMinutes)
   const perDay = perRun * runsPerDay
-  return { perRun, runsPerDay, perDay, pctOf40k: Math.round((perDay / 40000) * 100), pctOf6k: Math.round((perDay / 6000) * 100), rowsPerDay: targets * runsPerDay }
+  const pctOf40k = Math.round((perDay / 40000) * 100)
+  return { perRun, runsPerDay, perDay, pctOf40k, pctOf6k: Math.round((perDay / 6000) * 100), rowsPerDay: targets * runsPerDay, high: pctOf40k > 60, over: perDay > 40000 }
+}
+
+/**
+ * Worst-case duration of one run: probes run in waves of PROBE_CONCURRENCY, each wave at most one probe timeout,
+ * plus a generous allowance for the Dataverse actions. Must stay well inside the interval (the trigger also has
+ * concurrency 1, so a slow run can never overlap the next one; it would delay it).
+ */
+export function worstCaseRunSeconds(targets, timeoutSeconds) {
+  const waves = Math.max(1, Math.ceil(targets / PROBE_CONCURRENCY))
+  return waves * timeoutSeconds + 60
 }

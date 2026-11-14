@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error plain .mjs helper
-import { buildClientData, canonical, estimateRequests, existingHeartbeatUrl } from '../provision/lib/flow.mjs'
+import { PROBE_CONCURRENCY, buildClientData, canonical, estimateRequests, existingHeartbeatUrl, worstCaseRunSeconds } from '../provision/lib/flow.mjs'
 // @ts-expect-error plain .mjs helper
 import { TABLES, seedTargets, catalog } from '../provision/lib/schema.mjs'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-const O = { intervalMinutes: 5, retentionDays: 7, timeoutSeconds: 10, heartbeatUrl: null, sets: { target: 'owatch_targets', result: 'owatch_results' } }
+const O = { intervalMinutes: 10, retentionDays: 7, timeoutSeconds: 10, heartbeatUrl: null, sets: { target: 'owatch_targets', result: 'owatch_results' } }
 const cd = buildClientData(O)
 const A = cd.properties.definition.actions
 
@@ -21,7 +21,7 @@ describe('flow definition (clientdata) structure', () => {
   })
   it('is scheduled, never overlaps itself', () => {
     const t = cd.properties.definition.triggers.Recurrence
-    expect(t.type).toBe('Recurrence'); expect(t.recurrence).toEqual({ frequency: 'Minute', interval: 5 })
+    expect(t.type).toBe('Recurrence'); expect(t.recurrence).toEqual({ frequency: 'Minute', interval: 10 })
     expect(t.runtimeConfiguration.concurrency.runs).toBe(1)
   })
   it('probe: GET, no retries, explicit timeout, async polling off, URL only from the targets row', () => {
@@ -37,7 +37,8 @@ describe('flow definition (clientdata) structure', () => {
   it('one failing probe never stops the others: Record runs after EVERY outcome of Probe', () => {
     const r = A.For_each_target.actions.Record
     expect([...r.runAfter.Probe].sort()).toEqual(['Failed', 'Skipped', 'Succeeded', 'TimedOut'])
-    expect(A.For_each_target.runtimeConfiguration.concurrency.repetitions).toBeGreaterThan(1)
+    expect(A.For_each_target.runtimeConfiguration.concurrency.repetitions).toBe(50)      // all 36 probes in one parallel wave
+    expect(A.For_each_target.operationOptions).toBeUndefined()                            // never 'Sequential'
     expect([...A.Prune_list.runAfter.For_each_target].sort()).toEqual(['Failed', 'Skipped', 'Succeeded', 'TimedOut'])
   })
   it('the flow is dumb: it writes raw facts only, to columns that exist, and no state/judgement column exists', () => {
@@ -77,12 +78,24 @@ describe('flow definition (clientdata) structure', () => {
   it('canonical() ignores key order', () => { expect(canonical({ a: 1, b: [{ d: 1, c: 2 }] })).toBe(canonical({ b: [{ c: 2, d: 1 }], a: 1 })) })
 })
 
-describe('usage estimate', () => {
-  it('15 targets at 5 minutes', () => {
-    const e = estimateRequests(15, 5, false)
-    expect(e).toMatchObject({ perRun: 51, runsPerDay: 288, perDay: 14688, pctOf40k: 37, rowsPerDay: 4320 })
-    expect(estimateRequests(15, 5, true).perDay).toBe(14976)
-    expect(estimateRequests(15, 1, false).perDay).toBeGreaterThan(40000)
+describe('usage estimate and run duration (36 services)', () => {
+  it('default: 34 enabled targets every 10 minutes stays under 60% of a Premium licence', () => {
+    expect(catalog.defaults.intervalMinutes).toBe(10)
+    expect(estimateRequests(34, 10, false)).toMatchObject({ perRun: 108, runsPerDay: 144, perDay: 15552, pctOf40k: 39, rowsPerDay: 4896, high: false, over: false })
+    expect(estimateRequests(36, 10, true)).toMatchObject({ perRun: 115, perDay: 16560, pctOf40k: 41, high: false })
+  })
+  it('the old 5-minute default would use 78% (flagged high); 3 minutes exceeds the licence (flagged over)', () => {
+    expect(estimateRequests(34, 5, false)).toMatchObject({ perDay: 31104, pctOf40k: 78, high: true, over: false })
+    expect(estimateRequests(36, 5, false)).toMatchObject({ perDay: 32832, pctOf40k: 82, high: true })
+    expect(estimateRequests(34, 3, false)).toMatchObject({ over: true })
+    expect(estimateRequests(15, 5, false).perDay).toBe(14688)          // the previous 15-target figure, for reference
+  })
+  it('one run fits well inside the interval because probes run in parallel, not one after another', () => {
+    expect(PROBE_CONCURRENCY).toBe(50)
+    expect(worstCaseRunSeconds(36, 10)).toBe(70)                        // one wave: one timeout + allowance
+    expect(worstCaseRunSeconds(36, 10)).toBeLessThan((10 * 60) / 4)
+    expect(36 * 10).toBeGreaterThan(5 * 60)                             // sequentially, 36 timeouts would NOT fit in 5 minutes
+    expect(worstCaseRunSeconds(51, 10)).toBe(80)                        // more than 50 targets: a second wave
   })
 })
 
@@ -101,6 +114,7 @@ describe('table metadata payloads', () => {
     for (const c of t.columns) if (c.MaxLength) max[c.SchemaName] = c.MaxLength
     const cols = new Set(['owatch_name', ...t.columns.map((c: any) => c.SchemaName)])
     for (const r of seedTargets('contoso')) for (const [k, v] of Object.entries(r)) { expect(cols.has(k)).toBe(true); if (typeof v === 'string') expect(v.length).toBeLessThanOrEqual(max[k]) }
-    expect(seedTargets(null)).toHaveLength(catalog.targets.length)
+    expect(seedTargets(null)).toHaveLength(36); expect(seedTargets('contoso')).toHaveLength(36)
+    expect(seedTargets(null).filter((r: any) => r.owatch_enabled)).toHaveLength(catalog.targets.length)
   })
 })

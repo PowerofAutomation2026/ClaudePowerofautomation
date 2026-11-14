@@ -9,7 +9,7 @@
     2. sign-in, environment access, code-apps check        7. dashboard (code app): build + pac code push
     3. unit tests (skip with -SkipTests)                   8. smoke test (waits for the first result rows)
     4. Dataverse tables (solution "OutageWatch")           9. summary
-    5. default targets (15 Microsoft 365 / Copilot endpoints)
+    5. default targets (36 Microsoft 365 / Copilot services; 34 probed without -TenantName)
 
   What can NOT be automated (the script opens the right page and waits; see README "Honest limits"):
     - interactive sign-in (Power Platform CLI, and once more for the Dataverse token if no Az session exists)
@@ -29,9 +29,12 @@
 .PARAMETER Uninstall         Remove the probe flow (data is kept). Add -Purge to delete tables, data, connection reference, solution, publisher.
 .PARAMETER Purge             With -Uninstall: also delete the tables and ALL collected results.
 .PARAMETER SkipTests         Do not run the unit tests before deploying.
-.PARAMETER IntervalMinutes   Probe interval, 1-60 (default 5).
+.PARAMETER IntervalMinutes   Probe interval, 1-60 (default 10). With 36 services, 5 minutes uses about 78% of a Premium licence's
+                             40,000 requests/day; 10 minutes about 39%. Shorter = faster detection, more quota.
 .PARAMETER RetentionDays     Result rows older than this are pruned by the flow, 1-90 (default 7).
-.PARAMETER TenantName        Optional: tenant short name (contoso) to also probe contoso.sharepoint.com / contoso-my.sharepoint.com.
+.PARAMETER TenantName        Optional: tenant short name (contoso) to also probe sharepoint-online (contoso.sharepoint.com) and
+                             onedrive-business (contoso-my.sharepoint.com). Without it those two are seeded disabled and the
+                             dashboard shows them as 'unconfigured' (neutral, never a failure). Can be added on a later run.
 .PARAMETER SetHeartbeat      Prompt (hidden input) for a dead-man's-switch URL the flow pings after every complete round.
                              Alternative for unattended runs: set the environment variable OUTAGEWATCH_HEARTBEAT_URL.
 .PARAMETER ClearHeartbeat    Remove a previously configured heartbeat.
@@ -56,7 +59,7 @@ param(
   [switch]$Uninstall,
   [switch]$Purge,
   [switch]$SkipTests,
-  [int]$IntervalMinutes = 5,
+  [int]$IntervalMinutes = 10,
   [int]$RetentionDays = 7,
   [string]$TenantName,
   [switch]$SetHeartbeat,
@@ -509,6 +512,7 @@ try {
   $code = Invoke-Helper (@('validate', '--environment-id', $EnvironmentId, '--org-url', $orgUrl) + $common)
   if ($code -ne 0) { throw 'Input validation failed (see the message above). Nothing has been changed.' }
   [void](Invoke-Helper (@('estimate') + $common))
+  if (-not $TenantName) { Info 'No -TenantName: sharepoint-online and onedrive-business stay "unconfigured" (not probed, not a failure). Add -TenantName contoso any time.' }
   Warn 'The flow uses the premium HTTP connector: its owner (you) needs a Power Automate Premium licence (or a Process licence on the flow).'
 
   if (-not (Confirm-Step "Deploy Outage Watch to $orgUrl ?")) { throw 'Cancelled. Nothing has been changed.' }

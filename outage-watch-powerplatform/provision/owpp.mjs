@@ -8,7 +8,7 @@ import { createClient, DataverseError } from './lib/client.mjs'
 import { createMockDataverse } from './lib/mock-dataverse.mjs'
 import { apply, smoke, uninstall, NeedsConnection, FlowNotOn } from './lib/provision.mjs'
 import { catalog } from './lib/schema.mjs'
-import { estimateRequests } from './lib/flow.mjs'
+import { PROBE_CONCURRENCY, estimateRequests, worstCaseRunSeconds } from './lib/flow.mjs'
 import { InputError, assertConnectionId, assertGuid, assertHeartbeatUrl, assertInt, assertOrgUrl, assertTenantName } from './lib/validate.mjs'
 
 export const EXIT = { ok: 0, failed: 1, badInput: 2, needsConnection: 3, flowNotOn: 4, smokeTimeout: 5 }
@@ -50,8 +50,12 @@ function client(a) {
 const say = (t) => console.log(t)
 function out(a, obj) { if (a.out) writeFileSync(a.out, JSON.stringify(obj, null, 2), { encoding: 'utf8' }) }
 
-function printEstimate(e, targets, interval) {
-  say(`  Flow usage estimate: ${targets} targets every ${interval} min = ${e.runsPerDay} runs/day x ~${e.perRun} actions = ~${e.perDay.toLocaleString('en-US')} Power Platform requests/day`)
+function printEstimate(e, targets, interval, timeout = catalog.defaults.probeTimeoutSeconds) {
+  if (e.over) say(`  *** WARNING: this needs MORE than the 40,000 requests/day of a Premium licence (${e.pctOf40k}%). The flow WILL be throttled. Use a longer -IntervalMinutes or a Process licence (250,000/day). ***`)
+  else if (e.high) say(`  *** WARNING: this uses ${e.pctOf40k}% of the 40,000 requests/day of a Premium licence - little headroom for the owner's other flows. Consider a longer -IntervalMinutes (default 10) or a Process licence on the flow. ***`)
+  const worst = worstCaseRunSeconds(targets, timeout)
+  say(`  One run: ${targets} probes in parallel (up to ${PROBE_CONCURRENCY} at once, ${timeout} s timeout each) = at most ~${worst} s, inside the ${interval * 60} s interval${worst > interval * 30 ? ' (TIGHT: raise the interval)' : ''}.`)
+  say(`  Flow usage estimate: ${targets} enabled targets every ${interval} min = ${e.runsPerDay} runs/day x ~${e.perRun} actions = ~${e.perDay.toLocaleString('en-US')} Power Platform requests/day`)
   say(`  (about ${e.pctOf40k}% of the 40,000/day of a Power Automate Premium / Power Apps Premium user; ${e.pctOf6k}% of the 6,000/day of a Microsoft 365 seeded licence), and ${e.rowsPerDay.toLocaleString('en-US')} result rows/day.`)
 }
 
@@ -67,7 +71,9 @@ export async function main(argv) {
       }
       case 'estimate': {
         const o = options(a); const n = catalog.targets.length + (o.tenant ? catalog.tenantTargets.length : 0)
-        printEstimate(estimateRequests(n, o.intervalMinutes, !!o.heartbeatUrl), n, o.intervalMinutes); return EXIT.ok
+        const e = estimateRequests(n, o.intervalMinutes, !!o.heartbeatUrl)
+        printEstimate(e, n, o.intervalMinutes, o.timeoutSeconds)
+        out(a, e); return EXIT.ok
       }
       case 'plan': {
         // Offline: replays the provisioning against an in-memory model of an EMPTY environment and prints every request.
@@ -77,9 +83,10 @@ export async function main(argv) {
         const r = await apply(c, o)
         say('DRY RUN - nothing is sent anywhere. Requests a first deployment would make to <org>/api/data/v9.2/ :')
         mock.log.forEach((l, i) => say(`  ${String(i + 1).padStart(3)}. ${l.method.padEnd(6)} ${l.path}${l.query ? ' ' + l.query.slice(0, 90) : ''}${l.solution ? '   [solution ' + l.solution + ']' : ''}`))
-        say(`  = ${mock.log.length} requests; creates: ${r.created.length} objects (${r.targets} targets). A re-run only reads and patches what changed.`)
+        say(`  = ${mock.log.length} requests; creates: ${r.created.length} objects (${r.targets} targets, ${r.enabledTargets} enabled). A re-run only reads and patches what changed.`)
         say(`  Heartbeat (dead man's switch): ${r.heartbeat ? 'configured (URL not shown)' : 'not configured'}`)
-        printEstimate(r.estimate, r.targets, o.intervalMinutes)
+        if (r.unconfigured.length) say(`  Not set up (seeded disabled, never probed, shown as "unconfigured"): ${r.unconfigured.join(', ')} - pass -TenantName contoso to enable them.`)
+        printEstimate(r.estimate, r.enabledTargets, o.intervalMinutes, o.timeoutSeconds)
         return EXIT.ok
       }
       case 'apply': {
@@ -88,7 +95,9 @@ export async function main(argv) {
           const r = await apply(c, o, say)
           out(a, { ok: true, ...r })
           say(`  ${r.created.length} created, ${r.updated.length} updated, flow is ON, heartbeat ${r.heartbeat ? 'configured' : 'not configured'}`)
-          printEstimate(r.estimate, r.targets, o.intervalMinutes)
+          for (const w of r.warnings) say('  note: ' + w)
+          if (r.unconfigured.length) say(`  Not set up (disabled, shown as "unconfigured"): ${r.unconfigured.join(', ')} - re-run with -TenantName contoso to enable them.`)
+          printEstimate(r.estimate, r.enabledTargets, o.intervalMinutes, o.timeoutSeconds)
           return EXIT.ok
         } catch (e) {
           if (e instanceof NeedsConnection) { out(a, { ok: false, reason: 'needs-connection' }); say('  NEEDS CONNECTION: ' + e.message); return EXIT.needsConnection }

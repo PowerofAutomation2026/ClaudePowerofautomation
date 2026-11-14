@@ -116,6 +116,7 @@ export function createMockDataverse({ token = 'test-token', failActivation = nul
     log.push({ method, path, query: decodeURIComponent(u.search), solution })
     let body = null
     if (bodyText) { try { body = JSON.parse(bodyText) } catch { return err(400, 'invalid JSON body') } }
+    if (body && typeof body === 'object') for (const k of Object.keys(body)) if (body[k] === '') body[k] = null     // Dataverse stores an empty string as null
     const qp = (k) => u.searchParams.get(k)
 
     if (path === 'WhoAmI' && method === 'GET') return reply(200, { UserId: '11111111-1111-1111-1111-111111111111', BusinessUnitId: randomUUID(), OrganizationId: randomUUID() })

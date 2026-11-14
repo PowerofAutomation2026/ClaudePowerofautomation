@@ -24,11 +24,11 @@ was written. Expect to fix small things on the first real run; `DESIGN.md` lists
 
 | Piece | What it is |
 |---|---|
-| Dataverse solution `OutageWatch` (publisher prefix `owatch_`) | tables `owatch_target` (name, URL, alive codes, depends-on-sign-in, Copilot-needs-it, enabled), `owatch_result` (target, HTTP status, elapsed ms, error kind, time, round) and `owatch_setting` (name/value, no secrets) |
-| 15 seeded targets | the same endpoints and alive-code rules as `DEFAULT_TARGETS` in `outagewatch.py` (+ SharePoint/OneDrive with `-TenantName contoso`) |
-| Cloud flow `Outage Watch - probe` | every 5 min: unauthenticated `GET` on every enabled target (no retries, 10 s timeout, async polling off), **one raw row per probe**, prune rows older than the retention, optional heartbeat ping. The flow never decides whether something is "up" |
+| Dataverse solution `OutageWatch` (publisher prefix `owatch_`) | tables `owatch_target` (name, URL, alive codes, depends-on-sign-in, Copilot-needs-it, enabled, family), `owatch_result` (target, HTTP status, elapsed ms, error kind, time, round) and `owatch_setting` (name/value, no secrets) |
+| 36 seeded targets in 9 families | the same services, URLs, alive-code rules, dependencies and families as `outagewatch.py` (checked by a test against the real Python). 34 are probed out of the box. `sharepoint-online` and `onedrive-business` are tenant-specific: with `-TenantName contoso` they are probed; without it they are seeded **disabled, with no URL**, never probed, and shown as the neutral **unconfigured** state - never a failure |
+| Cloud flow `Outage Watch - probe` | every 10 min: unauthenticated `GET` on every enabled target, **all in parallel** (no retries, 10 s timeout, async polling off), **one raw row per probe**, prune rows older than the retention, optional heartbeat ping. The flow never decides whether something is "up" |
 | Connection reference `owatch_dataverse` | binds the flow to your Microsoft Dataverse connection |
-| Code app `Outage Watch` (React + TypeScript) | reads the tables, computes states **in the browser** with a tested port of the Python logic, shows the blast-radius map, "Can I do my job?", STALE banner, and a clearly labelled SIMULATION mode |
+| Code app `Outage Watch` (React + TypeScript) | reads the tables, computes states **in the browser** with a tested port of the Python logic, shows the blast-radius map (family clusters on a sign-in bus and a Copilot bus, filter box, "show only problems", collapsible families), "Can I do my job?" (11 tasks), STALE banner, and a clearly labelled SIMULATION mode |
 
 ## Requirements
 
@@ -60,7 +60,7 @@ If anything stops the run, re-run the same command: every step reads first and c
 ## Options
 
 ```
-Deploy-OutageWatchPP.cmd <environment-id> [-Yes] [-DryRun] [-SkipTests] [-IntervalMinutes 5] [-RetentionDays 7]
+Deploy-OutageWatchPP.cmd <environment-id> [-Yes] [-DryRun] [-SkipTests] [-IntervalMinutes 10] [-RetentionDays 7]
                          [-TenantName contoso] [-SetHeartbeat | -ClearHeartbeat] [-SkipDashboard]
                          [-EnvironmentUrl https://org.crm4.dynamics.com] [-SmokeWaitSeconds 240]
 Uninstall-OutageWatchPP.cmd <environment-id> [-Purge] [-Yes]
@@ -78,20 +78,41 @@ Uninstall-OutageWatchPP.cmd <environment-id> [-Purge] [-Yes]
   make.powerapps.com (no documented CLI command), and your Dataverse connection is never touched.
 - Advanced / CI: `OUTAGEWATCH_DATAVERSE_TOKEN` supplies a ready-made bearer token for the organisation.
 
-## Cost: flow runs count against your request quota
+## Cost: flow runs count against your request quota (read before lowering the interval)
 
-Microsoft counts every trigger and action that runs as one Power Platform request. With the defaults:
+Microsoft counts every trigger and action that runs as one Power Platform request. A Power Automate Premium (or
+Power Apps Premium) user has **40,000 per 24 hours**. Per run the flow needs 1 trigger + 5 fixed actions + 2 per
+enabled target (probe, record) + about 1 delete per target once pruning is in steady state:
 
-- per run: 1 trigger + 5 fixed actions + 2 per target (probe, record) + about 1 delete per target once pruning is
-  in steady state = **about 51 requests** for 15 targets;
-- 288 runs/day at 5 minutes = **about 14,700 requests/day** (14,976 with the heartbeat), **about 37% of the
-  40,000/day** of a Power Automate Premium user. A Microsoft 365 "seeded" licence (6,000/day) is not enough, and
-  cannot run the premium HTTP action anyway;
-- 4,320 result rows/day, about 30,000 rows at the default 7-day retention (Dataverse database capacity).
+| Enabled targets | Interval | Requests/run | Runs/day | Requests/day | Share of 40,000 |
+|---|---|---|---|---|---|
+| 34 (default, no tenant name) | **10 min (default)** | 108 | 144 | **15,552** | **39%** |
+| 36 (with `-TenantName`) | 10 min | 114 | 144 | 16,416 | 41% |
+| 34 | 5 min | 108 | 288 | 31,104 | **78% - too little headroom** |
+| 36 | 5 min | 114 | 288 | 32,832 | 82% |
+| 34 | 3 min | 108 | 480 | 51,840 | 130% - throttled |
+| 15 (the earlier version) | 5 min | 51 | 288 | 14,688 | 37% |
 
-`-IntervalMinutes 1` would need about 73,000 requests/day: beyond one Premium licence. The deploy prints the
-estimate for your settings before it asks for confirmation. Microsoft's limits are per user across all their
-flows once the current transition period ends, so a busy flow owner has less headroom than these numbers suggest.
+**The default interval was raised from 5 to 10 minutes when the catalogue grew from 15 to 36 services**, because
+5 minutes would consume about 78% of one Premium licence - more than the 60% that leaves reasonable room for the
+owner's other flows. The honest trade-off of 10 minutes:
+
+- a failure is `suspect` after up to 10 minutes and confirmed `down` after up to 20 (two rounds);
+- the STALE banner (3 x interval) needs 30 minutes of silence instead of 15;
+- the independent Python monitor probes every 60 seconds; this edition is the in-tenant overview, not the fast alarm.
+
+If you want 5 minutes, pass `-IntervalMinutes 5`: the deploy prints a loud WARNING with the percentage before it asks
+for confirmation; consider a Process licence on the flow (250,000/day) or disabling targets you do not need
+(`owatch_enabled = No`; disabled rows cost nothing). A heartbeat adds one request per run. Microsoft's limits are
+per user across all their flows once the current transition period ends. A Microsoft 365 "seeded" licence
+(6,000/day) is not enough and cannot run the premium HTTP action anyway. Rows: 4,896 per day, about 34,000 at the
+default 7-day retention.
+
+**Does one round fit in the interval?** Yes, because the probes do not run one after another. The "for each" loop
+uses the documented maximum concurrency of 50, so all 36 probes start together and a round takes roughly one probe
+timeout at worst (10 s) plus the Dataverse writes - budgeted at 70 s, against a 600 s interval. Sequentially, 36
+timeouts would take 6 minutes. The trigger additionally has concurrency 1, so a slow run can only delay the next
+one, never overlap it. More than 50 enabled targets would need a second wave (+10 s worst case).
 
 ## How states are computed
 
@@ -104,29 +125,50 @@ The flow stores facts; `src/logic/classify.ts` judges them, replaying the rounds
   last 20 healthy samples (needs 5); slow samples never poison the baseline;
 - level **freeze** when anything is down or sign-in is even suspect, **caution** for warning/suspect, **ok**
   otherwise; escalation is immediate, recovery needs 3 clean rounds;
+- **unconfigured** (a tenant-specific target without a tenant name) and **blocked** are neutral: they never raise
+  the level, are never "at risk", and never count as an incident;
+- the verdict ignores unconfigured targets (it only counts them at the end), reports a blocked probe **without
+  hiding a real failure**, and caps long name lists ("... and 16 more");
 - auth failing puts every sign-in-dependent service at risk; Copilot problems name the unhealthy service underneath.
 
-Differences from the Python monitor, on purpose: the dashboard only knows the rows it loaded (last 8 hours), so
+Differences from the Python monitor, on purpose: the dashboard only knows the rows it loaded (last 12 hours), so
 state "before the window" is unknown; there is no freeze file, hook or webhook (a browser page cannot run them);
-`blocked` almost never occurs (see DESIGN.md). Thresholds (`confirm`, `factor`, `floor_ms`, `slow_ms`,
+`blocked` almost never occurs (see DESIGN.md); the "at risk" list in the verdict is capped at 8 names for display. Thresholds (`confirm`, `factor`, `floor_ms`, `slow_ms`,
 `recover_after`) and the role list (`roles_json`) are rows in `owatch_setting`; targets are rows in
 `owatch_target`. Edit them in the maker portal; a re-deploy never overwrites your edits.
 
+## Upgrading from the 15-target version
+
+Run the same command again. The upgrade is additive and tested against a mock of a v1 deployment:
+
+- the `owatch_family` column is added; 19 new targets are created; existing rows and your edits are untouched;
+- old tenant rows are **renamed in place** (`sharepoint` -> `sharepoint-online`, `onedrive` -> `onedrive-business`):
+  same row, same URL, still enabled, no duplicate. If you never used `-TenantName`, the two are added as disabled
+  "needs tenant name" placeholders; a later run with `-TenantName contoso` fills them in;
+- **result history is kept and not rewritten**: old result rows keep the old name and the dashboard reads them under
+  the new one, until they age out with the retention;
+- the role list is replaced by the new 11 rows only if it still equals the old shipped default;
+- the interval follows the new default (5 -> 10 min) unless you pass `-IntervalMinutes`.
+
 ## What was verified, and what was not
 
-Verified here (`npm test`, 115 tests; `npm run build`; headless Chromium):
+Verified here (`npm test`, 153 tests; `npm run build`; headless Chromium):
 
 - the TypeScript logic against **golden cases produced by the real Python code** (`tests/golden/gen_golden.py`
-  runs `outagewatch.py`): `probe()` state rules on 61 status/alive-code cases, the Monitor scenarios copied from
-  `test_outagewatch.py`, and 720 seeded random rounds through Monitor + Automation + impact + Copilot note +
-  diagnose + stress score, step by step;
+  runs the updated 36-service `outage-watch/outagewatch.py`): the catalogue itself (36 services, URLs, alive codes,
+  dependencies, families, roles, tenant-name rules), `probe()` state rules on 61 status/alive-code cases, the Monitor
+  scenarios from the Python tests incl. `unconfigured`, 13 verdict cases (blocked never hides a failure, capped lists,
+  unconfigured ignored) compared as whole strings, 7 role-view cases, and 450 seeded random rounds over 20 services
+  through Monitor + Automation + impact + Copilot note + diagnose + role view + stress score, step by step;
 - the provisioning **request sequence against a mock Dataverse over real local HTTP**: first deploy, a second run
-  with zero writes, resume after a partial run, schema upgrade, heartbeat add/keep/remove, flow that cannot be
+  with zero writes, resume after a partial run, schema upgrade, **upgrade from a 15-target deployment** (rename in
+  place, no duplicates, history untouched), tenant name added later, heartbeat add/keep/remove, flow that cannot be
   turned on, wrong token, 429 retry, uninstall and purge, and the CLI exit codes the PowerShell script relies on;
 - payload structure (flow `clientdata` envelope, table/column metadata) against the documented shapes;
 - input validation with hostile input, including the literal GUID pattern extracted from the `.ps1`;
 - static checks of the `.ps1`: balanced blocks, no PowerShell 7-only syntax, ASCII only, no secret in any output line;
-- the dashboard in demo mode at 1440 px dark/light and 360 px: no console errors, no horizontal overflow.
+- the dashboard in demo mode with 36 services at 1440 px dark/light and 360 px: no console errors, no horizontal
+  overflow, no overlapping nodes (measured on the rendered page), filter / only-problems / collapse exercised.
 
 **Not verified:** anything against a real tenant; `pac` (any command); the real flow import and activation; the
 real Dataverse metadata API; the real code-app publish; execution of the PowerShell script (static checks only).
@@ -158,7 +200,7 @@ The mock Dataverse is a model written from the documentation, not Microsoft's im
 npm ci
 npm test          # logic, golden cross-check, provisioning vs mock Dataverse, static script checks
 npm run build     # tsc + vite
-npm run dev       # dashboard with DEMO data at http://127.0.0.1:3000  (?sim=auth|exchange|slow|copilot, ?demo=stale, ?theme=dark|light)
+npm run dev       # dashboard with DEMO data at http://127.0.0.1:3000  (?sim=auth|exchange|slow|copilot|mixed, ?tenant=1, ?only=1, ?filter=power, ?collapse=all, ?demo=stale, ?theme=dark|light)
 npm run plan      # same as -DryRun: print the provisioning request sequence
-python3 tests/golden/gen_golden.py   # regenerate golden cases from the real outagewatch.py (needs ../outage-watch-package)
+python3 tests/golden/gen_golden.py   # regenerate golden cases from the real outagewatch.py (needs ../outage-watch)
 ```

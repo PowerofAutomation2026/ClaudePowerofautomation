@@ -16,7 +16,7 @@ import { createMockDataverse } from '../provision/lib/mock-dataverse.mjs'
 import { apply, smoke, uninstall, NeedsConnection, FlowNotOn } from '../provision/lib/provision.mjs'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-const OPTS = { intervalMinutes: 5, retentionDays: 7, timeoutSeconds: 10, tenant: null, connectionId: 'aaaaaaaabbbbccccddddeeeeeeeeeeee', heartbeatUrl: null as string | null }
+const OPTS = { intervalMinutes: 10, retentionDays: 7, timeoutSeconds: 10, tenant: null, connectionId: 'aaaaaaaabbbbccccddddeeeeeeeeeeee', heartbeatUrl: null as string | null }
 const closers: (() => Promise<void>)[] = []
 afterEach(async () => { while (closers.length) await closers.pop()!() })
 
@@ -30,14 +30,17 @@ async function env(mockOpts: any = {}) {
 const writes = (mock: any) => mock.log.filter((l: any) => l.method !== 'GET')
 
 describe('apply (first deployment into an empty environment)', () => {
-  it('creates publisher, solution, 3 tables, 15 targets, connection reference, flow, settings, and turns the flow on', async () => {
+  it('creates publisher, solution, 3 tables, 36 targets (34 enabled), connection reference, flow, settings, and turns the flow on', async () => {
     const { mock, client } = await env()
     const r = await apply(client, OPTS)
     expect(mock.problems).toEqual([])
     expect(r.flowOn).toBe(true)
-    expect(r.targets).toBe(15)
+    expect(r.targets).toBe(36); expect(r.enabledTargets).toBe(34)
+    expect(r.unconfigured).toEqual(['onedrive-business', 'sharepoint-online'])
+    expect(r.estimate).toMatchObject({ perRun: 108, runsPerDay: 144, perDay: 15552, pctOf40k: 39, high: false })
+    expect(r.worstCaseRunSeconds).toBeLessThan(10 * 60 / 4)
     expect([...mock.entities.keys()].sort()).toEqual(['owatch_result', 'owatch_setting', 'owatch_target'])
-    expect(mock.db.owatch_targets).toHaveLength(15)
+    expect(mock.db.owatch_targets).toHaveLength(36)
     expect(mock.db.workflows).toHaveLength(1)
     expect(mock.db.workflows[0].statecode).toBe(1)
     expect(mock.db.connectionreferences[0].connectionid).toBe(OPTS.connectionId)
@@ -61,20 +64,42 @@ describe('apply (first deployment into an empty environment)', () => {
     expect(by.auth.owatch_alivecodes).toBe('200')
     expect(by.exchange.owatch_alivecodes).toBe('200,401,403')
     expect(by.graph.owatch_alivecodes).toBe('200,401,403')
-    expect(by.teams.owatch_alivecodes).toBe('')
+    expect(by.teams.owatch_alivecodes).toBeNull()               // '' is stored as null: any answer below 500 except 429
     expect(by.auth.owatch_dependsonauth).toBe(false)
     expect(by.teams.owatch_dependsonauth).toBe(true)
     expect(by['copilot-web'].owatch_dependsonauth).toBe(false)
     expect(by['copilot-substrate'].owatch_copilotneeds).toBe(true)
-    expect(mock.db.owatch_targets.every((t: any) => t.owatch_enabled === true && /^https:\/\//.test(t.owatch_url))).toBe(true)
+    const tenant = mock.db.owatch_targets.filter((t: any) => ['sharepoint-online', 'onedrive-business'].includes(t.owatch_name))
+    const fixed = mock.db.owatch_targets.filter((t: any) => !tenant.includes(t))
+    expect(fixed).toHaveLength(34)
+    expect(fixed.every((t: any) => t.owatch_enabled === true && /^https:\/\//.test(t.owatch_url) && t.owatch_family)).toBe(true)
+    // without a tenant name: seeded DISABLED with no URL = "needs tenant name"; the flow's filter can never pick them up
+    expect(tenant).toHaveLength(2)
+    expect(tenant.every((t: any) => t.owatch_enabled === false && t.owatch_url === null && t.owatch_dependsonauth === true && t.owatch_copilotneeds === true)).toBe(true)
+    expect(by['power-bi'].owatch_family).toBe('Power Platform & dashboards')
+    expect(by['teams-cdn'].owatch_dependsonauth).toBe(false); expect(by['onedrive-sync'].owatch_dependsonauth).toBe(false)
+    const filter = JSON.parse(mock.db.workflows[0].clientdata).properties.definition.actions.List_targets.inputs.parameters.$filter
+    expect(filter).toContain('owatch_enabled eq true'); expect(filter).toContain('owatch_url ne null')
   })
 
-  it('adds the two tenant targets only when a tenant name is given', async () => {
+  it('enables the two tenant targets when a tenant name is given - on a first deploy or later', async () => {
     const { mock, client } = await env()
     const r = await apply(client, { ...OPTS, tenant: 'contoso' })
-    expect(r.targets).toBe(17)
-    const sp = mock.db.owatch_targets.find((t: any) => t.owatch_name === 'onedrive')
-    expect(sp.owatch_url).toBe('https://contoso-my.sharepoint.com/')
+    expect(r.targets).toBe(36); expect(r.enabledTargets).toBe(36); expect(r.unconfigured).toEqual([])
+    const od = mock.db.owatch_targets.find((t: any) => t.owatch_name === 'onedrive-business')
+    expect(od.owatch_url).toBe('https://contoso-my.sharepoint.com/'); expect(od.owatch_enabled).toBe(true)
+
+    const b = await env()
+    await apply(b.client, OPTS)                                   // first without a tenant name
+    const r2 = await apply(b.client, { ...OPTS, tenant: 'fabrikam' })
+    expect(r2.updated).toEqual(expect.arrayContaining(['target sharepoint-online configured for the tenant', 'target onedrive-business configured for the tenant']))
+    expect(b.mock.db.owatch_targets).toHaveLength(36)
+    const sp = b.mock.db.owatch_targets.find((t: any) => t.owatch_name === 'sharepoint-online')
+    expect(sp.owatch_url).toBe('https://fabrikam.sharepoint.com/'); expect(sp.owatch_enabled).toBe(true)
+    // a later run with another (or no) tenant name never overwrites a URL that is already there
+    await apply(b.client, { ...OPTS, tenant: 'other' }); await apply(b.client, OPTS)
+    expect(b.mock.db.owatch_targets.find((t: any) => t.owatch_name === 'sharepoint-online').owatch_url).toBe('https://fabrikam.sharepoint.com/')
+    expect(b.mock.problems).toEqual([])
   })
 })
 
@@ -86,7 +111,7 @@ describe('idempotency (re-run = upgrade, never a duplicate)', () => {
     const r = await apply(client, OPTS)
     expect(writes(mock)).toEqual([])
     expect(r.created).toEqual([]); expect(r.updated).toEqual([])
-    expect(mock.db.workflows).toHaveLength(1); expect(mock.db.owatch_targets).toHaveLength(15)
+    expect(mock.db.workflows).toHaveLength(1); expect(mock.db.owatch_targets).toHaveLength(36)
     expect(mock.problems).toEqual([])
   })
 
@@ -96,16 +121,16 @@ describe('idempotency (re-run = upgrade, never a duplicate)', () => {
     mock.db.owatch_targets.find((t: any) => t.owatch_name === 'teams').owatch_enabled = false
     mock.db.owatch_settings.find((s: any) => s.owatch_name === 'confirm').owatch_value = '3'
     mock.log.length = 0
-    await apply(client, { ...OPTS, intervalMinutes: 10 })
+    await apply(client, { ...OPTS, intervalMinutes: 15 })
     expect(mock.db.owatch_targets.find((t: any) => t.owatch_name === 'teams').owatch_enabled).toBe(false)
     expect(mock.db.owatch_settings.find((s: any) => s.owatch_name === 'confirm').owatch_value).toBe('3')
-    expect(mock.db.owatch_settings.find((s: any) => s.owatch_name === 'interval_minutes').owatch_value).toBe('10')
+    expect(mock.db.owatch_settings.find((s: any) => s.owatch_name === 'interval_minutes').owatch_value).toBe('15')
     // definition changed: OFF -> patch definition -> ON, in that order, and still one flow
     const w = writes(mock).filter((l: any) => l.path.startsWith('workflows')).length
     expect(w).toBe(3)
     expect(mock.db.workflows).toHaveLength(1)
     expect(mock.db.workflows[0].statecode).toBe(1)
-    expect(JSON.parse(mock.db.workflows[0].clientdata).properties.definition.triggers.Recurrence.recurrence.interval).toBe(10)
+    expect(JSON.parse(mock.db.workflows[0].clientdata).properties.definition.triggers.Recurrence.recurrence.interval).toBe(15)
     expect(mock.problems).toEqual([])
   })
 
@@ -113,10 +138,10 @@ describe('idempotency (re-run = upgrade, never a duplicate)', () => {
     const { mock, client } = await env()
     await expect(apply(client, { ...OPTS, connectionId: null })).rejects.toBeInstanceOf(NeedsConnection)
     expect(mock.db.workflows).toHaveLength(0)
-    expect(mock.db.owatch_targets).toHaveLength(15)
+    expect(mock.db.owatch_targets).toHaveLength(36)
     const r = await apply(client, OPTS)
     expect(r.flowOn).toBe(true)
-    expect(mock.db.owatch_targets).toHaveLength(15)
+    expect(mock.db.owatch_targets).toHaveLength(36)
     expect(mock.db.publishers).toHaveLength(1); expect(mock.db.solutions).toHaveLength(1)
     expect(r.created.some((c: string) => c.startsWith('table'))).toBe(false)
     expect(mock.problems).toEqual([])
@@ -137,6 +162,89 @@ describe('idempotency (re-run = upgrade, never a duplicate)', () => {
     const cd = JSON.parse(mock.db.workflows[0].clientdata)
     expect(cd.properties.definition.actions.For_each_target.actions.Record.inputs.parameters.entityName).toBe('owatch_resultes')
     expect(mock.problems).toEqual([])
+  })
+})
+
+describe('upgrade from the 15-target version (v1)', () => {
+  const V1 = ['auth', 'exchange', 'outlook-web', 'teams', 'm365-portal', 'admin-center', 'graph', 'power-platform', 'intune', 'm365-copilot', 'copilot-substrate', 'copilot-studio', 'copilot-web', 'github-copilot', 'office-cdn']
+  const V1_ROLES = { 'Email & calendar': ['auth', 'exchange', 'outlook-web'], Meetings: ['auth', 'teams'], 'Files & sharing': ['auth', 'sharepoint', 'onedrive'], 'Copilot assistance': ['auth', 'm365-copilot', 'copilot-substrate'], 'Admin tasks': ['auth', 'admin-center', 'graph'], 'Device management': ['auth', 'intune'], 'Low-code apps': ['auth', 'power-platform'] }
+  /** Brings a fresh mock into the shape a v1 deployment left behind (no family column, 15 or 17 targets, old names, old roles). */
+  async function v1(withTenant: boolean) {
+    const e = await env()
+    await apply(e.client, { ...OPTS, intervalMinutes: 5, tenant: withTenant ? 'contoso' : null })
+    const db = e.mock.db
+    e.mock.entities.get('owatch_target').attributes.delete('owatch_family')
+    db.owatch_targets = db.owatch_targets.filter((t: any) => V1.includes(t.owatch_name) || (withTenant && ['sharepoint-online', 'onedrive-business'].includes(t.owatch_name)))
+    for (const t of db.owatch_targets) { delete t.owatch_family; if (t.owatch_name === 'sharepoint-online') t.owatch_name = 'sharepoint'; if (t.owatch_name === 'onedrive-business') t.owatch_name = 'onedrive' }
+    db.owatch_settings.find((s: any) => s.owatch_name === 'roles_json').owatch_value = JSON.stringify(V1_ROLES)
+    db.owatch_settings.find((s: any) => s.owatch_name === 'schema_version').owatch_value = '1'
+    db.owatch_results.push({ owatch_resultid: '99999999-9999-9999-9999-999999999999', owatch_name: 'sharepoint', owatch_httpstatus: 200, owatch_elapsedms: 90, owatch_probedat: '2026-11-01T00:00:00.000Z', owatch_round: 'old' })
+    e.mock.log.length = 0
+    return e
+  }
+
+  it('v1 with tenant targets: renames the two rows in place (same id, URL, enabled), adds 19 new ones, no duplicates, history untouched', async () => {
+    const { mock, client } = await v1(true)
+    expect(mock.db.owatch_targets).toHaveLength(17)
+    const spId = mock.db.owatch_targets.find((t: any) => t.owatch_name === 'sharepoint').owatch_targetid
+    const r = await apply(client, OPTS)                                    // note: no -TenantName on the upgrade run
+    const names = mock.db.owatch_targets.map((t: any) => t.owatch_name)
+    expect(names).toHaveLength(36); expect(new Set(names).size).toBe(36)
+    expect(names).not.toContain('sharepoint'); expect(names).not.toContain('onedrive')
+    const sp = mock.db.owatch_targets.find((t: any) => t.owatch_name === 'sharepoint-online')
+    expect(sp.owatch_targetid).toBe(spId); expect(sp.owatch_url).toBe('https://contoso.sharepoint.com/'); expect(sp.owatch_enabled).toBe(true)
+    expect(r.updated).toEqual(expect.arrayContaining(['target sharepoint renamed to sharepoint-online', 'target onedrive renamed to onedrive-business']))
+    expect(r.created.filter((c: string) => c.startsWith('target '))).toHaveLength(19)
+    expect(r.created).toContain('column owatch_target.owatch_family')
+    expect(r.enabledTargets).toBe(36); expect(r.unconfigured).toEqual([])
+    expect(mock.db.owatch_results.find((x: any) => x.owatch_round === 'old')).toMatchObject({ owatch_name: 'sharepoint', owatch_httpstatus: 200 })   // history is not rewritten or deleted
+    expect(mock.log.some((l: any) => l.method !== 'GET' && l.path.startsWith('owatch_results'))).toBe(false)
+    expect(mock.problems).toEqual([])
+    mock.log.length = 0
+    await apply(client, OPTS)
+    expect(writes(mock)).toEqual([])                                        // and the upgrade itself is idempotent
+  })
+
+  it('v1 without tenant targets: adds 19 + the two disabled placeholders; admin edits to old rows survive', async () => {
+    const { mock, client } = await v1(false)
+    expect(mock.db.owatch_targets).toHaveLength(15)
+    mock.db.owatch_targets.find((t: any) => t.owatch_name === 'teams').owatch_url = 'https://teams.example.test/custom'
+    const r = await apply(client, OPTS)
+    expect(mock.db.owatch_targets).toHaveLength(36)
+    expect(r.enabledTargets).toBe(34); expect(r.unconfigured).toEqual(['onedrive-business', 'sharepoint-online'])
+    expect(mock.db.owatch_targets.find((t: any) => t.owatch_name === 'teams').owatch_url).toBe('https://teams.example.test/custom')
+    expect(mock.problems).toEqual([])
+  })
+
+  it('roles: the shipped v1 default is replaced by the new 11 rows, an admin-edited role list is left alone', async () => {
+    const a = await v1(false)
+    await apply(a.client, OPTS)
+    const roles = JSON.parse(a.mock.db.owatch_settings.find((s: any) => s.owatch_name === 'roles_json').owatch_value)
+    expect(Object.keys(roles)).toHaveLength(11); expect(roles['Files & sharing']).toContain('onedrive-sync')
+    const b = await v1(false)
+    b.mock.db.owatch_settings.find((s: any) => s.owatch_name === 'roles_json').owatch_value = '{"Mine":["auth"]}'
+    await apply(b.client, OPTS)
+    expect(b.mock.db.owatch_settings.find((s: any) => s.owatch_name === 'roles_json').owatch_value).toBe('{"Mine":["auth"]}')
+  })
+
+  it('the interval follows the new default (5 -> 10 min) and the flow definition is updated in place', async () => {
+    const { mock, client } = await v1(false)
+    await apply(client, OPTS)
+    expect(mock.db.workflows).toHaveLength(1)
+    expect(JSON.parse(mock.db.workflows[0].clientdata).properties.definition.triggers.Recurrence.recurrence.interval).toBe(10)
+    expect(mock.db.owatch_settings.find((s: any) => s.owatch_name === 'interval_minutes').owatch_value).toBe('10')
+    expect(mock.db.owatch_settings.find((s: any) => s.owatch_name === 'schema_version').owatch_value).toBe('2')
+  })
+
+  it('both an old and a new row exist: the old one is disabled, not deleted, and a note is returned', async () => {
+    const { mock, client } = await env()
+    await apply(client, { ...OPTS, tenant: 'contoso' })
+    const set = mock.db.owatch_targets
+    set.push({ ...set.find((t: any) => t.owatch_name === 'sharepoint-online'), owatch_targetid: '77777777-7777-7777-7777-777777777777', owatch_name: 'sharepoint' })
+    const r = await apply(client, OPTS)
+    expect(set.find((t: any) => t.owatch_name === 'sharepoint').owatch_enabled).toBe(false)
+    expect(r.warnings.join(' ')).toContain('sharepoint')
+    expect(r.enabledTargets).toBe(36)
   })
 })
 
@@ -222,7 +330,7 @@ describe('smoke test', () => {
     const { client } = await env()
     await apply(client, OPTS)
     const r = await smoke(client, { waitSeconds: 5, sleep: async () => {} })
-    expect(r.ok).toBe(true); expect(r.targets).toBe(15); expect(r.rows).toBe(15)
+    expect(r.ok).toBe(true); expect(r.targets).toBe(34); expect(r.rows).toBe(34)
   })
   it('times out with ok=false (clear, non-throwing) when no row appears', async () => {
     const { client } = await env({ autoRun: false })
@@ -309,6 +417,12 @@ describe('CLI helper (the process Deploy-OutageWatchPP.ps1 calls)', () => {
     expect(r.code).toBe(0)
     expect(r.out).toContain('DRY RUN')
     expect(r.out).toContain('POST   workflows')
-    expect(r.out).toMatch(/14,688 Power Platform requests\/day/)
+    expect(r.out).toMatch(/34 enabled targets every 10 min/)
+    expect(r.out).toMatch(/15,552 Power Platform requests\/day/)
+    expect(r.out).toContain('onedrive-business, sharepoint-online')
+    expect(r.out).not.toContain('WARNING')
+    const five = await run(['estimate', '--interval', '5'])
+    expect(five.out).toMatch(/WARNING: this uses 78% of the 40,000/)
+    expect((await run(['estimate', '--interval', '3'])).out).toMatch(/WARNING: this needs MORE than the 40,000/)
   }, 30000)
 })

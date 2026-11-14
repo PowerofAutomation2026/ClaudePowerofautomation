@@ -1,8 +1,8 @@
 // Idempotent provisioning of Outage Watch into one Dataverse environment.
 // Every step first READS, then creates only what is missing: running it again is an upgrade, never a duplicate.
 import { q, DataverseError } from './client.mjs'
-import { CONNREF, FLOW_NAME, PUBLISHER, SOLUTION, TABLES, seedSettings, seedTargets } from './schema.mjs'
-import { buildClientData, canonical, estimateRequests, existingHeartbeatUrl } from './flow.mjs'
+import { CONNREF, FLOW_NAME, PUBLISHER, RENAMED, SOLUTION, TABLES, TENANT_TARGET_NAMES, seedSettings, seedTargets } from './schema.mjs'
+import { buildClientData, canonical, estimateRequests, existingHeartbeatUrl, worstCaseRunSeconds } from './flow.mjs'
 
 const SOL = { 'MSCRM.SolutionUniqueName': SOLUTION.uniquename }
 
@@ -67,13 +67,41 @@ export async function apply(client, o, log = () => {}) {
   const sets = { target: res.entitySets.owatch_target, result: res.entitySets.owatch_result, setting: res.entitySets.owatch_setting }
 
   log('[4/8] Seeding targets (existing rows are never overwritten)')
-  const haveT = new Set((await client.get(`${sets.target}?$select=owatch_name`)).json.value.map((r) => r.owatch_name))
+  const existing = (await client.get(`${sets.target}?$select=owatch_name,owatch_url,owatch_enabled,owatch_targetid`)).json.value
+  const haveT = new Map(existing.map((r) => [r.owatch_name, r]))
+  // Upgrade from the 15-target version: sharepoint -> sharepoint-online, onedrive -> onedrive-business.
+  // The ROW is renamed in place (keeps its URL and enabled flag: no duplicate, nothing re-created). Result rows keep
+  // the old name; the dashboard maps old names to new ones when it reads them, so history stays visible and
+  // simply ages out with the retention. No bulk rewrite of result rows.
+  for (const [oldName, newName] of Object.entries(RENAMED)) {
+    const old = haveT.get(oldName)
+    if (!old) continue
+    if (!haveT.has(newName)) {
+      await client.patch(`${sets.target}(${old.owatch_targetid})`, { owatch_name: newName })
+      haveT.delete(oldName); haveT.set(newName, { ...old, owatch_name: newName })
+      did('updated', `target ${oldName} renamed to ${newName}`)
+    } else if (old.owatch_enabled !== false) {
+      await client.patch(`${sets.target}(${old.owatch_targetid})`, { owatch_enabled: false })
+      old.owatch_enabled = false
+      did('updated', `target ${oldName} disabled (superseded by ${newName})`)
+      res.warnings.push(`both ${oldName} and ${newName} exist; ${oldName} was disabled, delete it when convenient`)
+    }
+  }
   for (const row of seedTargets(o.tenant)) {
-    if (haveT.has(row.owatch_name)) continue
-    await client.post(sets.target, row)
-    did('created', `target ${row.owatch_name}`); haveT.add(row.owatch_name)
+    const cur = haveT.get(row.owatch_name)
+    if (!cur) {
+      await client.post(sets.target, row)
+      did('created', `target ${row.owatch_name}${row.owatch_url ? '' : ' (disabled: needs tenant name)'}`); haveT.set(row.owatch_name, row)
+    } else if (TENANT_TARGET_NAMES.includes(row.owatch_name) && !cur.owatch_url && row.owatch_url) {
+      // tenant name supplied now: fill in the row that was waiting for it (a row that already has a URL is the admin's)
+      await client.patch(`${sets.target}(${cur.owatch_targetid})`, { owatch_url: row.owatch_url, owatch_enabled: true })
+      cur.owatch_url = row.owatch_url; cur.owatch_enabled = true
+      did('updated', `target ${row.owatch_name} configured for the tenant`)
+    }
   }
   res.targets = haveT.size
+  res.enabledTargets = [...haveT.values()].filter((r) => r.owatch_enabled !== false && r.owatch_url).length
+  res.unconfigured = [...haveT.values()].filter((r) => !r.owatch_url).map((r) => r.owatch_name).sort()
 
   log('[5/8] Connection reference for the Dataverse connector')
   let ref = (await client.get(`connectionreferences?$select=connectionreferenceid,connectionid&$filter=connectionreferencelogicalname eq ${q(CONNREF.logicalName)}`)).json.value[0]
@@ -117,7 +145,7 @@ export async function apply(client, o, log = () => {}) {
   for (const s of settings) {
     const cur = haveS.get(s.name)
     if (!cur) { await client.post(sets.setting, { owatch_name: s.name, owatch_value: s.value }); did('created', `setting ${s.name}`) }
-    else if (s.force && cur.owatch_value !== s.value) { await client.patch(`${sets.setting}(${cur.owatch_settingid})`, { owatch_value: s.value }); did('updated', `setting ${s.name}`) }
+    else if ((s.force || (s.replaceIf ?? []).includes(cur.owatch_value)) && cur.owatch_value !== s.value) { await client.patch(`${sets.setting}(${cur.owatch_settingid})`, { owatch_value: s.value }); did('updated', `setting ${s.name}`) }
   }
 
   log('[8/8] Turning the flow on')
@@ -130,7 +158,8 @@ export async function apply(client, o, log = () => {}) {
     }
   }
   res.flowOn = true
-  res.estimate = estimateRequests(res.targets, o.intervalMinutes, res.heartbeat)
+  res.estimate = estimateRequests(res.enabledTargets, o.intervalMinutes, res.heartbeat)
+  res.worstCaseRunSeconds = worstCaseRunSeconds(res.enabledTargets, o.timeoutSeconds)
   return res
 }
 

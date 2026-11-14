@@ -344,7 +344,7 @@ export function buildFrames(rows: RawRow[], targets: TargetSpec[], th: Partial<T
     let verdict = diagnose(results)
     const state = mon.step(results)
     const hit = impact(state, dep)
-    if (hit.length) verdict += ' | at risk: ' + hit.join(', ')
+    if (hit.length) verdict += ' | at risk: ' + names(hit)      // capped for display (36 services); impact() itself returns the full list
     const note = copilotNote(state, cop)
     if (note) verdict += ' | ' + note
     const changed = auto.step(state)

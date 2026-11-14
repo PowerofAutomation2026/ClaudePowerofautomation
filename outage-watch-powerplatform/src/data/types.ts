@@ -1,6 +1,6 @@
 import type { RawRow, TargetSpec } from '../logic/classify'
 
-export interface TargetRow extends TargetSpec { url: string; enabled: boolean }
+export interface TargetRow extends TargetSpec { url: string; enabled: boolean; family: string }
 
 export interface Snapshot {
   targets: TargetRow[]
