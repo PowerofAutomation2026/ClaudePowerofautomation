@@ -12,7 +12,7 @@ import json
 import sys
 from datetime import datetime
 
-RANK = {"up": 0, "warning": 1, "suspect": 2, "down": 3, "blocked": 1}
+RANK = {"up": 0, "warning": 1, "suspect": 2, "down": 3, "blocked": 1, "unconfigured": 0}
 
 
 def _t(s):
@@ -44,7 +44,7 @@ def incidents(rows):
         maint, msh = r.get("maintenance") or [], r.get("ms_health") or {}
         for name, st in pub.items():
             cur = open_.get(name)
-            if st != "up":
+            if st not in ("up", "unconfigured"):         # "unconfigured" = tenant name not set: not an incident
                 if cur is None:
                     cur = open_[name] = {"service": name, "start": ts, "worst": st, "first_down": None,
                                          "ongoing": True, "maintenance": False, "ms_seen": False, "ms_confirm": None}

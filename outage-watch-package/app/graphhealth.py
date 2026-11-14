@@ -21,7 +21,11 @@ import urllib.request
 
 DEFAULT_MAP = {            # our probe name -> Graph healthOverview "service" display name (UNVERIFIED guesses)
     "exchange": "Exchange Online", "outlook-web": "Exchange Online", "teams": "Microsoft Teams",
-    "sharepoint": "SharePoint Online", "onedrive": "OneDrive for Business", "auth": "Microsoft Entra",
+    "sharepoint-online": "SharePoint Online", "onedrive-business": "OneDrive for Business", "auth": "Microsoft Entra",
+    "exchange-365": "Exchange Online", "teams-admin": "Microsoft Teams", "entra-portal": "Microsoft Entra",
+    "forms": "Microsoft Forms", "planner": "Planner", "viva-engage": "Microsoft Viva", "power-bi": "Power BI",
+    "power-apps-maker": "Power Apps", "power-automate": "Power Automate", "security-portal": "Microsoft Defender XDR",
+    "purview": "Microsoft Purview",
     "intune": "Microsoft Intune", "m365-portal": "Microsoft 365 suite", "admin-center": "Microsoft 365 suite",
     "power-platform": "Power Apps", "m365-copilot": "Microsoft Copilot (Microsoft 365)",
 }

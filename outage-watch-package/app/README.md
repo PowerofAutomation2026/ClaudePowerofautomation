@@ -21,7 +21,8 @@ Lessons built in:
 python3 outagewatch.py --once                      # exit 0 healthy, 1 otherwise
 python3 outagewatch.py --interval 60 --webhook URL # continuous, alerts on change
 python3 outagewatch.py --test                      # manual test: one detailed round, dry run
-python3 -W ignore -m unittest -v                    # 113 tests
+python3 outagewatch.py --tenant contoso --once      # all 36 services (SharePoint/OneDrive need your tenant name)
+python3 -W ignore -m unittest -v                    # 126 tests
 ./deploy/test_deploy.sh                             # 84 checks of the deploy script (real user-mode deploy)
 ```
 A 401/403/redirect counts as alive (the service answered). 5xx, 429, timeouts and DNS/TLS errors count as down.
@@ -48,19 +49,84 @@ A 401/403/redirect counts as alive (the service answered). 5xx, 429, timeouts an
 `--serve` listens on localhost only and, by default, needs no login there. `--bind` to anything but
 localhost is refused unless a viewer token, an admin token or a trusted proxy is configured (see Access control).
 
+## The 36 monitored services
+34 are probed out of the box. SharePoint Online and OneDrive for Business live on per-tenant hosts, so they
+need your tenant's short name: `--tenant contoso` probes `contoso.sharepoint.com` and `contoso-my.sharepoint.com`.
+Without it those two show as **unconfigured**: a neutral state ("needs your tenant name"), never a failure, never
+a freeze or an alert, not counted in uptime, and reported separately ("34 probed, 2 need a tenant name").
+The tenant name is validated strictly (letters, digits, dashes).
+
+There is no `--domain contoso.com` auto-discovery. It was built against Exchange Autodiscover
+(GetFederationInformation) and tested live: the service now returns only the domain you asked about, not the
+tenant's `*.onmicrosoft.com` name, so the tenant name cannot be derived that way. It was removed rather than shipped unreliable.
+
+All probes are unauthenticated: they show that the front door answers, not that a signed-in user can work.
+All 36 run concurrently (bounded pool, `"workers"` in the config, default 40), so a round takes about one
+timeout at worst instead of 36; results keep a fixed order. A live round of all 36 took about 1 second.
+
+| Service | Family | Probe URL | Counts as alive | Live result (2026-11-14) | In Microsoft's endpoint list |
+|---|---|---|---|---|---|
+| auth | Identity & platform | `https://login.microsoftonline.com/common/.well-known/openid-configuration` | HTTP 200 | HTTP 200, 511 ms, up | not re-checked this round (original 15) |
+| graph | Identity & platform | `https://graph.microsoft.com/v1.0/$metadata` | HTTP 200/401/403 | HTTP 200, 285 ms, up | not re-checked this round (original 15) |
+| entra-portal | Identity & platform | `https://entra.microsoft.com/` | any answer below 500 | HTTP 200, 370 ms, up | wild (*.microsoft.com) |
+| entra-device-reg | Identity & platform | `https://enterpriseregistration.windows.net/` | any answer below 500 | HTTP 404, 487 ms, up | exact |
+| azure-portal | Identity & platform | `https://portal.azure.com/` | any answer below 500 | HTTP 200, 332 ms, up | not in the M365 list (Azure portal) |
+| exchange | Exchange | `https://autodiscover-s.outlook.com/autodiscover/autodiscover.xml` | HTTP 200/401/403 | HTTP 401, 586 ms, up | not re-checked this round (original 15) |
+| outlook-web | Exchange | `https://outlook.office.com/mail/` | any answer below 500 | HTTP 417, 989 ms, up | not re-checked this round (original 15) |
+| exchange-365 | Exchange | `https://outlook.office365.com/` | any answer below 500 | HTTP 301, 871 ms, up | exact |
+| teams | Teams | `https://teams.microsoft.com/` | any answer below 500 | HTTP 302, 367 ms, up | not re-checked this round (original 15) |
+| teams-admin | Teams | `https://admin.teams.microsoft.com/` | any answer below 500 | HTTP 302, 346 ms, up | wild (*.teams.microsoft.com) |
+| teams-cdn | Teams | `https://statics.teams.cdn.office.net/` | any answer below 500 | HTTP 400, 522 ms, up | wild (*.office.net) |
+| sharepoint-online | SharePoint / OneDrive | `https://<tenant>.sharepoint.com/` | any answer below 500 | HTTP 401, 456 ms, up | exact (<tenant>.sharepoint.com) |
+| onedrive-business | SharePoint / OneDrive | `https://<tenant>-my.sharepoint.com/` | any answer below 500 | HTTP 302, 606 ms, up | exact (<tenant>-my.sharepoint.com) |
+| onedrive-sync | SharePoint / OneDrive | `https://oneclient.sfx.ms/` | any answer below 500 | HTTP 200, 224 ms, up | exact |
+| onedrive-admin | SharePoint / OneDrive | `https://admin.onedrive.com/` | any answer below 500 | HTTP 302, 309 ms, up | exact |
+| power-platform | Power Platform & dashboards | `https://api.powerapps.com/` | any answer below 500 | HTTP 400, 291 ms, up | not re-checked this round (original 15) |
+| power-apps-maker | Power Platform & dashboards | `https://make.powerapps.com/` | any answer below 500 | HTTP 200, 487 ms, up | wild (*.powerapps.com) |
+| power-automate | Power Platform & dashboards | `https://make.powerautomate.com/` | any answer below 500 | HTTP 200, 558 ms, up | wild (*.powerautomate.com) |
+| power-bi | Power Platform & dashboards | `https://app.powerbi.com/` | any answer below 500 | HTTP 200, 385 ms, up | not in the M365 list (Power BI) |
+| power-platform-admin | Power Platform & dashboards | `https://admin.powerplatform.microsoft.com/` | any answer below 500 | HTTP 200, 272 ms, up | wild (*.microsoft.com) |
+| m365-portal | Office apps | `https://www.office.com/` | any answer below 500 | HTTP 301, 269 ms, up | not re-checked this round (original 15) |
+| office-web-apps | Office apps | `https://officeapps.live.com/` | any answer below 500 | HTTP 302, 406 ms, up | wild (*.officeapps.live.com) |
+| forms | Office apps | `https://forms.office.com/` | any answer below 500 | HTTP 301, 373 ms, up | wild (*.office.com) |
+| planner | Office apps | `https://tasks.office.com/` | any answer below 500 | HTTP 302, 352 ms, up | wild (*.office.com) |
+| loop | Office apps | `https://loop.cloud.microsoft/` | any answer below 500 | HTTP 200, 630 ms, up | wild (*.cloud.microsoft) |
+| viva-engage | Office apps | `https://engage.cloud.microsoft/` | any answer below 500 | HTTP 200, 363 ms, up | wild (*.cloud.microsoft) |
+| office-cdn | Office apps | `https://res.cdn.office.net/` | any answer below 500 | HTTP 400, 1156 ms, up | not re-checked this round (original 15) |
+| security-portal | Security, compliance & admin | `https://security.microsoft.com/` | any answer below 500 | HTTP 302, 431 ms, up | exact |
+| purview | Security, compliance & admin | `https://purview.microsoft.com/` | any answer below 500 | HTTP 302, 309 ms, up | exact |
+| intune | Security, compliance & admin | `https://enrollment.manage.microsoft.com/` | any answer below 500 | HTTP 302, 536 ms, up | not re-checked this round (original 15) |
+| admin-center | Security, compliance & admin | `https://admin.microsoft.com/` | any answer below 500 | HTTP 302, 255 ms, up | not re-checked this round (original 15) |
+| m365-copilot | Copilot | `https://m365.cloud.microsoft/chat` | any answer below 500 | HTTP 302, 386 ms, up | not re-checked this round (original 15) |
+| copilot-substrate | Copilot | `https://substrate.office.com/` | any answer below 500 | HTTP 301, 392 ms, up | not re-checked this round (original 15) |
+| copilot-studio | Copilot | `https://copilotstudio.microsoft.com/` | any answer below 500 | HTTP 200, 566 ms, up | not re-checked this round (original 15) |
+| copilot-web | Independent | `https://copilot.microsoft.com/` | any answer below 500 | HTTP 301, 336 ms, up | not re-checked this round (original 15) |
+| github-copilot | Independent | `https://api.githubcopilot.com/` | any answer below 500 | HTTP 404, 420 ms, up | not re-checked this round (original 15) |
+
+"In Microsoft's endpoint list" was checked against the Microsoft 365 worldwide endpoints table in the
+MicrosoftDocs/microsoft-365-docs GitHub source (`includes/office-365-worldwide-endpoints.md`). No candidate had
+to be replaced: all 21 new hosts answered below 500 on repeated live probes (one single probe of `planner` timed out once in about ten rounds and answered again on the next) (tenant `microsoft` for the two
+tenant hosts). Several answer 400/404 at the bare host (`teams-cdn`, `office-cdn`, `entra-device-reg`,
+`power-platform`, `github-copilot`): that proves the edge is serving, which is all these probes claim.
+The family column drives the map clusters and the short alert text; dependencies are in `DEPENDS_ON_AUTH` and
+`COPILOT_NEEDS` (the CDN and download hosts are not treated as needing sign-in). These dependencies are a
+model, not something read from Microsoft.
+
 ## Dashboard
 A single self-contained page (`dashboard.html`; no CDN, no external requests, strict Content-Security-Policy
 with hashed inline script/style). It polls `/status.json` every 5 s.
-- **Blast-radius map.** Sign-in in the centre, services that need it around it, Copilot on the outer arc on
-  top of the data services it reads (edges come from `DEPENDS_ON_AUTH` / `COPILOT_NEEDS`). When a node
-  degrades, the failure is drawn travelling along the edges to its dependents ("at risk"). State is encoded
-  by shape + icon + text, not colour alone. Select a node to see what fails with it. Services added with
-  `--config` appear under "no modelled dependency".
+- **Blast-radius map.** Nine family boxes (Identity, Exchange, Teams, SharePoint/OneDrive, Power Platform &
+  dashboards, Office apps, Security/compliance/admin, Copilot, Independent). A left bus shows which families
+  need sign-in, a right bus what Copilot reads (edges from `DEPENDS_ON_AUTH` / `COPILOT_NEEDS`). When a node
+  degrades, the failure is drawn travelling along the buses and every dependent is marked "at risk". State is
+  encoded by shape + icon + text, not colour alone. Select a node to see its own dependency lines and what
+  fails with it. Services added with `--config` appear under "Independent".
 - **Can I do my job?** Tasks mapped to the services they need (`"roles": {"Payroll": ["auth", "my-app"]}` in
   the config replaces the defaults). "Copy staff update" drafts a short factual message from the current
   state. It says what the probes saw and never states a cause.
 - **Early-warning timeline.** Latency sparkline per service against its learned baseline, with the warning
-  region hatched, plus the stress score (below).
+  region hatched, plus the stress score (below). Grouped into collapsible families, with a filter box and
+  "show only problems".
 - **Replay.** Scrub back through the rounds the page has seen (the server keeps the last 120 for new tabs).
 - **Simulation / demo and fire drills.** Runs only in the browser tab, always labelled SIMULATION. It never
   sends anything to the server, so it cannot write the freeze file, fire hooks or webhooks, or appear in the

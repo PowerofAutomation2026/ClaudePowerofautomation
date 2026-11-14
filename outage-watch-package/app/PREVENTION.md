@@ -77,3 +77,10 @@ an unacknowledged incident escalates to `escalate_to` after `escalate_after_min`
 ## Planned work is not an incident
 Declare tenant maintenance in `"maintenance"` so it neither freezes pipelines nor pages people, while staying
 in the timeline and excluded from uptime figures.
+
+## Coverage: 36 services, and your tenant name
+Start with `--tenant <name>` (the name in `<name>.sharepoint.com`) so SharePoint Online and OneDrive are probed;
+without it they show as "unconfigured", which is neutral and never alerts. The list now also covers Power BI,
+Power Apps/Automate, Forms, Planner, Loop, Viva Engage, the Defender, Purview, Entra, Azure and Teams admin
+portals, and the Teams/Office CDNs. See README, "The 36 monitored services". The role view maps them to tasks
+("Dashboards & reporting", "Forms & tasks", "Security & compliance admin", "Teams admin").

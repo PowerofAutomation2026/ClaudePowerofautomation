@@ -131,6 +131,25 @@ class Install(unittest.TestCase):
             pr.kill(); pr.wait()
 
 
+class Tenant(unittest.TestCase):
+    def test_live_probe_gets_the_tenant(self):
+        base = tempfile.mkdtemp()
+        calls = []
+        real = subprocess.run
+        def fake(cmd, *a, **k):
+            calls.append(cmd)
+            class R: returncode = 0; stdout = json.dumps({"results": [{"state": "up"}]}); stderr = ""
+            return R()
+        subprocess.run = fake
+        try:
+            rc = install.main(["--env-id", ENV, "--base-dir", base, "--skip-tests", "--tenant", "contoso"])
+        finally:
+            subprocess.run = real
+        self.assertEqual(rc, 0)
+        probe = [c for c in calls if "--test" in c][0]
+        self.assertEqual(probe[probe.index("--tenant") + 1], "contoso")
+
+
 class Launch(unittest.TestCase):
     def test_webhook_comes_from_env_file_only_and_must_be_http(self):
         import launch

@@ -349,7 +349,7 @@ class DrillsAndRoles(unittest.TestCase):
     def test_example_file_is_valid(self):
         d = ow.load_drills(os.path.join(os.path.dirname(os.path.abspath(__file__)), "drills.example.json"))
         self.assertEqual(len(d["drills"]), 4); self.assertTrue(d["common_checklist"])
-        known = set(ow.DEFAULT_TARGETS) | {"sharepoint", "onedrive"}
+        known = set(ow.DEFAULT_TARGETS) | set(ow.TENANT_SERVICES)
         for dr in d["drills"]:
             self.assertTrue(all(e["service"] in known for e in dr["script"]), dr["id"])
             self.assertEqual([e["t"] for e in dr["script"]], sorted(e["t"] for e in dr["script"]))

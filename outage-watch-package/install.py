@@ -147,14 +147,18 @@ def install(a):
     # 6. live probe (never fails the deploy; tells you what it saw)
     if not a.no_live_test:
         try:
-            r = subprocess.run([sys.executable, "outagewatch.py", "--test", "--json", "--timeout", "10"],
-                               cwd=p["app"], capture_output=True, text=True, timeout=180,
+            cmd = [sys.executable, "outagewatch.py", "--test", "--json", "--timeout", "10"]
+            if tenant:
+                cmd += ["--tenant", tenant]       # same tenant the service will use
+            r = subprocess.run(cmd, cwd=p["app"], capture_output=True, text=True, timeout=180,
                                env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
             data = json.loads(r.stdout)
             states = [x.get("state") for x in data.get("results", [])]
-            n = {k: states.count(k) for k in ("up", "warning", "suspect", "down", "blocked")}
+            n = {k: states.count(k) for k in ("up", "warning", "suspect", "down", "blocked", "unconfigured")}
             say(f"live probe: {n['up']} up, {n['blocked']} blocked, {n['down']} down, "
                 f"{n['warning'] + n['suspect']} warning/suspect (of {len(states)})")
+            if n["unconfigured"]:
+                say(f"{n['unconfigured']} service(s) need your tenant name (SharePoint/OneDrive): re-run with -Tenant <name>", "warn")
             if states and n["down"] == len(states):
                 say("everything failed: check this machine's internet, DNS and proxy before trusting the monitor", "warn")
             elif n["blocked"]:

@@ -57,6 +57,10 @@ if ($EnvironmentId -cnotmatch $guidPattern) {
   Fail 'Environment ID must look like 00000000-0000-0000-0000-000000000000.'; exit 2
 }
 $EnvironmentId = $EnvironmentId.ToLowerInvariant()
+if ([string]::IsNullOrWhiteSpace($Tenant) -and -not $Yes -and -not $Uninstall -and -not $DryRun) {
+  $Tenant = Read-Host 'Tenant name for the SharePoint/OneDrive checks (the "contoso" in contoso.sharepoint.com). Press Enter to skip'
+  if ($Tenant) { $Tenant = $Tenant.Trim() }
+}
 if ($Tenant -and ($Tenant -cnotmatch '\A[A-Za-z0-9][A-Za-z0-9-]{0,62}\z')) {
   Fail 'Tenant must be the short name (contoso), letters/digits/hyphens only.'; exit 2
 }
@@ -223,6 +227,7 @@ try {
   Step '7/7 Done'
   Write-Host ''
   Write-Host "  Dashboard      : http://127.0.0.1:$Port/" -ForegroundColor Green
+  if (-not $Tenant) { Warn 'No -Tenant given: SharePoint Online and OneDrive for Business are NOT checked (shown as "needs your tenant name"). Re-run with -Tenant <name> to add them.' }
   Write-Host "  Admin token    : in $envFile  (to run manual tests from the dashboard; shown nowhere else)"
   Write-Host "  Data and logs  : $dataDir   (deploy log: $logPath)"
   Write-Host "  Starts at boot : Scheduled Task '$taskName' as $account, restarts on failure"

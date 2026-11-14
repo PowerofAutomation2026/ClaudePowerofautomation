@@ -1,7 +1,7 @@
 OUTAGE-WATCH  -  ZERO-TOUCH DEPLOYMENT PACKAGE (Windows)
 =========================================================
 Monitors Microsoft 365 and Copilot from the outside, warns early, and shows a live
-blast-radius dashboard. Package version = build 3fe9a57 (113 unit tests pass; the installer runs them as a gate).
+blast-radius dashboard. Package version = build 4776649 (126 unit tests pass; the installer runs them as a gate).
 
 WHAT YOU NEED
   * Windows 10/11 or Windows Server 2016+ with PowerShell 5.1 (built in)
@@ -16,9 +16,13 @@ DEPLOY IN ONE STEP
        Deploy.cmd 00000000-0000-0000-0000-000000000000 -Yes
 
      Replace the GUID with your Power Platform environment ID (the part after
-     /environments/ in the maker portal URL). Without -Yes it asks for the ID and
-     before closing. Optional: -Tenant contoso (also probes SharePoint/OneDrive)
-     and -Port 8080.
+     /environments/ in the maker portal URL). Without -Yes it asks for the ID, then
+     (optionally) your tenant name, and pauses before closing.
+
+     SharePoint Online and OneDrive for Business need your tenant name: add
+     -Tenant contoso (the "contoso" in contoso.sharepoint.com). Without it they show as
+     "needs your tenant name" and are not counted as failures, so 34 of 36 services
+     are checked. Other option: -Port 8090.
   3. Open http://127.0.0.1:8080/ on that machine. Done.
 
 WHAT THE SCRIPT DOES (7 steps, each printed ok / warn / fail)
@@ -26,7 +30,7 @@ WHAT THE SCRIPT DOES (7 steps, each printed ok / warn / fail)
   2. Copies the app to C:\ProgramData\OutageWatch\<envId>\app, generates config and a
      random admin token (stored in outagewatch.env, never printed), runs the unit tests
      as a gate (a failure stops the deploy before anything starts), then does a live
-     probe of 15 Microsoft 365 / Copilot endpoints and tells you what it saw
+     probe of the Microsoft 365 / Copilot endpoints and tells you what it saw
   3. Locks permissions (token file: SYSTEM, Administrators, and the service account only)
   4. Registers Scheduled Task OutageWatch-<first 8 chars> that starts at boot, restarts on
      failure and never times out; runs as LOCAL SERVICE (low privilege)
