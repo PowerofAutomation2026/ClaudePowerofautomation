@@ -1,0 +1,25 @@
+name: outage-watch tests
+on:
+  push:
+    paths: ["outage-watch/**", ".github/workflows/outage-watch-tests.yml"]
+  pull_request:
+    paths: ["outage-watch/**"]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unit tests (stdlib only, nothing to install)
+        working-directory: outage-watch
+        run: python -W ignore -m unittest -v
+      - name: shellcheck deploy.sh
+        working-directory: outage-watch
+        run: shellcheck deploy/deploy.sh

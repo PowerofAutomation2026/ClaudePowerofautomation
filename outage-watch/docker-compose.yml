@@ -1,0 +1,20 @@
+# docker compose up -d      (needs a file named outagewatch.env next to this one, mode 600)
+#   OUTAGEWATCH_ADMIN_TOKEN=<16+ random characters>
+#   OUTAGEWATCH_VIEWER_TOKEN=<a different 16+ random characters>
+# plus any alert-channel variables your config names (for example OW_SLACK_URL=...).
+services:
+  outage-watch:
+    build: .
+    image: outage-watch:local
+    restart: unless-stopped
+    env_file: outagewatch.env
+    ports:
+      - "127.0.0.1:8080:8080"      # host localhost only; put a TLS reverse proxy in front to share it
+    volumes:
+      - outagewatch-data:/data
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+volumes:
+  outagewatch-data:

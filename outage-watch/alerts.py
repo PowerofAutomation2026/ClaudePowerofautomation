@@ -250,7 +250,7 @@ class AlertState:
             inc = d["incident"]
             if not inc or inc.get("acked"):
                 return False
-            inc["acked"], inc["acked_at"], inc["acked_by"] = True, now or time.time(), str(by)[:40]
+            inc["acked"], inc["acked_at"], inc["acked_by"] = True, time.time() if now is None else now, str(by)[:40]
             self.save(d)
             return True
 
@@ -259,13 +259,13 @@ class AlertState:
         with self.lock:
             d = self.load()
             if minutes > 0:
-                d["snooze"][service] = (now or time.time()) + 60 * min(minutes, 7 * 1440)
+                d["snooze"][service] = (time.time() if now is None else now) + 60 * min(minutes, 7 * 1440)
             else:
                 d["snooze"].pop(service, None)
             self.save(d)
 
     def snoozed(self, now=None):
-        now = now or time.time()
+        now = time.time() if now is None else now
         return {k: v for k, v in self.load()["snooze"].items() if v > now}
 
 
@@ -311,7 +311,7 @@ class AlertManager:
     def step(self, level, state, at_risk=(), muted=(), now=None, now_iso=""):
         """level: automation level; state: {service: published state}; muted: services in a
         maintenance window. Returns the list of (kind, channels) actually sent this round."""
-        now = now or time.time()
+        now = time.time() if now is None else now
         with self.state.lock:
             d = self.state.load()
             d["snooze"] = {k: v for k, v in d["snooze"].items() if v > now}
@@ -374,7 +374,7 @@ class AlertManager:
 
     def public(self, now=None):
         """What status.json may show: no URLs, no secrets."""
-        now = now or time.time()
+        now = time.time() if now is None else now
         d = self.state.load()
         inc = d["incident"]
         return {"channels": [{"name": n, "type": c["type"],

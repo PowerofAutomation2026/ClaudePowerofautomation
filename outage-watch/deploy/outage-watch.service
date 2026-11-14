@@ -1,0 +1,26 @@
+# systemd unit example. Install:
+#   sudo useradd --system --home-dir /var/lib/outage-watch --shell /usr/sbin/nologin outagewatch
+#   sudo install -d -o outagewatch -m 750 /var/lib/outage-watch
+#   sudo install -d /opt/outage-watch && sudo cp *.py *.html *.json /opt/outage-watch/
+#   sudo install -m 600 -o root /dev/null /etc/outage-watch.env   # then add the two token lines
+#   sudo cp deploy/outage-watch.service /etc/systemd/system/ && sudo systemctl enable --now outage-watch
+[Unit]
+Description=outage-watch (Microsoft 365 / Copilot probe and dashboard)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=outagewatch
+WorkingDirectory=/var/lib/outage-watch
+EnvironmentFile=/etc/outage-watch.env
+ExecStart=/usr/bin/python3 /opt/outage-watch/outagewatch.py --serve 8080 --log /var/lib/outage-watch/outagewatch.jsonl --db /var/lib/outage-watch/outagewatch.db --freeze-file /var/lib/outage-watch/freeze.json --alert-state /var/lib/outage-watch/alerts-state.json
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/outage-watch
+
+[Install]
+WantedBy=multi-user.target

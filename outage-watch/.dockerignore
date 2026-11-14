@@ -1,0 +1,7 @@
+__pycache__
+*.pyc
+*.jsonl
+*.db
+test_*.py
+deploy
+.deploy-state
