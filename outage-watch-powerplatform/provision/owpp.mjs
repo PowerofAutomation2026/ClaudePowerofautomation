@@ -44,7 +44,8 @@ function options(a) {
 
 function client(a) {
   const orgUrl = assertOrgUrl(a['org-url'], { allowLoopback: process.env.OWPP_TEST_MODE === '1' })
-  return createClient({ orgUrl, token: process.env.OWPP_TOKEN ?? '' })
+  // OWPP_TEST_MODE (loopback mock server only): no waiting. Real tenants keep the real waits.
+  return createClient({ orgUrl, token: process.env.OWPP_TOKEN ?? '', sleep: process.env.OWPP_TEST_MODE === '1' ? async () => {} : undefined })
 }
 
 const say = (t) => console.log(t)
@@ -79,7 +80,7 @@ export async function main(argv) {
         // Offline: replays the provisioning against an in-memory model of an EMPTY environment and prints every request.
         const o = options(a); o.connectionId = o.connectionId ?? 'your-dataverse-connection-id'
         const mock = createMockDataverse({ autoRun: false })
-        const c = createClient({ orgUrl: 'https://plan.invalid', token: mock.token, fetchImpl: mock.mockFetch })
+        const c = createClient({ orgUrl: 'https://plan.invalid', token: mock.token, fetchImpl: mock.mockFetch, sleep: async () => {} })
         const r = await apply(c, o)
         say('DRY RUN - nothing is sent anywhere. Requests a first deployment would make to <org>/api/data/v9.2/ :')
         mock.log.forEach((l, i) => say(`  ${String(i + 1).padStart(3)}. ${l.method.padEnd(6)} ${l.path}${l.query ? ' ' + l.query.slice(0, 90) : ''}${l.solution ? '   [solution ' + l.solution + ']' : ''}`))

@@ -2,12 +2,13 @@
 // The bearer token lives only in this closure: it is never logged, never put in an error and never written to disk.
 
 export class DataverseError extends Error {
-  constructor(message, status, code) { super(message); this.status = status; this.code = code }
+  constructor(message, status, code, requestId) { super(message); this.status = status; this.code = code; this.requestId = requestId }
 }
 
 const scrub = (s) => String(s ?? '').replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted]').replace(/eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*/g, '[redacted-token]').slice(0, 600)
 
-export function createClient({ orgUrl, token, fetchImpl = fetch, onRequest = () => {}, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), maxRetries = 3 }) {
+export function createClient({ orgUrl, token, fetchImpl = fetch, onRequest = () => {}, sleep, maxRetries = 3 }) {
+  sleep ??= (ms) => new Promise((r) => setTimeout(r, ms))
   if (!token || typeof token !== 'string') throw new DataverseError('no access token supplied (OWPP_TOKEN is empty)', 0, 'NoToken')
   const base = orgUrl.replace(/\/+$/, '') + '/api/data/v9.2/'
 
@@ -36,10 +37,13 @@ export function createClient({ orgUrl, token, fetchImpl = fetch, onRequest = () 
         return { status: res.status, json, entityId: idFromHeader(res.headers.get('odata-entityid')) }
       }
       const msg = json?.error?.message ?? text
-      throw new DataverseError(`${method} ${path.split('?')[0]}: HTTP ${res.status} ${scrub(msg)}`, res.status, json?.error?.code)
+      const code = json?.error?.code
+      const rid = res.headers.get('x-ms-service-request-id') ?? res.headers.get('req_id') ?? res.headers.get('x-ms-request-id') ?? undefined
+      throw new DataverseError(`${method} ${path.split('?')[0]}: HTTP ${res.status}${code ? ` [${scrub(code)}]` : ''} ${scrub(msg)}${rid ? ` (request id ${scrub(rid)})` : ''}`, res.status, code, rid)
     }
   }
   return {
+    sleep,
     get: (path, o) => request('GET', path, o),
     /** GET that maps 404 to null. */
     find: async (path) => { const r = await request('GET', path, { okStatuses: [404] }); return r.status === 404 ? null : r.json },

@@ -11,9 +11,11 @@ import { join } from 'node:path'
 // @ts-expect-error plain .mjs helpers without type declarations
 import { createClient } from '../provision/lib/client.mjs'
 // @ts-expect-error plain .mjs helpers without type declarations
+// @ts-expect-error plain .mjs helper without type declarations
+import { DataverseError } from '../provision/lib/client.mjs'
 import { createMockDataverse } from '../provision/lib/mock-dataverse.mjs'
 // @ts-expect-error plain .mjs helpers without type declarations
-import { apply, smoke, uninstall, NeedsConnection, FlowNotOn } from '../provision/lib/provision.mjs'
+import { apply, smoke, uninstall, NeedsConnection, FlowNotOn, isTransientMetadata } from '../provision/lib/provision.mjs'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const OPTS = { intervalMinutes: 10, retentionDays: 7, timeoutSeconds: 10, tenant: null, connectionId: 'aaaaaaaabbbbccccddddeeeeeeeeeeee', heartbeatUrl: null as string | null }
@@ -274,6 +276,52 @@ describe('heartbeat (dead man\'s switch)', () => {
     expect(lines.join('\n')).not.toContain('secret-uuid')
     expect(JSON.stringify(r)).not.toContain('secret-uuid')
     expect(JSON.stringify(mock.db.owatch_settings)).not.toContain('secret-uuid')
+  })
+})
+
+describe('transient Dataverse metadata errors (real first-run failure: HTTP 400 "An unexpected error occurred" on a new column)', () => {
+  it('retries with backoff, logs it, and completes without duplicates', async () => {
+    const { mock, client } = await env()
+    mock.state.transientAttrFails = 3
+    const lines: string[] = []
+    const r = await apply(client, OPTS, (x: string) => lines.push(x))
+    expect(r.flowOn).toBe(true)
+    expect(lines.filter((l) => l.includes('unexpected error')).length).toBe(3)
+    expect(mock.problems).toEqual([])
+    expect(mock.entities.get('owatch_result').attributes.has('owatch_httpstatus')).toBe(true)
+  })
+
+  it('a column that WAS created although the reply was an error is not retried into a duplicate error', async () => {
+    const { mock, client } = await env()
+    mock.state.attrFailsAfterCreate = 2
+    const lines: string[] = []
+    const r = await apply(client, OPTS, (x: string) => lines.push(x))
+    expect(r.flowOn).toBe(true)
+    expect(lines.some((l) => l.includes('it was created after all'))).toBe(true)
+  })
+
+  it('a persistent failure stops after the retries with the column, Dataverse error code and no token', async () => {
+    const { mock, client } = await env()
+    mock.state.attrAlwaysFails = true
+    const e: any = await apply(client, OPTS).catch((x: unknown) => x)
+    expect(e.message).toMatch(/unexpected error/i)
+    expect(e.message).toContain('0x80040216')
+    expect(e.message).toMatch(/while creating column owatch_target\.owatch_url \(String\)/)
+    expect(e.message).toContain('retried 5 times')
+    expect(e.message).not.toContain(mock.token)
+    expect(mock.log.filter((l: any) => l.method === 'POST' && l.path.endsWith('/Attributes')).length).toBe(6)   // 1 try + 5 retries
+  })
+
+  it('only the generic transient errors are retried: not permission, not validation, not not-found', () => {
+    const E = (s: number, m: string, c?: string) => new DataverseError(`POST x: HTTP ${s} ${m}`, s, c)
+    expect(isTransientMetadata(E(400, 'An unexpected error occurred.', '0x80040216'))).toBe(true)
+    expect(isTransientMetadata(E(400, 'An unexpected error occurred.'))).toBe(true)
+    expect(isTransientMetadata(E(500, 'Internal server error'))).toBe(true)
+    expect(isTransientMetadata(E(400, 'Attribute owatch_x already exists', '0x80048403'))).toBe(false)
+    expect(isTransientMetadata(E(403, 'Principal user is missing prvCreateEntity privilege'))).toBe(false)
+    expect(isTransientMetadata(E(401, 'Unauthorized'))).toBe(false)
+    expect(isTransientMetadata(E(404, 'Could not find an entity'))).toBe(false)
+    expect(isTransientMetadata(new Error('boom'))).toBe(false)
   })
 })
 

@@ -13,7 +13,7 @@ export function createMockDataverse({ token = 'test-token', failActivation = nul
   const entities = new Map()        // logical -> { MetadataId, LogicalName, EntitySetName, PrimaryId, attributes:Set, solution }
   const log = []                    // every request: { method, path, solution }
   const problems = []               // payload-shape violations the mock noticed
-  const state = { failActivation, autoRun }
+  const state = { failActivation, autoRun, transientAttrFails: 0, attrFailsAfterCreate: 0, attrAlwaysFails: false }
 
   const reply = (status, json, headers = {}) => ({ status, headers: { 'content-type': 'application/json', ...headers }, body: json === undefined ? '' : JSON.stringify(json) })
   const err = (status, message, code = '0x0') => reply(status, { error: { code, message } })
@@ -145,10 +145,13 @@ export function createMockDataverse({ token = 'test-token', failActivation = nul
       }
       if (attr) return method === 'GET' ? (e.attributes.has(attr) ? reply(200, { LogicalName: attr }) : err(404, `Could not find an attribute with name ${attr}`)) : err(405, 'unsupported')
       if (method !== 'POST') return err(405, 'unsupported')
+      if (state.attrAlwaysFails) return err(400, 'An unexpected error occurred.', '0x80040216')
+      if (state.transientAttrFails > 0) { state.transientAttrFails--; return err(400, 'An unexpected error occurred.', '0x80040216') }
       validateAttribute(body, solution)
       const an = String(body.SchemaName).toLowerCase()
       if (e.attributes.has(an)) return err(400, `Attribute ${an} already exists`)
       e.attributes.add(an)
+      if (state.attrFailsAfterCreate > 0) { state.attrFailsAfterCreate--; return err(400, 'An unexpected error occurred.', '0x80040216') }   // applied, but the reply was an error
       return reply(204, undefined, { 'OData-EntityId': `http://mock/api/data/v9.2/EntityDefinitions(${e.MetadataId})/Attributes(${randomUUID()})` })
     }
 

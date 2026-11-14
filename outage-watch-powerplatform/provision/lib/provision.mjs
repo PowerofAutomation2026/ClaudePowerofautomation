@@ -7,6 +7,38 @@ import { buildClientData, canonical, estimateRequests, existingHeartbeatUrl, wor
 const SOL = { 'MSCRM.SolutionUniqueName': SOLUTION.uniquename }
 
 export class NeedsConnection extends Error {}
+
+/** Dataverse answers a metadata change that collides with another one with this generic, usually transient error. */
+export const isTransientMetadata = (e) => e instanceof DataverseError &&
+  (e.status >= 500 || (e.status === 400 && (/unexpected error/i.test(e.message) || e.code === '0x80040216')))
+const RETRY_WAITS_S = [4, 8, 15, 25, 40]
+
+/** POST a metadata change; on the generic transient error wait, CHECK whether it was applied anyway, then retry. */
+async function postMetadata(client, path, body, what, exists, log) {
+  for (let attempt = 0; ; attempt++) {
+    try { await client.post(path, body, SOL); return }
+    catch (e) {
+      if (!isTransientMetadata(e)) throw e
+      if (attempt >= RETRY_WAITS_S.length) {
+        throw new DataverseError(`${e.message} [while creating ${what}; retried ${attempt} times over ${RETRY_WAITS_S.reduce((a, b) => a + b, 0)} s]`, e.status, e.code, e.requestId)
+      }
+      const w = RETRY_WAITS_S[attempt]
+      log(`    ~ ${what}: Dataverse answered "unexpected error" (this is often a timing collision between metadata changes); waiting ${w} s, then checking and retrying (${attempt + 1}/${RETRY_WAITS_S.length})`)
+      await client.sleep(w * 1000)
+      if (await exists()) { log(`    ~ ${what}: it was created after all`); return }
+    }
+  }
+}
+
+/** A table that was just created is not always ready for column changes: wait until its primary column can be read. */
+async function waitForTable(client, path, log) {
+  for (let i = 0; i < 30; i++) {
+    if (await client.find(`${path}/Attributes(LogicalName='owatch_name')?$select=LogicalName`)) { await client.sleep(3000); return }
+    if (i === 0) log('    waiting for the new table to become ready...')
+    await client.sleep(2000)
+  }
+  log('    the new table is still not readable after 60 s; trying to continue')
+}
 export class FlowNotOn extends Error { constructor(m, flowId) { super(m); this.flowId = flowId } }
 
 /**
@@ -43,8 +75,10 @@ export async function apply(client, o, log = () => {}) {
     const path = `EntityDefinitions(LogicalName=${q(t.logical)})`
     let meta = await client.find(`${path}?$select=MetadataId,LogicalName,EntitySetName`)
     if (!meta) {
-      await client.post('EntityDefinitions', t.create, SOL)
+      await postMetadata(client, 'EntityDefinitions', t.create, `table ${t.logical}`,
+        async () => !!(await client.find(`${path}?$select=MetadataId`)), log)
       did('created', `table ${t.logical}`); metadataChanged = true
+      await waitForTable(client, path, log)
     }
     for (const c of t.columns) {
       const col = c.SchemaName.toLowerCase()
@@ -52,7 +86,8 @@ export async function apply(client, o, log = () => {}) {
         const have = await client.find(`${path}/Attributes(LogicalName=${q(col)})?$select=LogicalName`)
         if (have) continue
       }
-      await client.post(`${path}/Attributes`, c, SOL)
+      await postMetadata(client, `${path}/Attributes`, c, `column ${t.logical}.${col} (${c.AttributeType})`,
+        async () => !!(await client.find(`${path}/Attributes(LogicalName=${q(col)})?$select=LogicalName`)), log)
       did('created', `column ${t.logical}.${col}`); metadataChanged = true
     }
     if (!meta) meta = (await client.get(`${path}?$select=MetadataId,LogicalName,EntitySetName`)).json

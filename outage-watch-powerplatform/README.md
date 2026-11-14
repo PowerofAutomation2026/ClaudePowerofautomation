@@ -204,3 +204,15 @@ npm run dev       # dashboard with DEMO data at http://127.0.0.1:3000  (?sim=aut
 npm run plan      # same as -DryRun: print the provisioning request sequence
 python3 tests/golden/gen_golden.py   # regenerate golden cases from the real outagewatch.py (needs ../outage-watch)
 ```
+
+## Troubleshooting: first real-run report
+
+**`POST EntityDefinitions(LogicalName='owatch_result')/Attributes: HTTP 400 An unexpected error occurred.`**
+Seen on the first run against a real environment, while adding the first column to a table created a moment earlier.
+Dataverse answers a metadata change that collides with another one with this generic error. Fixes now in the script:
+after creating a table it waits until the table is readable and pauses 3 s; on this generic error it waits
+(4, 8, 15, 25, 40 s), checks whether the column was actually created, and retries; only the generic 400 and 5xx are
+retried (permission, validation and not-found errors are not). If it still fails after the retries the message
+names the column, the Dataverse error code and the **request id** (send that id to Microsoft support / include it
+when reporting). **Re-running the same command is always safe** and continues from where it stopped.
+This fix is tested against the mock only; whether it resolves the real error is not confirmed until you re-run it.

@@ -158,3 +158,8 @@ Nothing in this folder has been run against a real tenant. Specifically:
 | `tests/flow.test.ts` | clientdata envelope, run-after, no retries, dumb flow, heartbeat, usage estimate, metadata payloads |
 | `tests/validate.test.ts` | GUID (incl. the `.ps1` literal), org-URL allow-list, tenant, heartbeat URL, hostile input |
 | `tests/ps1-static.test.ts` | `.ps1` balanced, PS 5.1-compatible syntax, ASCII, no secrets printed, `.cmd` wrappers |
+
+## Found on the first real run (not from documentation)
+- Adding the first column to a just-created table returned `HTTP 400 An unexpected error occurred.` (likely a transient metadata collision;
+  the payload follows the documented IntegerAttributeMetadata shape). Added wait-for-table + checked retry. UNCONFIRMED whether this is the real cause:
+  if it persists, the request id printed by the script is the next diagnostic.
