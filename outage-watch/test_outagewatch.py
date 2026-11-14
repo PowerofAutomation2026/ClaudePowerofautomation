@@ -101,8 +101,8 @@ class MonitorTests(unittest.TestCase):
 
     def test_tenant_targets(self):
         t = ow.tenant_targets("contoso")
-        self.assertIn("contoso.sharepoint.com", t["sharepoint"][0])
-        self.assertIn("contoso-my.sharepoint.com", t["onedrive"][0])
+        self.assertIn("contoso.sharepoint.com", t["sharepoint-online"][0])
+        self.assertIn("contoso-my.sharepoint.com", t["onedrive-business"][0])
 
     def test_any_answer_below_500_alive_when_none(self):
         srv, url = serve(404)

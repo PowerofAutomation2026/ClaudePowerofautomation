@@ -44,26 +44,78 @@ DEFAULT_TARGETS = {
     "copilot-web": ("https://copilot.microsoft.com/", None),
     "github-copilot": ("https://api.githubcopilot.com/", None),
     "office-cdn": ("https://res.cdn.office.net/", None),
+    # --- SharePoint / OneDrive (the two tenant-specific ones come from tenant_targets) ---
+    "onedrive-sync": ("https://oneclient.sfx.ms/", None),
+    "onedrive-admin": ("https://admin.onedrive.com/", None),
+    # --- Office on the web / apps ---
+    "office-web-apps": ("https://officeapps.live.com/", None),
+    "forms": ("https://forms.office.com/", None),
+    "planner": ("https://tasks.office.com/", None),
+    "loop": ("https://loop.cloud.microsoft/", None),
+    "viva-engage": ("https://engage.cloud.microsoft/", None),
+    # --- Mail / security / compliance ---
+    "exchange-365": ("https://outlook.office365.com/", None),
+    "security-portal": ("https://security.microsoft.com/", None),
+    "purview": ("https://purview.microsoft.com/", None),
+    # --- Identity / Azure ---
+    "entra-portal": ("https://entra.microsoft.com/", None),
+    "entra-device-reg": ("https://enterpriseregistration.windows.net/", None),
+    "azure-portal": ("https://portal.azure.com/", None),
+    # --- Teams ---
+    "teams-admin": ("https://admin.teams.microsoft.com/", None),
+    "teams-cdn": ("https://statics.teams.cdn.office.net/", None),
+    # --- Power Platform / dashboards ---
+    "power-apps-maker": ("https://make.powerapps.com/", None),
+    "power-automate": ("https://make.powerautomate.com/", None),
+    "power-bi": ("https://app.powerbi.com/", None),
+    "power-platform-admin": ("https://admin.powerplatform.microsoft.com/", None),
 }
 
-# Services that cannot work for signed-in users when "auth" is down.
-DEPENDS_ON_AUTH = {"exchange", "outlook-web", "teams", "m365-portal", "admin-center",
-                   "graph", "power-platform", "intune", "sharepoint", "onedrive",
+# Tenant-specific hosts. Without --tenant they are shown as "unconfigured".
+TENANT_SERVICES = ("sharepoint-online", "onedrive-business")
+# States that are NOT a failure: never freeze, never alert, never "at risk", not an incident.
+NEUTRAL = ("blocked", "unconfigured")
+NEEDS_TENANT = "needs your tenant name: run with --tenant contoso (the name in contoso.sharepoint.com)"
+
+# Services that cannot work for signed-in users when "auth" is down. (The CDN / download
+# hosts office-cdn, teams-cdn and onedrive-sync are not behind sign-in.)
+DEPENDS_ON_AUTH = {"exchange", "outlook-web", "exchange-365", "teams", "teams-admin", "m365-portal", "admin-center",
+                   "graph", "power-platform", "power-apps-maker", "power-automate", "power-bi", "power-platform-admin",
+                   "intune", "sharepoint-online", "onedrive-business", "onedrive-admin",
+                   "office-web-apps", "forms", "planner", "loop", "viva-engage",
+                   "security-portal", "purview", "entra-portal", "entra-device-reg", "azure-portal",
                    "m365-copilot", "copilot-substrate", "copilot-studio"}
 
 # Copilot also needs the data services it reads from (mail, files, chats).
-COPILOT_NEEDS = {"exchange", "teams", "sharepoint", "onedrive", "graph", "copilot-substrate"}
+COPILOT_NEEDS = {"exchange", "teams", "sharepoint-online", "onedrive-business", "graph", "copilot-substrate"}
 
+# Family clusters: used by the dashboard map and to keep alert messages short.
+FAMILIES = [
+    ("Identity & platform", ["auth", "graph", "entra-portal", "entra-device-reg", "azure-portal"]),
+    ("Exchange", ["exchange", "outlook-web", "exchange-365"]),
+    ("Teams", ["teams", "teams-admin", "teams-cdn"]),
+    ("SharePoint / OneDrive", ["sharepoint-online", "onedrive-business", "onedrive-sync", "onedrive-admin"]),
+    ("Power Platform & dashboards", ["power-platform", "power-apps-maker", "power-automate", "power-bi", "power-platform-admin"]),
+    ("Office apps", ["m365-portal", "office-web-apps", "forms", "planner", "loop", "viva-engage", "office-cdn"]),
+    ("Security, compliance & admin", ["security-portal", "purview", "intune", "admin-center"]),
+    ("Copilot", ["m365-copilot", "copilot-substrate", "copilot-studio"]),
+    ("Independent", ["copilot-web", "github-copilot"]),
+]
+FAMILY_OF = {n: fam for fam, names in FAMILIES for n in names}
 
 # "Can I do my job?" view: task -> services it needs (override with "roles" in --config).
 DEFAULT_ROLES = {
     "Email & calendar": ["auth", "exchange", "outlook-web"],
-    "Meetings": ["auth", "teams"],
-    "Files & sharing": ["auth", "sharepoint", "onedrive"],
+    "Meetings": ["auth", "teams", "teams-cdn"],
+    "Files & sharing": ["auth", "sharepoint-online", "onedrive-business", "onedrive-sync"],
     "Copilot assistance": ["auth", "m365-copilot", "copilot-substrate"],
     "Admin tasks": ["auth", "admin-center", "graph"],
     "Device management": ["auth", "intune"],
-    "Low-code apps": ["auth", "power-platform"],
+    "Low-code apps": ["auth", "power-platform", "power-apps-maker", "power-automate"],
+    "Dashboards & reporting": ["auth", "power-bi"],
+    "Forms & tasks": ["auth", "forms", "planner", "loop"],
+    "Security & compliance admin": ["auth", "security-portal", "purview", "entra-portal"],
+    "Teams admin": ["auth", "teams-admin"],
 }
 
 
@@ -88,14 +140,18 @@ def role_view(state, roles, edges=None, labels=None):
              "unknown": "Cannot be checked from our network", "unmonitored": "Not monitored"}
     out = []
     for name, need in (roles.items() if isinstance(roles, dict) else roles):
-        need = [n for n in need if n in state]
+        unconf = [n for n in need if state.get(n) == "unconfigured"]
+        need = [n for n in need if n in state and state[n] != "unconfigured"]
         involved = set(need)
         for n in need:
             involved |= causes(n, set())
         worst = max([sev.get(state[n], 0) for n in involved], default=0)
         st = ("unmonitored" if not need else "down" if worst >= 3 else "shaky" if worst >= 1
-              else "unknown" if any(state[n] == "blocked" for n in need) else "ok")
+              else "unknown" if unconf or any(state[n] == "blocked" for n in need) else "ok")
         named = sorted({labels[n] for n in involved if sev.get(state[n]) and labels and n in labels})
+        if st == "unknown" and unconf and not any(state[n] == "blocked" for n in need):
+            out.append({"name": name, "status": st, "text": "Only partly monitored (tenant name not set up)"})
+            continue
         out.append({"name": name, "status": st,
                     "text": words[st] + (" (" + ", ".join(named) + ")" if named and st in ("shaky", "down") else "")})
     return out
@@ -222,12 +278,34 @@ def dependency_edges():
             [[n, "m365-copilot"] for n in sorted(COPILOT_NEEDS)])
 
 
+def valid_tenant(name):
+    return isinstance(name, str) and re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?", name) is not None
+
+
 def tenant_targets(tenant):
     """SharePoint / OneDrive hosts are tenant-specific."""
+    if not valid_tenant(tenant):
+        raise ValueError("tenant must be the short tenant name: letters, digits and dashes (contoso, not contoso.com)")
     return {
-        "sharepoint": (f"https://{tenant}.sharepoint.com/", None),
-        "onedrive": (f"https://{tenant}-my.sharepoint.com/", None),
+        "sharepoint-online": (f"https://{tenant}.sharepoint.com/", None),
+        "onedrive-business": (f"https://{tenant}-my.sharepoint.com/", None),
     }
+
+
+def unconfigured_results(names):
+    return [{"name": n, "state": "unconfigured", "code": None, "ms": 0, "error": None, "info": NEEDS_TENANT} for n in names]
+
+
+def probe_all(targets, timeout=10.0, workers=40):
+    """Probe every target concurrently (bounded pool). Results come back in the order of
+    `targets`, so everything downstream stays deterministic. With workers >= len(targets)
+    a round takes about one timeout at worst, not len(targets) x timeout."""
+    from concurrent.futures import ThreadPoolExecutor
+    items = list(targets.items())
+    if not items:
+        return []
+    with ThreadPoolExecutor(max_workers=max(1, min(workers, len(items)))) as ex:
+        return list(ex.map(lambda kv: probe(kv[0], kv[1][0], kv[1][1], timeout=timeout), items))
 
 
 def _query(url):
@@ -350,9 +428,9 @@ class Monitor:
         """Feed one round of probe results; returns {name: published_state}."""
         for r in results:
             n = r["name"]
-            if r["state"] == "blocked":
-                self.fails[n] = 0          # local policy, not an outage: never escalates
-                st = "blocked"
+            if r["state"] in NEUTRAL:
+                self.fails[n] = 0          # local policy / not set up: not an outage, never escalates
+                st = r["state"]
             elif r["state"] == "down":
                 self.fails[n] = self.fails.get(n, 0) + 1
                 st = "down" if self.fails[n] >= self.confirm else "suspect"
@@ -390,7 +468,7 @@ class Automation:
 
     @staticmethod
     def target_level(state):
-        v = set(state.values()) - {"blocked"}
+        v = set(state.values()) - set(NEUTRAL)
         if "down" in v or state.get("auth") == "suspect":
             return "freeze"
         if v & {"suspect", "warning"}:
@@ -408,7 +486,7 @@ class Automation:
                 self.clean = 0
         else:
             self.clean, new = 0, self.level
-        affected = sorted(n for n, v in state.items() if v != "up")
+        affected = sorted(n for n, v in state.items() if v != "up" and v != "unconfigured")
         changed = new != self.level
         self.level = new
         if self.freeze_file:
@@ -452,31 +530,43 @@ def copilot_note(state):
     """Explain Copilot problems that are really caused by something underneath."""
     if state.get("m365-copilot", "up") == "up":
         return ""
-    under = sorted(n for n in COPILOT_NEEDS if state.get(n, "up") != "up")
+    if state.get("m365-copilot") in NEUTRAL:
+        return ""
+    under = sorted(n for n in COPILOT_NEEDS if state.get(n, "up") not in ("up",) + NEUTRAL)
     return "Copilot affected; underlying services also unhealthy: " + ", ".join(under) if under else ""
 
 
 def impact(state):
     """Which downstream services are at risk, given published states."""
     if state.get("auth") in ("down", "suspect"):
-        return sorted(n for n in state if n in DEPENDS_ON_AUTH and n != "auth")
+        return sorted(n for n, v in state.items() if n in DEPENDS_ON_AUTH and n != "auth" and v != "unconfigured")
     return []
+
+
+def _names(names, limit=8):
+    names = list(names)
+    return ", ".join(names[:limit]) + (f" and {len(names) - limit} more" if len(names) > limit else "")
 
 
 def diagnose(results):
     """Turn per-target states into a plain-language verdict."""
-    s = {r["name"]: r["state"] for r in results}
+    s = {r["name"]: r["state"] for r in results if r["state"] != "unconfigured"}
+    unconf = [r["name"] for r in results if r["state"] == "unconfigured"]
     blocked = [n for n, v in s.items() if v == "blocked"]
-    if blocked:
-        return "BLOCKED by your proxy/firewall (not a Microsoft outage): " + ", ".join(blocked)
-    bad = [n for n, v in s.items() if v != "up"]
+    bad = [n for n, v in s.items() if v not in ("up", "blocked")]
     if not bad:
-        return "all healthy"
-    if len(bad) == len(s):
-        return "everything failing: check YOUR network/DNS first, then Microsoft"
-    if s.get("auth") != "up":
-        return "authentication degraded: sign-in dependent services will fail (Aug 31 pattern)"
-    return "partial outage: " + ", ".join(bad)
+        out = "all healthy" if not blocked else ""
+    elif len(bad) == len(s):
+        out = "everything failing: check YOUR network/DNS first, then Microsoft"
+    elif s.get("auth") not in ("up", "blocked", None):
+        out = "authentication degraded: sign-in dependent services will fail (Aug 31 pattern)"
+    else:
+        out = "partial outage: " + _names(bad)
+    if blocked:
+        out += (" | " if out else "") + "BLOCKED by your proxy/firewall (not a Microsoft outage): " + _names(blocked)
+    if unconf:
+        out += f" | {len(unconf)} not set up ({NEEDS_TENANT})"
+    return out
 
 
 def notify(webhook, text):
@@ -491,19 +581,19 @@ def notify(webhook, text):
     return None
 
 
-def manual_test(targets, only=None, timeout=10.0, monitor=None):
+def manual_test(targets, only=None, timeout=10.0, monitor=None, unconfigured=()):
     """One manual probe round for admins. Pure dry run: reads the monitor's baseline but
     changes nothing (no monitor history, freeze file, hook, webhook or log).
     `only` limits it to known target NAMES; unknown names raise ValueError.
     A manual test is a single probe, so a failure is reported as `down` without the
     two-in-a-row confirmation the continuous mode uses."""
-    from concurrent.futures import ThreadPoolExecutor
     names = list(targets) if not only else list(dict.fromkeys(only))
     unknown = [n for n in names if n not in targets]
     if unknown:
         raise ValueError("unknown service: " + ", ".join(sorted(map(str, unknown))))
-    with ThreadPoolExecutor(max_workers=min(16, len(names) or 1)) as ex:
-        raw = list(ex.map(lambda n: probe(n, targets[n][0], targets[n][1], timeout=timeout), names))
+    raw = probe_all({n: targets[n] for n in names}, timeout)
+    if not only:
+        raw += unconfigured_results(unconfigured)
     rows, state = [], {}
     for r in raw:
         base = monitor.baseline(r["name"]) if monitor else None
@@ -512,6 +602,8 @@ def manual_test(targets, only=None, timeout=10.0, monitor=None):
         state[r["name"]] = st
         rows.append({"name": r["name"], "state": st, "code": r["code"], "ms": r["ms"],
                      "error": r["error"], "baseline": base})
+        if r.get("info"):
+            rows[-1]["info"] = r["info"]
     verdict = diagnose(raw)
     hit = impact(state)
     if hit:
@@ -519,16 +611,18 @@ def manual_test(targets, only=None, timeout=10.0, monitor=None):
     level = Automation.target_level(state)
     return {"kind": "manual-test", "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "partial": len(names) < len(targets), "results": rows, "verdict": verdict,
+            "probed": len(names), "unconfigured": sum(1 for r in rows if r["state"] == "unconfigured"),
             "level_would_set": level, "healthy": level == "ok", "applied": False}
 
 
 def format_test(t):
     lines = [f"MANUAL TEST  {t['ts']}  ({'selected services only' if t['partial'] else 'all services'})", "",
-             f"{'service':<20}{'state':<9}{'http':<6}{'ms':>7}  {'baseline':>9}  error"]
+             f"{'service':<22}{'state':<13}{'http':<6}{'ms':>7}  {'baseline':>9}  error"]
     for r in t["results"]:
         base = f"{r['baseline']} ms" if r["baseline"] is not None else "unknown"
-        lines.append(f"{r['name']:<20}{r['state']:<9}{r['code']!s:<6}{r['ms']:>7}  {base:>9}  {r['error'] or '-'}")
-    lines += ["", f"verdict: {t['verdict']}", f"freeze level this would set: {t['level_would_set']}",
+        lines.append(f"{r['name']:<22}{r['state']:<13}{r['code']!s:<6}{r['ms']:>7}  {base:>9}  {r['error'] or '-'}")
+    lines += ["", f"{t.get('probed', len(t['results']))} probed" + (f", {t['unconfigured']} need a tenant name ({NEEDS_TENANT})" if t.get("unconfigured") else ""),
+              f"verdict: {t['verdict']}", f"freeze level this would set: {t['level_would_set']}",
               "applied: freeze file / hook / webhook updated" if t["applied"] else
               "dry run: freeze file, hooks, webhook and log NOT touched (use --apply to act on it)"]
     if any(r["state"] == "blocked" for r in t["results"]):
@@ -601,6 +695,8 @@ def load_config(path):
     labels = c.get("public_labels", {})
     if not (isinstance(labels, dict) and all(isinstance(k, str) and isinstance(v, str) and len(v) <= 60 for k, v in labels.items())):
         raise ValueError('public_labels must be {"service": "label shown to staff"}')
+    if "workers" in c and not (type(c["workers"]) is int and 1 <= c["workers"] <= 64):
+        raise ValueError("workers must be an integer 1..64")
     if "retention_days" in c and not (type(c["retention_days"]) is int and 1 <= c["retention_days"] <= 3650):
         raise ValueError("retention_days must be an integer 1..3650")
     if "label" in c and not (isinstance(c["label"], str) and 0 < len(c["label"]) <= 60 and c["label"].isprintable()):
@@ -618,7 +714,7 @@ def run_cycle(targets, prev, log_path=None, webhook=None, timeout=10.0, monitor=
     extras (all optional): {"alerts": AlertManager, "maintenance": windows, "db": sqlite conn,
     "retention_days": n, "health": ServiceHealth, "heartbeat_env": name}"""
     x = extras or {}
-    results = [probe(n, u, c, timeout=timeout) for n, (u, c) in targets.items()]
+    results = probe_all(targets, timeout, x.get("workers", 40)) + unconfigured_results(x.get("unconfigured", ()))
     now_dt = datetime.now(timezone.utc)
     now = now_dt.isoformat(timespec="seconds")
     verdict = diagnose(results)
@@ -668,7 +764,7 @@ def run_cycle(targets, prev, log_path=None, webhook=None, timeout=10.0, monitor=
     if x.get("db") is not None:
         try:
             import store
-            store.add_round(x["db"], now, results, state, maint_on)
+            store.add_round(x["db"], now, [r for r in results if r["state"] != "unconfigured"], state, maint_on)
             x["_rounds"] = x.get("_rounds", 0) + 1
             if x["_rounds"] % 50 == 1:
                 store.purge(x["db"], x.get("retention_days", 90))
@@ -687,7 +783,7 @@ def main(argv=None):
     p.add_argument("--interval", type=int, default=60)
     p.add_argument("--timeout", type=float, default=10.0)
     p.add_argument("--log", default="outagewatch.jsonl")
-    p.add_argument("--tenant", help="tenant name, adds SharePoint/OneDrive probes (contoso -> contoso.sharepoint.com)")
+    p.add_argument("--tenant", help="tenant short name for the SharePoint/OneDrive probes (contoso -> contoso.sharepoint.com)")
     p.add_argument("--freeze-file", help="write ok/caution/freeze state here for pipelines to check")
     p.add_argument("--on-change", help="command run on level change; sees OUTAGEWATCH_LEVEL / OUTAGEWATCH_SERVICES")
     p.add_argument("--check-freeze", metavar="FILE", help="pipeline gate: exit 1 if FILE says freeze, then quit")
@@ -727,7 +823,7 @@ def main(argv=None):
             return 2
     import alerts
     astate = alerts.AlertState(a.alert_state or cfg.get("alert_state") or "outagewatch-alerts.json")
-    mgr = alerts.AlertManager(cfg["alerts"], astate, legacy_webhook=a.webhook) if cfg.get("alerts") else None
+    mgr = alerts.AlertManager(cfg["alerts"], astate, legacy_webhook=a.webhook, families=FAMILY_OF) if cfg.get("alerts") else None
     if a.ack:
         print("incident acknowledged; escalation stopped" if astate.ack("cli") else "no open, unacknowledged incident")
         return 0
@@ -780,13 +876,20 @@ def main(argv=None):
     targets.update(cfg.get("targets", {}))
     if a.interval == 60 and "interval" in cfg:
         a.interval = cfg["interval"]
-    if a.tenant:
-        targets.update(tenant_targets(a.tenant))
+    tenant = a.tenant.strip().lower() if a.tenant else None
+    if tenant:
+        try:
+            targets.update(tenant_targets(tenant))
+        except ValueError as e:
+            print(f"--tenant: {e}", file=sys.stderr)
+            return 2
+    unconfigured = [n for n in TENANT_SERVICES if n not in targets and not cfg.get("replace_defaults")]
+    extras.update(unconfigured=unconfigured, workers=cfg.get("workers", 40))
     mon = Monitor(confirm=cfg.get("confirm", 2), factor=cfg.get("factor", 3.0),
                   floor_ms=cfg.get("floor_ms", 800))
     if a.test:
         try:
-            t = manual_test(targets, a.only, a.timeout)
+            t = manual_test(targets, a.only, a.timeout, unconfigured=unconfigured)
         except ValueError as e:
             print(f"{e} (known: {', '.join(sorted(targets))})", file=sys.stderr)
             return 2
@@ -812,7 +915,7 @@ def main(argv=None):
         if a.admin_token:
             print("warning: --admin-token is visible in the process list; prefer env OUTAGEWATCH_ADMIN_TOKEN", file=sys.stderr)
         admin = {"token": token, "targets": lambda: list(targets),
-                 "run_test": lambda only: manual_test(targets, only, a.timeout, mon),
+                 "run_test": lambda only: manual_test(targets, only, a.timeout, mon, unconfigured),
                  "test_alert": do_test_alert,
                  "ack": (lambda: {"acked": astate.ack("dashboard")}) if mgr else None,
                  "snooze": (lambda svc, minutes: astate.snooze(svc, minutes) or {"service": svc, "minutes": minutes}) if mgr else None,
@@ -820,6 +923,7 @@ def main(argv=None):
         snap = Snapshot(dependency_edges(), a.interval, cfg.get("roles") or DEFAULT_ROLES, drills,
                         cfg.get("public_labels"), warnings)
         snap.label = cfg.get("label", "")
+        snap.families = FAMILIES
         snap.alerts_fn = mgr.public if mgr else None
         access = {"viewer_token": os.environ.get("OUTAGEWATCH_VIEWER_TOKEN") or None, "trusted_proxy": a.trust_proxy,
                   "proxy_header": a.proxy_user_header, "public_status": a.public_status}
@@ -834,11 +938,13 @@ def main(argv=None):
     while True:
         results, prev_new = run_cycle(targets, prev, a.log, a.webhook, a.timeout, mon, auto, snap, extras)
         for r in results:
-            print(f"{r['name']:<16}{prev_new[r['name']]:<9}{r['code']!s:<6}{r['ms']}ms {r['error'] or ''}")
+            print(f"{r['name']:<22}{prev_new[r['name']]:<13}{r['code']!s:<6}{r['ms']}ms {r['error'] or ''}")
+        if unconfigured:
+            print(f"{len(targets)} probed, {len(unconfigured)} need a tenant name ({NEEDS_TENANT})")
         print("verdict:", diagnose(results))
         prev = prev_new
         if a.once:
-            return 0 if all(r["state"] == "up" for r in results) else 1
+            return 0 if all(r["state"] in ("up", "unconfigured") for r in results) else 1
         time.sleep(a.interval)
 
 

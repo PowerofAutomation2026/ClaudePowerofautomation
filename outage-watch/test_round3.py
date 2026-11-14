@@ -476,11 +476,11 @@ class Access(unittest.TestCase):
         self.assertEqual(self.req("/status.json")[0], 401)                                 # the real data still needs login
 
     def test_role_view_logic(self):
-        R = {"Mail": ["auth", "exchange"], "Files": ["sharepoint"], "Other": ["nope"]}
+        R = {"Mail": ["auth", "exchange"], "Files": ["sharepoint-online"], "Other": ["nope"]}
         v = lambda st: {t["name"]: t["status"] for t in ow.role_view(st, R)}
-        self.assertEqual(v({"auth": "up", "exchange": "up", "sharepoint": "blocked"}), {"Mail": "ok", "Files": "unknown", "Other": "unmonitored"})
-        self.assertEqual(v({"auth": "down", "exchange": "up", "sharepoint": "up"}), {"Mail": "down", "Files": "down", "Other": "unmonitored"})   # via sign-in
-        self.assertEqual(v({"auth": "up", "exchange": "warning", "sharepoint": "up"})["Mail"], "shaky")
+        self.assertEqual(v({"auth": "up", "exchange": "up", "sharepoint-online": "blocked"}), {"Mail": "ok", "Files": "unknown", "Other": "unmonitored"})
+        self.assertEqual(v({"auth": "down", "exchange": "up", "sharepoint-online": "up"}), {"Mail": "down", "Files": "down", "Other": "unmonitored"})   # via sign-in
+        self.assertEqual(v({"auth": "up", "exchange": "warning", "sharepoint-online": "up"})["Mail"], "shaky")
         self.assertNotIn("exchange", json.dumps(ow.role_view({"auth": "up", "exchange": "down"}, R)))
 
     def test_ack_and_snooze_api(self):

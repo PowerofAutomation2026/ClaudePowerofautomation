@@ -48,7 +48,8 @@ def import_jsonl(db, path):
             try:
                 r = json.loads(line)
                 add = [(_epoch(r["ts"]), x["name"], (r.get("published") or {}).get(x["name"], x["state"]),
-                        int(x["ms"]), int(x["name"] in (r.get("maintenance") or []))) for x in r["results"]]
+                        int(x["ms"]), int(x["name"] in (r.get("maintenance") or []))) for x in r["results"]
+                       if x["state"] != "unconfigured"]
             except (ValueError, KeyError, TypeError):
                 continue
             db.executemany("INSERT INTO samples VALUES (?,?,?,?,?)", add)

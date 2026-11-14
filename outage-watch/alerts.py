@@ -108,19 +108,33 @@ def independence_warnings(cfg, legacy_webhook=None):
     return out
 
 
-def format_message(kind, level, state, at_risk=(), base_url=None, now="", extra=""):
+def format_message(kind, level, state, at_risk=(), base_url=None, now="", extra="", families=None):
     """Short, factual text. kind: opened | raised | reminder | escalation | resolved | test."""
     head = {"opened": f"{level.upper()}: new incident", "raised": f"{level.upper()}: incident got worse",
             "reminder": f"{level.upper()}: still open, not acknowledged",
             "escalation": f"{level.upper()}: ESCALATION, nobody acknowledged",
             "resolved": "RESOLVED: all probes healthy again", "test": "TEST: this is a test alert"}[kind]
     lines = [f"[outage-watch] {head} ({now})"]
-    bad = sorted(f"{n} {s}" for n, s in state.items() if s not in ("up", "blocked"))
-    blocked = sorted(n for n, s in state.items() if s == "blocked")
+    bad = sorted(f"{n} {s}" for n, s in state.items() if s not in ("up", "blocked", "unconfigured"))
+    if len(bad) > 6:                                   # many services: summarise by family, keep it short
+        groups = {}
+        for n, s in state.items():
+            if s not in ("up", "blocked", "unconfigured"):
+                g = groups.setdefault((families or {}).get(n, "Other"), {})
+                g[s] = g.get(s, 0) + 1
+        bad = [f"{len(bad)} services in {len(groups)} families"] + sorted(
+            f"{fam}: " + " + ".join(f"{c} {s}" for s, c in sorted(g.items())) for fam, g in groups.items())
+        if state.get("auth") in ("down", "suspect", "warning"):
+            bad.insert(1, "sign-in (auth) " + state["auth"])
+    at_risk = sorted(at_risk)
+    if len(at_risk) > 8:
+        at_risk = [f"{len(at_risk)} services, including {', '.join(at_risk[:4])}"]
+    if len(blocked := sorted(n for n, s in state.items() if s == "blocked")) > 8:
+        blocked = [f"{len(blocked)} services"]
     if kind != "resolved" and kind != "test":
         lines.append("Probes saw: " + (", ".join(bad) if bad else "no failing probe right now (level is held until it has been stable)"))
         if at_risk:
-            lines.append("At risk (depend on a failing service): " + ", ".join(sorted(at_risk)))
+            lines.append("At risk (depend on a failing service): " + ", ".join(at_risk))
     if blocked:
         lines.append("Could not check (blocked by our own proxy/firewall): " + ", ".join(blocked))
     if extra:
@@ -272,8 +286,8 @@ class AlertState:
 class AlertManager:
     """Routing + escalation. Call step() once per probe round."""
 
-    def __init__(self, cfg, state, sender=send, legacy_webhook=None):
-        self.cfg, self.state, self.sender = cfg or {}, state, sender
+    def __init__(self, cfg, state, sender=send, legacy_webhook=None, families=None):
+        self.cfg, self.state, self.sender, self.families = cfg or {}, state, sender, families
         self.channels = dict(self.cfg.get("channels", {}))
         if legacy_webhook:                                   # --webhook keeps working: routed to everything
             self.channels["--webhook"] = {"type": "webhook", "url_env": None, "_url": legacy_webhook}
@@ -317,8 +331,8 @@ class AlertManager:
             d["snooze"] = {k: v for k, v in d["snooze"].items() if v > now}
             quiet = set(d["snooze"]) | set(muted)
             vis = {n: s for n, s in state.items() if n not in quiet}
-            bad = [n for n, s in vis.items() if s not in ("up", "blocked")]
-            hidden_bad = [n for n, s in state.items() if n in quiet and s not in ("up", "blocked")]
+            bad = [n for n, s in vis.items() if s not in ("up", "blocked", "unconfigured")]
+            hidden_bad = [n for n, s in state.items() if n in quiet and s not in ("up", "blocked", "unconfigured")]
             eff = level
             if not bad and hidden_bad:
                 eff = "ok"                                   # everything unhealthy is snoozed / in maintenance
@@ -328,7 +342,7 @@ class AlertManager:
             risk = [n for n in at_risk if n not in quiet]
 
             def msg(kind, lvl, extra=""):
-                return format_message(kind, lvl, vis, risk, base, now_iso, extra)
+                return format_message(kind, lvl, vis, risk, base, now_iso, extra, self.families)
 
             if inc is None and eff != "ok":
                 inc = d["incident"] = {"id": int(now), "opened": now, "opened_iso": now_iso, "level": eff,

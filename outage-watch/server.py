@@ -12,7 +12,7 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
-STATE_NUM = {"up": 0, "warning": 1, "suspect": 2, "down": 3, "blocked": 4}
+STATE_NUM = {"up": 0, "warning": 1, "suspect": 2, "down": 3, "blocked": 4, "unconfigured": 5}
 LEVEL_NUM = {"ok": 0, "caution": 1, "freeze": 2}
 MAX_BODY = 4096    # bytes accepted by the admin POST endpoints
 MIN_GAP = 5.0      # seconds between manual runs (per endpoint)
@@ -54,6 +54,7 @@ class Snapshot:
         self._static = {"roles": [[k, list(v)] for k, v in (roles or {}).items()], "drills": drills}
         self._roles, self._labels, self._warnings = roles or {}, labels or {}, list(warnings)
         self.label = ""
+        self.families = []                  # [[family, [service, ...]], ...] for the map clusters
         self.alerts_fn = None               # live view of ack / snooze state, so the page updates at once
         self.sla, self.auth = None, False   # sla: filled from the SQLite store; auth: viewer login in force
         self.public = {"updated": None, "tasks": [], "interval": interval}   # for the staff status page
@@ -98,7 +99,7 @@ class Snapshot:
                 except Exception:
                     pass
             if history:
-                d.update(self._static, history=list(self._hist))
+                d.update(self._static, history=list(self._hist), families=[[f, list(n)] for f, n in self.families])
             return json.loads(json.dumps(d))
 
 
@@ -108,7 +109,7 @@ def _label(v):
 
 def metrics_text(d):
     out = ["# TYPE outagewatch_service_state gauge",
-           "# HELP outagewatch_service_state 0=up 1=warning 2=suspect 3=down"]
+           "# HELP outagewatch_service_state 0=up 1=warning 2=suspect 3=down 4=blocked 5=unconfigured (needs tenant name)"]
     for n, s in sorted(d["services"].items()):
         out.append(f'outagewatch_service_state{{service="{_label(n)}"}} {STATE_NUM.get(s["state"], 3)}')
     out.append("# TYPE outagewatch_latency_ms gauge")
@@ -118,6 +119,8 @@ def metrics_text(d):
     out.append("# HELP outagewatch_stress_score 0-100 heuristic: latency drift, jitter, recent failed probes")
     for n, s in sorted(d["services"].items()):
         out.append(f'outagewatch_stress_score{{service="{_label(n)}"}} {s.get("stress", 0)}')
+    out += ["# TYPE outagewatch_unconfigured_services gauge",
+            f'outagewatch_unconfigured_services {sum(1 for v in d["services"].values() if v["state"] == "unconfigured")}']
     if d.get("label"):
         out += ["# TYPE outagewatch_info gauge", f'outagewatch_info{{deployment="{_label(d["label"])}"}} 1']
     out += ["# TYPE outagewatch_level gauge", f'outagewatch_level {LEVEL_NUM.get(d["level"], 2)}']

@@ -53,8 +53,8 @@
         {"t": 4, "service": "teams", "effect": "fail"},
         {"t": 6, "service": "m365-portal", "effect": "fail"},
         {"t": 8, "service": "graph", "effect": "slow", "add_ms": 2000},
-        {"t": 10, "service": "sharepoint", "effect": "fail"},
-        {"t": 10, "service": "onedrive", "effect": "fail"}
+        {"t": 10, "service": "sharepoint-online", "effect": "fail"},
+        {"t": 10, "service": "onedrive-business", "effect": "fail"}
       ],
       "checklist": [
         {"title": "Compare from a second network", "detail": "Run 'python3 outagewatch.py --test' from another site or a phone hotspot before telling anyone the provider is down.", "owner": "Network engineer"}
