@@ -24,5 +24,8 @@ python3 -m unittest -v                             # tests
 ```
 A 401/403/redirect counts as alive (the service answered). 5xx, 429, timeouts and DNS/TLS errors count as down.
 
+## Also covers
+Copilot services plus automated freeze/caution levels. See PREVENTION.md.
+
 ## Not yet done
 Authenticated mail send/receive round-trip, multi-region probes, Microsoft Service Health API comparison.

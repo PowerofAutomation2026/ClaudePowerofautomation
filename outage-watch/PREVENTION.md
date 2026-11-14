@@ -27,3 +27,26 @@ These are preliminary attributions, not final reports.
 2. Switch to the out-of-band channel.
 3. Don't change tenant config while the provider is degraded.
 4. Save the timeline.
+
+## Automated early prevention (built in)
+Run continuously with a flag file and an optional hook:
+```bash
+python3 outagewatch.py --tenant contoso --freeze-file /var/run/m365-freeze.json \
+  --on-change './pause-deployments.sh' --webhook "$NON_M365_WEBHOOK"
+```
+| Level | Trigger | Meaning |
+|---|---|---|
+| `ok` | all up | normal |
+| `caution` | any `warning` / `suspect` | advisory: watch, avoid risky changes |
+| `freeze` | any `down`, or sign-in `suspect` | block tenant/CA/licensing changes and deployments |
+
+Escalation is immediate. Recovery needs 3 clean rounds in a row, so a flapping service doesn't unfreeze early.
+The hook gets `OUTAGEWATCH_LEVEL` and `OUTAGEWATCH_SERVICES` env vars.
+
+Pipeline gate (exit 1 blocks; a missing file means safe, a corrupt file blocks):
+```yaml
+- script: python3 outagewatch.py --check-freeze /var/run/m365-freeze.json
+  displayName: Block deploy during M365 incident
+```
+Copilot services (M365 Copilot, Copilot Studio, Copilot web, GitHub Copilot) are probed too.
+If Copilot is unhealthy, the verdict names the mail/files/chat services under it that are also unhealthy.

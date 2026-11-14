@@ -112,5 +112,71 @@ class MonitorTests(unittest.TestCase):
             srv.shutdown(); srv.server_close()
 
 
+class AutomationTests(unittest.TestCase):
+    def mk(self, **kw):
+        self.path = os.path.join(tempfile.mkdtemp(), "freeze.json")
+        return ow.Automation(self.path, **kw)
+
+    def read(self): return json.load(open(self.path))
+
+    def test_levels(self):
+        a = ow.Automation
+        self.assertEqual(a.target_level({"x": "up"}), "ok")
+        self.assertEqual(a.target_level({"x": "warning"}), "caution")
+        self.assertEqual(a.target_level({"x": "suspect"}), "caution")
+        self.assertEqual(a.target_level({"x": "down"}), "freeze")
+        self.assertEqual(a.target_level({"auth": "suspect"}), "freeze")
+
+    def test_escalates_immediately_recovers_slowly(self):
+        a = self.mk(recover_after=3)
+        self.assertEqual(a.step({"x": "down"}), "freeze")
+        self.assertEqual(self.read()["services"], ["x"])
+        self.assertIsNone(a.step({"x": "up"})); self.assertEqual(a.level, "freeze")
+        self.assertIsNone(a.step({"x": "up"})); self.assertEqual(a.level, "freeze")
+        self.assertEqual(a.step({"x": "up"}), "ok")
+        self.assertEqual(self.read()["level"], "ok")
+
+    def test_flap_resets_recovery(self):
+        a = self.mk(recover_after=3)
+        a.step({"x": "down"}); a.step({"x": "up"}); a.step({"x": "up"})
+        a.step({"x": "down"})                      # flap
+        a.step({"x": "up"}); a.step({"x": "up"})
+        self.assertEqual(a.level, "freeze")        # clean streak restarted
+
+    def test_hook_runs_with_env(self):
+        out = os.path.join(tempfile.mkdtemp(), "h.txt")
+        a = self.mk(on_change=f"sh -c 'echo $OUTAGEWATCH_LEVEL:$OUTAGEWATCH_SERVICES > {out}'")
+        a.step({"m365-copilot": "down", "teams": "up"})
+        self.assertEqual(open(out).read().strip(), "freeze:m365-copilot")
+
+    def test_hook_only_on_change(self):
+        out = os.path.join(tempfile.mkdtemp(), "h.txt")
+        a = self.mk(on_change=f"sh -c 'echo x >> {out}'")
+        a.step({"a": "down"}); a.step({"a": "down"}); a.step({"a": "down"})
+        self.assertEqual(len(open(out).read().split()), 1)
+
+    def test_bad_hook_does_not_crash(self):
+        a = self.mk(on_change="/nonexistent/cmd")
+        self.assertEqual(a.step({"a": "down"}), "freeze")
+
+    def test_check_freeze_gate(self):
+        a = self.mk(); a.step({"a": "down"})
+        self.assertEqual(ow.check_freeze(self.path), 1)
+        a2 = self.mk(); a2.step({"a": "warning"})
+        self.assertEqual(ow.check_freeze(self.path), 0)          # caution doesn't block
+        self.assertEqual(ow.check_freeze(self.path, "caution"), 1)
+        self.assertEqual(ow.check_freeze("/no/such/file"), 0)    # no file = safe
+        open(self.path, "w").write("{broken")
+        self.assertEqual(ow.check_freeze(self.path), 1)          # corrupt = fail closed
+
+    def test_copilot_catalog_and_note(self):
+        for n in ("m365-copilot", "copilot-studio", "github-copilot", "copilot-web"):
+            self.assertIn(n, ow.DEFAULT_TARGETS)
+        self.assertIn("m365-copilot", ow.DEPENDS_ON_AUTH)
+        note = ow.copilot_note({"m365-copilot": "down", "exchange": "down", "teams": "up"})
+        self.assertIn("exchange", note)
+        self.assertEqual(ow.copilot_note({"m365-copilot": "up", "exchange": "down"}), "")
+
+
 if __name__ == "__main__":
     unittest.main()

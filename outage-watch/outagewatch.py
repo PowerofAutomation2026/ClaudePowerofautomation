@@ -34,12 +34,22 @@ DEFAULT_TARGETS = {
     "graph": ("https://graph.microsoft.com/v1.0/$metadata", {200, 401, 403}),
     "power-platform": ("https://api.powerapps.com/", None),
     "intune": ("https://enrollment.manage.microsoft.com/", None),
+    # --- Copilot ---
+    "m365-copilot": ("https://m365.cloud.microsoft/chat", None),
+    "copilot-substrate": ("https://substrate.office.com/", None),
+    "copilot-studio": ("https://copilotstudio.microsoft.com/", None),
+    "copilot-web": ("https://copilot.microsoft.com/", None),
+    "github-copilot": ("https://api.githubcopilot.com/", None),
     "office-cdn": ("https://res.cdn.office.net/", None),
 }
 
 # Services that cannot work for signed-in users when "auth" is down.
 DEPENDS_ON_AUTH = {"exchange", "outlook-web", "teams", "m365-portal", "admin-center",
-                   "graph", "power-platform", "intune", "sharepoint", "onedrive"}
+                   "graph", "power-platform", "intune", "sharepoint", "onedrive",
+                   "m365-copilot", "copilot-substrate", "copilot-studio"}
+
+# Copilot also needs the data services it reads from (mail, files, chats).
+COPILOT_NEEDS = {"exchange", "teams", "sharepoint", "onedrive", "graph", "copilot-substrate"}
 
 
 def tenant_targets(tenant):
@@ -122,6 +132,92 @@ class Monitor:
         return dict(self.state)
 
 
+LEVELS = {"ok": 0, "caution": 1, "freeze": 2}
+
+
+class Automation:
+    """Automated early prevention.
+
+    caution - something is warning/suspect: advisory, pipelines may still run
+    freeze  - a service is confirmed down (or auth is suspect): block risky changes
+    Recovery needs `recover_after` clean rounds in a row (avoids flapping).
+    On every level change it writes a flag file that pipelines can check, and runs
+    optional hook commands (so you can pause deployments, switch to a fallback, etc.).
+    """
+
+    def __init__(self, freeze_file=None, on_change=None, recover_after=3):
+        self.freeze_file, self.on_change = freeze_file, on_change
+        self.recover_after, self.level, self.clean = recover_after, "ok", 0
+
+    @staticmethod
+    def target_level(state):
+        v = set(state.values())
+        if "down" in v or state.get("auth") == "suspect":
+            return "freeze"
+        if v & {"suspect", "warning"}:
+            return "caution"
+        return "ok"
+
+    def step(self, state, now=None):
+        want = self.target_level(state)
+        if LEVELS[want] > LEVELS[self.level]:
+            new, self.clean = want, 0            # escalate at once
+        elif LEVELS[want] < LEVELS[self.level]:
+            self.clean += 1                       # de-escalate slowly
+            new = want if self.clean >= self.recover_after else self.level
+            if new != self.level:
+                self.clean = 0
+        else:
+            self.clean, new = 0, self.level
+        affected = sorted(n for n, v in state.items() if v != "up")
+        changed = new != self.level
+        self.level = new
+        if self.freeze_file:
+            self._write(affected, now)
+        if changed and self.on_change:
+            self._hook(new, affected)
+        return new if changed else None
+
+    def _write(self, affected, now):
+        import os, tempfile
+        doc = {"level": self.level, "services": affected,
+               "updated": now or datetime.now(timezone.utc).isoformat(timespec="seconds")}
+        d = os.path.dirname(os.path.abspath(self.freeze_file))
+        fd, tmp = tempfile.mkstemp(dir=d)
+        with os.fdopen(fd, "w") as f:
+            json.dump(doc, f)
+        os.replace(tmp, self.freeze_file)         # atomic: readers never see a half file
+
+    def _hook(self, level, affected):
+        import os, shlex, subprocess
+        env = dict(os.environ, OUTAGEWATCH_LEVEL=level, OUTAGEWATCH_SERVICES=",".join(affected))
+        try:
+            subprocess.run(shlex.split(self.on_change), env=env, timeout=30, check=False)
+        except Exception as e:
+            print(f"hook failed: {type(e).__name__}", file=sys.stderr)
+
+
+def check_freeze(path, block_on="freeze"):
+    """For pipelines: 0 = safe to proceed, 1 = blocked. A missing file means safe;
+    an unreadable/corrupt file blocks (fail closed)."""
+    import os
+    if not os.path.exists(path):
+        return 0
+    try:
+        level = json.load(open(path))["level"]
+    except Exception:
+        return 1
+    return 1 if LEVELS.get(level, 2) >= LEVELS[block_on] else 0
+
+
+def copilot_note(state):
+    """Explain Copilot problems that are really caused by something underneath."""
+    if state.get("m365-copilot", "up") == "up":
+        return ""
+    under = sorted(n for n in COPILOT_NEEDS if state.get(n, "up") != "up")
+    return "Copilot affected; underlying services also unhealthy: " + ", ".join(under) if under else ""
+
+
 def impact(state):
     """Which downstream services are at risk, given published states."""
     if state.get("auth") in ("down", "suspect"):
@@ -151,7 +247,7 @@ def notify(webhook, text):
         print(f"webhook failed: {type(e).__name__}", file=sys.stderr)
 
 
-def run_cycle(targets, prev, log_path=None, webhook=None, timeout=10.0, monitor=None):
+def run_cycle(targets, prev, log_path=None, webhook=None, timeout=10.0, monitor=None, automation=None):
     """One probe round. Returns (results, new_state_map). Alerts only on change."""
     results = [probe(n, u, c, timeout=timeout) for n, (u, c) in targets.items()]
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -160,6 +256,13 @@ def run_cycle(targets, prev, log_path=None, webhook=None, timeout=10.0, monitor=
     hit = impact(state)
     if hit:
         verdict += " | at risk: " + ", ".join(hit)
+    note = copilot_note(state)
+    if note:
+        verdict += " | " + note
+    if automation:
+        lvl = automation.step(state, now)
+        if lvl:
+            verdict += f" | LEVEL -> {lvl}"
     if log_path:
         with open(log_path, "a") as f:
             f.write(json.dumps({"ts": now, "verdict": verdict, "published": state, "results": results}) + "\n")
@@ -175,14 +278,20 @@ def main(argv=None):
     p.add_argument("--timeout", type=float, default=10.0)
     p.add_argument("--log", default="outagewatch.jsonl")
     p.add_argument("--tenant", help="tenant name, adds SharePoint/OneDrive probes (contoso -> contoso.sharepoint.com)")
+    p.add_argument("--freeze-file", help="write ok/caution/freeze state here for pipelines to check")
+    p.add_argument("--on-change", help="command run on level change; sees OUTAGEWATCH_LEVEL / OUTAGEWATCH_SERVICES")
+    p.add_argument("--check-freeze", metavar="FILE", help="pipeline gate: exit 1 if FILE says freeze, then quit")
     p.add_argument("--webhook", help="Teams/Slack-style incoming webhook (use one NOT hosted on M365)")
     a = p.parse_args(argv)
+    if a.check_freeze:
+        return check_freeze(a.check_freeze)
+    auto = Automation(a.freeze_file, a.on_change) if (a.freeze_file or a.on_change) else None
     targets = dict(DEFAULT_TARGETS)
     if a.tenant:
         targets.update(tenant_targets(a.tenant))
     mon, prev = Monitor(), None
     while True:
-        results, prev_new = run_cycle(targets, prev, a.log, a.webhook, a.timeout, mon)
+        results, prev_new = run_cycle(targets, prev, a.log, a.webhook, a.timeout, mon, auto)
         for r in results:
             print(f"{r['name']:<16}{prev_new[r['name']]:<9}{r['code']!s:<6}{r['ms']}ms {r['error'] or ''}")
         print("verdict:", diagnose(results))
