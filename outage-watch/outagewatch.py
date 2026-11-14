@@ -247,7 +247,31 @@ def notify(webhook, text):
         print(f"webhook failed: {type(e).__name__}", file=sys.stderr)
 
 
-def run_cycle(targets, prev, log_path=None, webhook=None, timeout=10.0, monitor=None, automation=None):
+def load_config(path):
+    """JSON config: {"targets": {"name": ["https://url", [200,401] | null]}, "interval": 60,
+    "confirm": 2, "recover_after": 3, "factor": 3.0, "floor_ms": 800, "replace_defaults": false}"""
+    with open(path) as f:
+        c = json.load(f)
+    if not isinstance(c, dict):
+        raise ValueError("config must be a JSON object")
+    targets = {}
+    for name, spec in (c.get("targets") or {}).items():
+        if not isinstance(spec, list) or len(spec) != 2:
+            raise ValueError(f"target {name!r}: expected [url, codes-or-null]")
+        url, codes = spec
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            raise ValueError(f"target {name!r}: url must start with http:// or https://")
+        if codes is not None and not (isinstance(codes, list) and all(isinstance(x, int) for x in codes)):
+            raise ValueError(f"target {name!r}: codes must be a list of ints or null")
+        targets[name] = (url, None if codes is None else set(codes))
+    for k, lo in (("interval", 5), ("confirm", 1), ("recover_after", 1)):
+        if k in c and (not isinstance(c[k], int) or c[k] < lo):
+            raise ValueError(f"{k} must be an integer >= {lo}")
+    c["targets"] = targets
+    return c
+
+
+def run_cycle(targets, prev, log_path=None, webhook=None, timeout=10.0, monitor=None, automation=None, snapshot=None):
     """One probe round. Returns (results, new_state_map). Alerts only on change."""
     results = [probe(n, u, c, timeout=timeout) for n, (u, c) in targets.items()]
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -263,6 +287,8 @@ def run_cycle(targets, prev, log_path=None, webhook=None, timeout=10.0, monitor=
         lvl = automation.step(state, now)
         if lvl:
             verdict += f" | LEVEL -> {lvl}"
+    if snapshot:
+        snapshot.update(now, automation.level if automation else "ok", verdict, results, state)
     if log_path:
         with open(log_path, "a") as f:
             f.write(json.dumps({"ts": now, "verdict": verdict, "published": state, "results": results}) + "\n")
@@ -281,17 +307,39 @@ def main(argv=None):
     p.add_argument("--freeze-file", help="write ok/caution/freeze state here for pipelines to check")
     p.add_argument("--on-change", help="command run on level change; sees OUTAGEWATCH_LEVEL / OUTAGEWATCH_SERVICES")
     p.add_argument("--check-freeze", metavar="FILE", help="pipeline gate: exit 1 if FILE says freeze, then quit")
+    p.add_argument("--config", help="JSON file: extra/replacement targets and thresholds")
+    p.add_argument("--serve", type=int, metavar="PORT", help="live dashboard, /status.json and /metrics on PORT")
+    p.add_argument("--bind", default="127.0.0.1", help="address for --serve (default localhost only)")
     p.add_argument("--webhook", help="Teams/Slack-style incoming webhook (use one NOT hosted on M365)")
     a = p.parse_args(argv)
     if a.check_freeze:
         return check_freeze(a.check_freeze)
-    auto = Automation(a.freeze_file, a.on_change) if (a.freeze_file or a.on_change) else None
-    targets = dict(DEFAULT_TARGETS)
+    cfg = {}
+    if a.config:
+        try:
+            cfg = load_config(a.config)
+        except (OSError, ValueError) as e:
+            print(f"bad config: {e}", file=sys.stderr)
+            return 2
+    auto = Automation(a.freeze_file, a.on_change, cfg.get("recover_after", 3)) \
+        if (a.freeze_file or a.on_change) else None
+    targets = {} if cfg.get("replace_defaults") else dict(DEFAULT_TARGETS)
+    targets.update(cfg.get("targets", {}))
+    if a.interval == 60 and "interval" in cfg:
+        a.interval = cfg["interval"]
+    snap = None
+    if a.serve:
+        from server import Snapshot, make_server
+        snap = Snapshot()
+        make_server(snap, a.serve, a.bind)
+        print(f"dashboard: http://{a.bind}:{a.serve}/  (metrics at /metrics)")
     if a.tenant:
         targets.update(tenant_targets(a.tenant))
-    mon, prev = Monitor(), None
+    mon = Monitor(confirm=cfg.get("confirm", 2), factor=cfg.get("factor", 3.0),
+                  floor_ms=cfg.get("floor_ms", 800))
+    prev = None
     while True:
-        results, prev_new = run_cycle(targets, prev, a.log, a.webhook, a.timeout, mon, auto)
+        results, prev_new = run_cycle(targets, prev, a.log, a.webhook, a.timeout, mon, auto, snap)
         for r in results:
             print(f"{r['name']:<16}{prev_new[r['name']]:<9}{r['code']!s:<6}{r['ms']}ms {r['error'] or ''}")
         print("verdict:", diagnose(results))

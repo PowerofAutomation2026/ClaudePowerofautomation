@@ -20,9 +20,21 @@ Lessons built in:
 ```bash
 python3 outagewatch.py --once                      # exit 0 healthy, 1 otherwise
 python3 outagewatch.py --interval 60 --webhook URL # continuous, alerts on change
-python3 -m unittest -v                             # tests
+python3 -W ignore -m unittest -v                    # 41 tests
 ```
 A 401/403/redirect counts as alive (the service answered). 5xx, 429, timeouts and DNS/TLS errors count as down.
+
+## Features
+| Feature | How |
+|---|---|
+| Live dashboard (dark mode, 5s refresh) | `--serve 8080` then open http://127.0.0.1:8080/ |
+| Prometheus metrics / JSON status | `/metrics`, `/status.json`, `/healthz` on the same port |
+| Config file (add your own services, tune thresholds) | `--config config.example.json` |
+| Incident report with early-warning lead time | `python3 report.py outagewatch.jsonl --md report.md` |
+| Freeze levels, hooks, pipeline gate | see PREVENTION.md |
+
+`--serve` listens on localhost only. `--bind 0.0.0.0` exposes it with no authentication,
+so put it behind a reverse proxy with auth first.
 
 ## Also covers
 Copilot services plus automated freeze/caution levels. See PREVENTION.md.

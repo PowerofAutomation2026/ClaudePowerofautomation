@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""Incident report from an outage-watch JSONL log (stdlib only).
+
+Turns the raw timeline into per-service incidents with duration, worst state and the
+EARLY-WARNING LEAD TIME: how long a `warning`/`suspect` preceded the confirmed `down`.
+Use it to compare against Microsoft's post-incident report or to back an SLA claim.
+Usage: python3 report.py outagewatch.jsonl [--md out.md]
+"""
+import argparse
+import json
+import sys
+from datetime import datetime
+
+RANK = {"up": 0, "warning": 1, "suspect": 2, "down": 3}
+
+
+def _t(s):
+    return datetime.fromisoformat(s)
+
+
+def load(path):
+    rows = []
+    with open(path) as f:
+        for i, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+                _t(r["ts"])
+                rows.append(r)
+            except (ValueError, KeyError):
+                print(f"skipping bad line {i}", file=sys.stderr)
+    return sorted(rows, key=lambda r: r["ts"])
+
+
+def incidents(rows):
+    """Per-service runs of non-up published state. Open runs end at the last sample."""
+    out, open_ = [], {}
+    for r in rows:
+        ts = r["ts"]
+        pub = r.get("published") or {x["name"]: x["state"] for x in r["results"]}
+        for name, st in pub.items():
+            cur = open_.get(name)
+            if st != "up":
+                if cur is None:
+                    cur = open_[name] = {"service": name, "start": ts, "worst": st,
+                                         "first_down": None, "ongoing": True}
+                if RANK[st] > RANK[cur["worst"]]:
+                    cur["worst"] = st
+                if st == "down" and cur["first_down"] is None:
+                    cur["first_down"] = ts
+            elif cur is not None:
+                cur["end"], cur["ongoing"] = ts, False
+                out.append(open_.pop(name))
+    last = rows[-1]["ts"] if rows else None
+    for cur in open_.values():
+        cur["end"] = last
+        out.append(cur)
+    for i in out:
+        i["duration_s"] = int((_t(i["end"]) - _t(i["start"])).total_seconds())
+        i["lead_s"] = (int((_t(i["first_down"]) - _t(i["start"])).total_seconds())
+                       if i["first_down"] else None)
+    return sorted(out, key=lambda i: i["start"])
+
+
+def markdown(rows, inc):
+    lines = ["# outage-watch incident report", ""]
+    if not rows:
+        return "\n".join(lines + ["No samples in log."]) + "\n"
+    lines += [f"Window: {rows[0]['ts']} to {rows[-1]['ts']} ({len(rows)} samples)", ""]
+    if not inc:
+        return "\n".join(lines + ["No incidents. All services stayed up."]) + "\n"
+    lines += ["| Service | Start (UTC) | Duration | Worst | Early-warning lead | Status |", "|---|---|---|---|---|---|"]
+    for i in inc:
+        lead = f"{i['lead_s']}s" if i["lead_s"] is not None else "n/a (never down)"
+        lines.append(f"| {i['service']} | {i['start']} | {i['duration_s']}s | {i['worst']} | {lead} | "
+                     f"{'ONGOING' if i['ongoing'] else 'resolved'} |")
+    downs = [i for i in inc if i["lead_s"] is not None]
+    if downs:
+        lines += ["", f"Confirmed outages: {len(downs)}. Median early-warning lead: "
+                      f"{sorted(i['lead_s'] for i in downs)[len(downs) // 2]}s."]
+    lines += ["", "Note: times are sample times, so durations are accurate to the probe interval."]
+    return "\n".join(lines) + "\n"
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    p.add_argument("log")
+    p.add_argument("--md", help="write report to this file instead of stdout")
+    a = p.parse_args(argv)
+    rows = load(a.log)
+    text = markdown(rows, incidents(rows))
+    if a.md:
+        open(a.md, "w").write(text)
+    else:
+        sys.stdout.write(text)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
