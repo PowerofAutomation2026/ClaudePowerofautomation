@@ -15,7 +15,10 @@ Usage:
   python3 outagewatch.py --interval 60 --webhook https://example/hook
 """
 import argparse
+import hashlib
 import json
+import os
+import re
 import sys
 import time
 import urllib.error
@@ -50,6 +53,133 @@ DEPENDS_ON_AUTH = {"exchange", "outlook-web", "teams", "m365-portal", "admin-cen
 
 # Copilot also needs the data services it reads from (mail, files, chats).
 COPILOT_NEEDS = {"exchange", "teams", "sharepoint", "onedrive", "graph", "copilot-substrate"}
+
+
+# "Can I do my job?" view: task -> services it needs (override with "roles" in --config).
+DEFAULT_ROLES = {
+    "Email & calendar": ["auth", "exchange", "outlook-web"],
+    "Meetings": ["auth", "teams"],
+    "Files & sharing": ["auth", "sharepoint", "onedrive"],
+    "Copilot assistance": ["auth", "m365-copilot", "copilot-substrate"],
+    "Admin tasks": ["auth", "admin-center", "graph"],
+    "Device management": ["auth", "intune"],
+    "Low-code apps": ["auth", "power-platform"],
+}
+
+
+def stress_score(samples, baseline, warn_ms):
+    """Transparent early-warning heuristic, 0-100. NOT a prediction and not machine learning.
+
+    samples: [(state, ms), ...] oldest first; only the last 10 rounds are used.
+      drift  D = how far the median of the last 3 answered probes sits between the learned
+                 baseline (0) and the warning threshold (1), clamped to 0..1
+      jitter J = mean absolute change between consecutive answered probes / baseline, clamped 0..1
+      fails  F = failed probes (suspect/down) in the last 5 rounds x 0.5, capped at 1
+      score    = round(100 x min(1, 0.5 D + 0.2 J + F))
+    Blocked probes are ignored. Without a baseline, D and J are 0.
+    """
+    win = list(samples)[-10:]
+    ok = [ms for st, ms in win if st in ("up", "warning")]
+    d = j = 0.0
+    if baseline and ok:
+        last = sorted(ok[-3:])
+        if warn_ms and warn_ms > baseline:
+            d = min(1.0, max(0.0, (last[len(last) // 2] - baseline) / (warn_ms - baseline)))
+        if len(ok) >= 3:
+            j = min(1.0, sum(abs(a - b) for a, b in zip(ok[1:], ok)) / (len(ok) - 1) / baseline)
+    f = min(1.0, 0.5 * sum(1 for st, _ in win[-5:] if st in ("down", "suspect")))
+    return int(100 * min(1.0, 0.5 * d + 0.2 * j + f) + 0.5)
+
+
+# ---- tamper-evident log: each record carries the hash of the previous one -------------
+GENESIS = "0" * 64
+
+
+def chain_hash(rec):
+    """sha256 over the record's canonical JSON (everything except its own "hash")."""
+    body = {k: v for k, v in rec.items() if k != "hash"}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def log_head(path):
+    """Hash the next record must point at: last record's hash, or sha256 of a legacy last line."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 262144))
+            lines = [l for l in f.read().split(b"\n") if l.strip()]
+    except OSError:
+        return GENESIS
+    if not lines:
+        return GENESIS
+    try:
+        h = json.loads(lines[-1]).get("hash")
+        if isinstance(h, str) and len(h) == 64:
+            return h
+    except (ValueError, AttributeError):
+        pass
+    return hashlib.sha256(lines[-1].strip()).hexdigest()
+
+
+def append_log(path, rec):
+    rec = dict(rec, prev=log_head(path))
+    rec["hash"] = chain_hash(rec)
+    with open(path, "a") as f:
+        f.write(json.dumps(rec) + "\n")
+    return rec["hash"]
+
+
+def _text(v, limit, what, required=True):
+    if v is None and not required:
+        return ""
+    if not isinstance(v, str) or not v.strip() or len(v) > limit:
+        raise ValueError(f"{what}: expected text of 1..{limit} characters")
+    return v
+
+
+def _checklist(items, what):
+    if not isinstance(items, list) or len(items) > 30:
+        raise ValueError(f"{what}: expected a list of at most 30 steps")
+    out = []
+    for i, it in enumerate(items):
+        if not isinstance(it, dict):
+            raise ValueError(f"{what}[{i}]: expected an object")
+        out.append({"title": _text(it.get("title"), 160, f"{what}[{i}].title"),
+                    "detail": _text(it.get("detail"), 400, f"{what}[{i}].detail", False),
+                    "owner": _text(it.get("owner"), 80, f"{what}[{i}].owner", False)})
+    return out
+
+
+def load_drills(path):
+    """Fire-drill scenarios + response checklists (see drills.example.json). Drills only ever
+    run in the dashboard's SIMULATION layer in the browser; nothing here probes or alerts."""
+    with open(path) as f:
+        c = json.load(f)
+    if not isinstance(c, dict) or not isinstance(c.get("drills"), list) or not 0 < len(c["drills"]) <= 20:
+        raise ValueError('drills file must be {"drills": [1..20 drills]}')
+    out = {"common_checklist": _checklist(c.get("common_checklist", []), "common_checklist"), "drills": []}
+    for i, d in enumerate(c["drills"]):
+        w = f"drills[{i}]"
+        if not isinstance(d, dict) or not isinstance(d.get("id"), str) or not re.fullmatch(r"[a-z0-9-]{1,40}", d["id"]):
+            raise ValueError(f"{w}.id: expected lowercase letters, digits, dashes")
+        script = d.get("script")
+        if not isinstance(script, list) or not 0 < len(script) <= 100:
+            raise ValueError(f"{w}.script: expected 1..100 events")
+        ev = []
+        for k, e in enumerate(script):
+            ok = (isinstance(e, dict) and isinstance(e.get("service"), str) and 0 < len(e["service"]) <= 64
+                  and e.get("effect") in ("slow", "fail", "heal")
+                  and type(e.get("t")) in (int, float) and 0 <= e["t"] <= 3600
+                  and type(e.get("add_ms", 0)) in (int, float) and 0 <= e.get("add_ms", 0) <= 20000)
+            if not ok:
+                raise ValueError(f'{w}.script[{k}]: need {{"t": 0..3600, "service": name, "effect": slow|fail|heal, "add_ms": 0..20000}}')
+            ev.append({"t": e["t"], "service": e["service"], "effect": e["effect"], "add_ms": e.get("add_ms", 1500)})
+        out["drills"].append({"id": d["id"], "title": _text(d.get("title"), 120, w + ".title"),
+                              "pattern": _text(d.get("pattern"), 300, w + ".pattern", False),
+                              "description": _text(d.get("description"), 600, w + ".description", False),
+                              "script": sorted(ev, key=lambda e: e["t"]),
+                              "checklist": _checklist(d.get("checklist", []), w + ".checklist")})
+    return out
 
 
 def dependency_edges():
@@ -193,7 +323,7 @@ class Automation:
         return new if changed else None
 
     def _write(self, affected, now):
-        import os, tempfile
+        import tempfile
         doc = {"level": self.level, "services": affected,
                "updated": now or datetime.now(timezone.utc).isoformat(timespec="seconds")}
         d = os.path.dirname(os.path.abspath(self.freeze_file))
@@ -203,7 +333,7 @@ class Automation:
         os.replace(tmp, self.freeze_file)         # atomic: readers never see a half file
 
     def _hook(self, level, affected):
-        import os, shlex, subprocess
+        import shlex, subprocess
         env = dict(os.environ, OUTAGEWATCH_LEVEL=level, OUTAGEWATCH_SERVICES=",".join(affected))
         try:
             subprocess.run(shlex.split(self.on_change), env=env, timeout=30, check=False)
@@ -214,7 +344,6 @@ class Automation:
 def check_freeze(path, block_on="freeze"):
     """For pipelines: 0 = safe to proceed, 1 = blocked. A missing file means safe;
     an unreadable/corrupt file blocks (fail closed)."""
-    import os
     if not os.path.exists(path):
         return 0
     try:
@@ -314,7 +443,7 @@ def format_test(t):
 
 def test_alert(webhook=None, on_change=None):
     """Send a clearly labelled TEST alert and run the hook once with OUTAGEWATCH_LEVEL=test."""
-    import os, shlex, subprocess
+    import shlex, subprocess
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     text = f"[outage-watch TEST {now}] This is a manual TEST alert. No outage is implied; no action needed."
     out = {"kind": "test-alert", "ts": now, "message": text, "webhook": "not configured",
@@ -354,6 +483,11 @@ def load_config(path):
     for k, lo in (("interval", 5), ("confirm", 1), ("recover_after", 1)):
         if k in c and (not isinstance(c[k], int) or c[k] < lo):
             raise ValueError(f"{k} must be an integer >= {lo}")
+    roles = c.get("roles")
+    if roles is not None and not (isinstance(roles, dict) and len(roles) <= 30 and all(
+            isinstance(k, str) and 0 < len(k) <= 80 and isinstance(v, list) and 0 < len(v) <= 30
+            and all(isinstance(x, str) for x in v) for k, v in roles.items())):
+        raise ValueError('roles must be {"task name": ["service", ...]}')
     c["targets"] = targets
     return c
 
@@ -377,8 +511,7 @@ def run_cycle(targets, prev, log_path=None, webhook=None, timeout=10.0, monitor=
     if snapshot:
         snapshot.update(now, automation.level if automation else "ok", verdict, results, state, monitor)
     if log_path:
-        with open(log_path, "a") as f:
-            f.write(json.dumps({"ts": now, "verdict": verdict, "published": state, "results": results}) + "\n")
+        append_log(log_path, {"ts": now, "verdict": verdict, "published": state, "results": results})
     if prev is not None and state != prev and webhook:
         notify(webhook, f"[outage-watch {now}] {verdict}")
     return results, state
@@ -403,6 +536,7 @@ def main(argv=None):
     p.add_argument("--json", action="store_true", help="with --test / --test-alert: print JSON")
     p.add_argument("--apply", action="store_true", help="with --test: also write the freeze file, run the hook, send the webhook")
     p.add_argument("--test-alert", action="store_true", help="send a labelled TEST message to --webhook and run --on-change once")
+    p.add_argument("--drills", metavar="FILE", help="fire-drill scenarios for the dashboard (default: drills.example.json)")
     p.add_argument("--admin-token", help="enable the dashboard's manual-test API (prefer env OUTAGEWATCH_ADMIN_TOKEN)")
     try:
         a = p.parse_args(argv)
@@ -429,7 +563,7 @@ def main(argv=None):
             print(f"bad config: {e}", file=sys.stderr)
             return 2
     auto = Automation(a.freeze_file, a.on_change, cfg.get("recover_after", 3)) \
-        if (a.freeze_file or a.on_change) else None
+        if (a.freeze_file or a.on_change or a.serve) else None   # the dashboard always shows a real level
     targets = {} if cfg.get("replace_defaults") else dict(DEFAULT_TARGETS)
     targets.update(cfg.get("targets", {}))
     if a.interval == 60 and "interval" in cfg:
@@ -455,7 +589,12 @@ def main(argv=None):
         return 0 if t["healthy"] else 1
     snap = None
     if a.serve:
-        import os
+        dpath = a.drills or os.path.join(os.path.dirname(os.path.abspath(__file__)), "drills.example.json")
+        try:
+            drills = load_drills(dpath) if (a.drills or os.path.exists(dpath)) else None
+        except (OSError, ValueError) as e:
+            print(f"bad drills file: {e}", file=sys.stderr)
+            return 2
         from server import Snapshot, make_server
         token = os.environ.get("OUTAGEWATCH_ADMIN_TOKEN") or a.admin_token
         if a.admin_token:
@@ -463,7 +602,7 @@ def main(argv=None):
         admin = {"token": token, "targets": lambda: list(targets),
                  "run_test": lambda only: manual_test(targets, only, a.timeout, mon),
                  "test_alert": lambda: test_alert(a.webhook, a.on_change)} if token else None
-        snap = Snapshot(dependency_edges(), a.interval)
+        snap = Snapshot(dependency_edges(), a.interval, cfg.get("roles") or DEFAULT_ROLES, drills)
         try:
             make_server(snap, a.serve, a.bind, admin)
         except ValueError as e:

@@ -7,6 +7,7 @@ Use it to compare against Microsoft's post-incident report or to back an SLA cla
 Usage: python3 report.py outagewatch.jsonl [--md out.md]
 """
 import argparse
+import hashlib
 import json
 import sys
 from datetime import datetime
@@ -64,8 +65,68 @@ def incidents(rows):
     return sorted(out, key=lambda i: i["start"])
 
 
-def markdown(rows, inc):
+GENESIS = "0" * 64
+
+
+def _chain_hash(rec):
+    body = {k: v for k, v in rec.items() if k != "hash"}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def verify(path, expect_head=None):
+    """Check the log's hash chain. Returns {"ok", "chained", "legacy", "head", "problems": [(line, text)]}.
+
+    Detects edited records (hash mismatch) and deleted / inserted / reordered records (broken
+    prev link). Legacy lines written before chaining existed are allowed only BEFORE the chain
+    starts. Cutting records off the END is only detectable with expect_head (a head hash you
+    stored somewhere outside this host)."""
+    problems, chained, legacy, expected, head = [], 0, 0, GENESIS, None
+    with open(path, "rb") as f:
+        for i, raw in enumerate(f, 1):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                rec = json.loads(raw)
+                h = rec.get("hash") if isinstance(rec, dict) else None
+            except ValueError:
+                rec, h = None, None
+            if not isinstance(h, str):
+                if chained:
+                    problems.append((i, "unchained or unreadable line inside the chain (inserted or damaged)"))
+                else:
+                    legacy += 1
+                expected = hashlib.sha256(raw).hexdigest()
+                continue
+            chained += 1
+            if _chain_hash(rec) != h:
+                problems.append((i, "record content does not match its hash (edited)"))
+            if rec.get("prev") != expected:
+                problems.append((i, "does not link to the line before it (record deleted, inserted or reordered here)"))
+            expected = head = h
+    if expect_head and head != expect_head:
+        problems.append((0, "head hash differs from the anchored value (log truncated or rewritten)"))
+    return {"ok": not problems, "chained": chained, "legacy": legacy, "head": head, "problems": problems}
+
+
+def chain_badge(v):
+    if v is None:
+        return ""
+    if not v["chained"]:
+        return "Log integrity: NOT CHAINED (legacy log, cannot be verified)."
+    if not v["ok"]:
+        return (f"Log integrity: CHAIN BROKEN at line {v['problems'][0][0]} "
+                f"({len(v['problems'])} problem(s)). Do not rely on this timeline as evidence.")
+    note = f" {v['legacy']} older unchained line(s) precede the chain." if v["legacy"] else ""
+    return (f"Log integrity: chain verified, {v['chained']} records, head `{v['head']}`.{note} "
+            "This shows the log was not edited piecemeal; it is only a trustworthy timestamp if "
+            "that head hash was also stored outside this host.")
+
+
+def markdown(rows, inc, chain=None):
     lines = ["# outage-watch incident report", ""]
+    if chain is not None:
+        lines += [chain_badge(chain), ""]
     if not rows:
         return "\n".join(lines + ["No samples in log."]) + "\n"
     lines += [f"Window: {rows[0]['ts']} to {rows[-1]['ts']} ({len(rows)} samples)", ""]
@@ -88,9 +149,23 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("log")
     p.add_argument("--md", help="write report to this file instead of stdout")
+    p.add_argument("--verify", action="store_true", help="only check the log's hash chain (exit 1 if broken)")
+    p.add_argument("--expect-head", metavar="HASH", help="with --verify: the head hash you anchored elsewhere")
     a = p.parse_args(argv)
+    try:
+        chain = verify(a.log, a.expect_head)
+    except OSError as e:
+        print(f"cannot read log: {e}", file=sys.stderr)
+        return 2
+    if a.verify:
+        for line, text in chain["problems"]:
+            print(f"BROKEN at {'line ' + str(line) if line else 'head'}: {text}")
+        print(f"{'OK' if chain['ok'] else 'FAILED'}: {chain['chained']} chained record(s), {chain['legacy']} legacy line(s), head {chain['head']}")
+        if chain["ok"] and not chain["chained"]:
+            print("note: nothing to verify, this log has no hash chain")
+        return 0 if chain["ok"] else 1
     rows = load(a.log)
-    text = markdown(rows, incidents(rows))
+    text = markdown(rows, incidents(rows), chain)
     if a.md:
         open(a.md, "w").write(text)
     else:

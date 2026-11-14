@@ -1,0 +1,79 @@
+{
+  "_comment": "Fire-drill scenarios for the outage-watch dashboard. Copy this file, edit the checklist text for your organisation, and start with --drills yourfile.json. Drills run only in the browser's SIMULATION layer: no probe, freeze file, hook, webhook or log is touched. 't' is seconds after the drill starts. effect: slow (adds add_ms latency), fail (probe does not answer), heal.",
+  "common_checklist": [
+    {"title": "Acknowledge: name an incident lead", "detail": "One person owns the incident and the clock from now on.", "owner": "On-call engineer"},
+    {"title": "Rule out our own network", "detail": "Read the verdict line. If everything fails, or services show 'blocked', check our own DNS, proxy and firewall first.", "owner": "On-call engineer"},
+    {"title": "Switch to the out-of-band channel", "detail": "Use the pre-agreed channel that does not depend on Microsoft 365 (for example an SMS group or a non-M365 chat). The contact list must live outside M365.", "owner": "Incident lead"},
+    {"title": "Tell staff what still works", "detail": "Use 'Copy staff update' in the dashboard. State what our checks saw and when; do not guess a cause.", "owner": "Comms"},
+    {"title": "Freeze risky changes", "detail": "No tenant, Conditional Access or licensing changes and no deployments while the level is 'freeze'.", "owner": "Change manager"},
+    {"title": "Save the timeline", "detail": "Keep outagewatch.jsonl and note its head hash (python3 report.py LOG --verify) somewhere outside this host.", "owner": "On-call engineer"}
+  ],
+  "drills": [
+    {
+      "id": "signin-config",
+      "title": "Shared sign-in configuration failure",
+      "pattern": "Pattern type: shared authentication dependency (as reported for the 31 Aug 2026 outage; attribution preliminary).",
+      "description": "Sign-in slows, then stops answering. Every service that needs sign-in is at risk even though its own probe still answers.",
+      "script": [
+        {"t": 0, "service": "auth", "effect": "slow", "add_ms": 1200},
+        {"t": 5, "service": "auth", "effect": "slow", "add_ms": 2400},
+        {"t": 10, "service": "auth", "effect": "fail"}
+      ],
+      "checklist": [
+        {"title": "Check the break-glass admin accounts", "detail": "Confirm where the offline credentials for the two cloud-only break-glass accounts are. Do not use them unless needed.", "owner": "Identity admin"},
+        {"title": "Remind staff: stay signed in", "detail": "Sessions that are already open may keep working. Outlook in cached mode can still read and draft offline.", "owner": "Comms"}
+      ]
+    },
+    {
+      "id": "maintenance-slowdown",
+      "title": "Maintenance-deployment slowdown on one service",
+      "pattern": "Pattern type: maintenance deployment degrading one service (as reported for June 2026; attribution preliminary).",
+      "description": "Exchange gets slower and slower without failing outright. This is the early-warning case: the level should reach 'caution' before anything is down.",
+      "script": [
+        {"t": 0, "service": "exchange", "effect": "slow", "add_ms": 900},
+        {"t": 8, "service": "exchange", "effect": "slow", "add_ms": 1800},
+        {"t": 12, "service": "outlook-web", "effect": "slow", "add_ms": 1500},
+        {"t": 20, "service": "exchange", "effect": "slow", "add_ms": 2600},
+        {"t": 35, "service": "exchange", "effect": "fail"},
+        {"t": 60, "service": "exchange", "effect": "heal"},
+        {"t": 60, "service": "outlook-web", "effect": "heal"}
+      ],
+      "checklist": [
+        {"title": "Decide at 'caution': who watches, and for how long?", "detail": "Nothing is down yet. Agree the trigger for escalating.", "owner": "Incident lead"}
+      ]
+    },
+    {
+      "id": "network-partial",
+      "title": "Network-infrastructure partial outage",
+      "pattern": "Pattern type: supporting network infrastructure / third-party network provider (as reported for Jan and Mar 2026; attribution preliminary).",
+      "description": "Several unrelated services fail at once while sign-in keeps answering. The first question is whether it is our network or theirs.",
+      "script": [
+        {"t": 0, "service": "teams", "effect": "slow", "add_ms": 1600},
+        {"t": 0, "service": "office-cdn", "effect": "fail"},
+        {"t": 4, "service": "teams", "effect": "fail"},
+        {"t": 6, "service": "m365-portal", "effect": "fail"},
+        {"t": 8, "service": "graph", "effect": "slow", "add_ms": 2000},
+        {"t": 10, "service": "sharepoint", "effect": "fail"},
+        {"t": 10, "service": "onedrive", "effect": "fail"}
+      ],
+      "checklist": [
+        {"title": "Compare from a second network", "detail": "Run 'python3 outagewatch.py --test' from another site or a phone hotspot before telling anyone the provider is down.", "owner": "Network engineer"}
+      ]
+    },
+    {
+      "id": "copilot-only",
+      "title": "Copilot-only failure",
+      "pattern": "Pattern type: one product layer failing while the services under it stay healthy.",
+      "description": "Microsoft 365 Copilot and its data layer stop answering; mail, files and meetings are unaffected.",
+      "script": [
+        {"t": 0, "service": "copilot-substrate", "effect": "slow", "add_ms": 1500},
+        {"t": 3, "service": "m365-copilot", "effect": "fail"},
+        {"t": 8, "service": "copilot-substrate", "effect": "fail"},
+        {"t": 8, "service": "copilot-studio", "effect": "slow", "add_ms": 1400}
+      ],
+      "checklist": [
+        {"title": "Decide whether this needs a freeze at all", "detail": "The level goes to 'freeze' on any confirmed failure. Agree whether a Copilot-only failure should pause your deployments.", "owner": "Change manager"}
+      ]
+    }
+  ]
+}

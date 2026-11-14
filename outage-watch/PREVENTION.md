@@ -50,3 +50,20 @@ Pipeline gate (exit 1 blocks; a missing file means safe, a corrupt file blocks):
 ```
 Copilot services (M365 Copilot, Copilot Studio, Copilot web, GitHub Copilot) are probed too.
 If Copilot is unhealthy, the verdict names the mail/files/chat services under it that are also unhealthy.
+
+## Rehearse it: fire drills
+Open the dashboard, switch on **Simulation / demo**, pick a **Fire drill** and start it. Four scenarios follow
+the pattern types reported in 2026 (shared sign-in failure, maintenance slowdown of one service, partial
+network outage, Copilot-only failure). The map and freeze level react as they would, a stopwatch runs, and
+each checklist step records when it was ticked. "End drill" gives a summary you can paste into a ticket.
+Copy `drills.example.json`, replace the checklist text with your own names and channels, and start with
+`--drills yourfile.json`. A drill is simulation only: it cannot touch the freeze file, hooks, webhook or log.
+
+## Prove the alert path works
+`python3 outagewatch.py --test-alert --webhook "$NON_M365_WEBHOOK" --on-change './pause-deployments.sh'`
+sends a message labelled TEST and runs the hook with `OUTAGEWATCH_LEVEL=test`. Make your hook treat `test`
+as a no-op. `--test` runs one manual probe round without changing anything (add `--apply` to act on it).
+
+## Keep the evidence honest
+The log is hash-chained. After an incident run `python3 report.py outagewatch.jsonl --verify` and store the
+printed head hash outside the host. See README, "Tamper-evident timeline", for what this does and does not prove.

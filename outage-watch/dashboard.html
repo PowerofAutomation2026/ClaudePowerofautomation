@@ -80,7 +80,7 @@ body.sim .simTag{display:inline-block}
 @media (max-width:640px){#banner{grid-template-columns:minmax(0,1fr)}}
 
 /* layout */
-.cols{display:grid;gap:14px;grid-template-columns:minmax(0,1fr)}
+.cols{display:grid;gap:14px;grid-template-columns:minmax(0,1fr);align-items:start}
 @media (min-width:1100px){.cols{grid-template-columns:minmax(0,1.8fr) minmax(19rem,1fr)}}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:.6rem;padding:.8rem 1rem;min-width:0}
 .panel h2{margin:0 0 .5rem;font:700 .78rem var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
@@ -185,6 +185,60 @@ body.sim .wm{display:block}
 .tkey .l{border-top:2px solid var(--ink);height:0;vertical-align:.2rem}
 footer{font-size:.78rem;color:var(--muted)}
 [hidden]{display:none!important}
+/* stale monitor warning */
+#staleBar{border:3px solid var(--down);border-radius:.6rem;padding:.7rem 1rem;font-weight:700;font-size:1.1rem;color:var(--ink);
+  background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--down) 22%,var(--panel)) 0 14px,var(--panel) 14px 28px)}
+#staleBar b{font:800 1.2rem var(--mono);letter-spacing:.18em;background:var(--down);color:var(--panel);padding:.1rem .5rem;border-radius:.25rem;margin-right:.6rem}
+/* clock (kiosk) */
+#clock{display:none;text-align:right;margin-left:auto}
+#clock time{display:block;font:800 2.4rem/1 var(--mono);letter-spacing:.06em}
+#clock span{display:flex;gap:.35rem;align-items:center;justify-content:flex-end;font:600 .95rem var(--mono);color:var(--up)}
+#clock.stale span{color:var(--down)}
+html.kiosk{font-size:clamp(18px,.6vw + 11px,36px)}
+html.kiosk #clock{display:block}
+html.kiosk .tools{margin-left:0;flex-basis:100%}
+html.kiosk body:not(.awake) .ctl,html.kiosk .nokiosk{display:none!important}
+html.kiosk body:not(.awake){cursor:none}
+/* roles */
+#roles{margin:0 0 .6rem;padding:0;list-style:none;display:grid;gap:.35rem}
+#roles li{display:grid;grid-template-columns:1.6rem minmax(0,1fr);gap:.5rem;align-items:start;padding:.4rem .55rem;border:1px solid var(--line);border-left:.3rem solid var(--c);border-radius:.4rem;background:var(--panel2)}
+#roles .gl{width:1.6rem;height:1.6rem}
+#roles b{display:block;font-size:1rem}
+#roles strong{color:var(--c);font:700 .9rem var(--mono)}
+#roles small{display:block;color:var(--muted);font-size:.8rem;overflow-wrap:anywhere}
+.row{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
+.row span{font-size:.85rem;color:var(--muted)}
+textarea{display:block;width:100%;margin-top:.5rem;font:.82rem/1.4 var(--mono);color:var(--ink);background:var(--panel2);border:1px solid var(--line);border-radius:.45rem;padding:.5rem;resize:vertical}
+details{margin-top:.7rem}
+summary{cursor:pointer;font-weight:600;font-size:.9rem;padding:.3rem 0}
+/* stress */
+.stress{display:flex;align-items:center;gap:.4rem;font:600 .74rem var(--mono);margin:.1rem 0}
+.stress i{flex:1;height:.4rem;border:1px solid var(--line);border-radius:.2rem;overflow:hidden;position:relative;background:var(--panel)}
+.stress i::after{content:"";position:absolute;inset:0;transform-origin:left;transform:scaleX(var(--v,0));background:var(--sc)}
+.b-calm{--sc:var(--muted)}.b-elev{--sc:var(--warning)}.b-high{--sc:var(--down)}
+.stress span{color:var(--sc)}
+.spark .sb{fill:var(--sc)}
+.spark .sbase{stroke:var(--line);stroke-width:1;vector-effect:non-scaling-stroke}
+#stressHow p{font-size:.84rem;color:var(--muted);margin:.3rem 0}
+#stressHow code{font-family:var(--mono);color:var(--ink)}
+/* fire drill */
+.drillPick{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;flex:1 1 100%;padding-top:.5rem;border-top:1px dashed var(--sim)}
+select{font:inherit;color:var(--ink);background:var(--panel2);border:1px solid var(--line);border-radius:.45rem;padding:.4rem;min-height:2.4rem;max-width:100%;min-width:0}
+#drill{padding:.7rem .9rem;border-top:3px solid var(--sim)}
+#drill h3{margin:0;font-size:1.05rem}
+#drill p{margin:.2rem 0;font-size:.88rem;color:var(--muted)}
+.dclock{display:flex;flex-wrap:wrap;gap:.6rem 1rem;align-items:center;margin:.5rem 0}
+#drillClock{font:800 2rem/1 var(--mono);color:var(--sim)}
+#drillList{margin:.4rem 0;padding:0;list-style:none;display:grid;gap:.35rem;grid-template-columns:repeat(auto-fill,minmax(min(100%,22rem),1fr))}
+#drillList li{border:1px solid var(--line);border-radius:.4rem;padding:.45rem .6rem;background:var(--panel2)}
+#drillList li.done{border-color:var(--up)}
+#drillList label{display:grid;grid-template-columns:1.5rem minmax(0,1fr);gap:.4rem;font-weight:600;cursor:pointer}
+#drillList input{width:1.25rem;height:1.25rem;margin:.1rem 0 0;accent-color:var(--up)}
+#drillList small{display:block;font-weight:400;color:var(--muted);font-size:.8rem}
+#drillList em{display:block;font:700 .78rem var(--mono);font-style:normal;color:var(--up)}
+#drillSum{border:2px solid var(--sim);border-radius:.45rem;padding:.6rem .8rem;margin-top:.5rem}
+#drillSum h4{margin:0 0 .3rem}
+.snapNote{border:2px solid var(--ink);border-radius:.5rem;padding:.6rem .9rem;font-weight:600;background:var(--panel)}
 /* manual test (admin) */
 .mtChip{display:inline-block;font:800 .72rem var(--mono);letter-spacing:.12em;background:var(--accent);color:var(--bg);padding:.12rem .45rem;border-radius:.2rem;margin-right:.5rem}
 #mtForm{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
@@ -211,21 +265,38 @@ footer{font-size:.78rem;color:var(--muted)}
 <div class="wrap">
 <header>
   <h1>outage-watch<small>Blast-radius map for Microsoft 365 &amp; Copilot probes</small></h1>
-  <div class="tools">
+  <div id="clock" aria-label="Clock and data freshness"><time id="clockT">--:--:--</time><span id="clockF"></span></div>
+  <div class="tools ctl nosnap">
+    <button id="sndBtn" type="button" aria-pressed="false">Sound alert: off</button>
+    <button id="snapBtn" type="button">Export snapshot</button>
     <button id="themeBtn" type="button">Theme: auto</button>
     <button id="simToggle" type="button" aria-pressed="false" aria-controls="simBar">Simulation / demo</button>
   </div>
 </header>
 
+<div id="staleBar" role="alert" hidden></div>
 <section id="simBar" aria-label="Simulation controls">
   <div class="simHead"><b>SIMULATION</b>Invented data for a demo. Nothing on this page is real while this banner shows. <span id="simLive"></span></div>
-  <div class="simBody">
+  <div class="simBody nosnap">
     <button type="button" data-sc="signin" aria-pressed="false">Sign-in outage</button>
     <button type="button" data-sc="exchange" aria-pressed="false">Exchange slow, then down</button>
     <button type="button" data-sc="copilot" aria-pressed="false">Copilot only</button>
     <button type="button" data-sc="heal" aria-pressed="false">Heal</button>
     <button type="button" id="simExit">Exit simulation, back to real data</button>
     <p id="simNote">Runs only in this browser tab. Real probes keep running and are kept separately; no alert, freeze file or log is touched.</p>
+    <div class="drillPick" id="drillPick" hidden>
+      <label for="drillSel"><b>Fire drill</b> (outage rehearsal)</label>
+      <select id="drillSel"></select>
+      <button type="button" id="drillStart">Start drill</button>
+    </div>
+  </div>
+  <div id="drill" class="nosnap" hidden>
+    <h3 id="drillTitle"></h3><p id="drillPattern"></p><p id="drillDesc"></p>
+    <div class="dclock"><span id="drillClock" role="timer" aria-label="Drill stopwatch">00:00</span>
+      <button type="button" id="drillEnd">End drill and show summary</button>
+      <button type="button" id="drillClose" hidden>Close drill</button></div>
+    <ol id="drillList" aria-label="Response checklist. Tick each step when it is done; the time is recorded."></ol>
+    <div id="drillSum" hidden></div>
   </div>
 </section>
 
@@ -241,10 +312,10 @@ footer{font-size:.78rem;color:var(--muted)}
     <h2 id="hGraph">Blast-radius map<span class="simTag">SIMULATION</span></h2>
     <div id="graphBox"><svg id="graph" role="group" aria-label="Dependency map of probed services. Each node is a button." viewBox="0 0 1000 620"></svg></div>
     <ul class="legend" id="legend" aria-label="Legend"></ul>
-    <p class="hint" id="mapHint">Centre: sign-in. Around it: services that need sign-in. Outer arc: Copilot, which also reads the data services. Failure travels along the lines to dependents. Select a node to see its blast radius.</p>
-    <div id="detail" aria-live="polite"></div>
-    <button type="button" id="mtRetest" hidden>Retest</button>
-    <div class="replay" role="group" aria-label="Replay recent history">
+    <p class="hint nokiosk" id="mapHint">Centre: sign-in. Around it: services that need sign-in. Outer arc: Copilot, which also reads the data services. Failure travels along the lines to dependents. Select a node to see its blast radius.</p>
+    <div id="detail" class="nosnap nokiosk" aria-live="polite"></div>
+    <button type="button" id="mtRetest" class="nosnap" hidden>Retest</button>
+    <div class="replay ctl nosnap" role="group" aria-label="Replay recent history">
       <button type="button" id="rBack" aria-label="Step back one probe round">&#9664;</button>
       <button type="button" id="rPlay" aria-pressed="false">Play</button>
       <button type="button" id="rFwd" aria-label="Step forward one probe round">&#9654;</button>
@@ -255,14 +326,20 @@ footer{font-size:.78rem;color:var(--muted)}
   </section>
 
   <section class="panel" id="works" aria-labelledby="hWorks">
-    <h2 id="hWorks">What still works<span class="simTag">SIMULATION</span></h2>
-    <p id="worksLead"></p>
-    <div id="worksBody"></div>
-    <p class="hint">Based on unauthenticated reachability probes from the machine running outage-watch, not on signed-in tests. "At risk" means the probe still answers but something it depends on does not.</p>
+    <h2 id="hWorks">Can I do my job?<span class="simTag">SIMULATION</span></h2>
+    <ul id="roles"></ul>
+    <div class="row ctl nosnap"><button type="button" id="copyUpd">Copy staff update</button><span id="copyMsg" role="status"></span></div>
+    <textarea id="updText" class="nosnap" rows="10" readonly hidden aria-label="Draft staff update (plain text)"></textarea>
+    <details id="worksDet">
+      <summary>What still works, service by service</summary>
+      <p id="worksLead"></p>
+      <div id="worksBody"></div>
+    </details>
+    <p class="hint nokiosk">Based on unauthenticated reachability probes from the machine running outage-watch, not on signed-in tests. "At risk" means the probe still answers but something it depends on does not.</p>
   </section>
 </div>
 
-<section class="panel" id="mt" aria-labelledby="hMt">
+<section class="panel nosnap nokiosk" id="mt" aria-labelledby="hMt">
   <h2 id="hMt">Manual test (admin)</h2>
   <p id="mtOff" class="hint">Manual tests are disabled. To enable them, start outage-watch with the environment variable OUTAGEWATCH_ADMIN_TOKEN set (16 characters or more).</p>
   <form id="mtForm" autocomplete="off" hidden>
@@ -283,10 +360,20 @@ footer{font-size:.78rem;color:var(--muted)}
     <li><i class="b"></i>learned baseline</li>
     <li><i class="z"></i>warning region (far above baseline)</li>
     <li><i class="d"></i>failed probe</li>
+    <li>bars under each chart: stress score per round</li>
   </ul>
   <div id="tl"></div>
+  <details id="stressHow" class="nokiosk">
+    <summary>How the stress score is calculated</summary>
+    <p>A fixed, transparent heuristic from 0 to 100 over the last 10 probe rounds of one service. It is not a prediction and not machine learning; it never estimates a time to failure.</p>
+    <p><code>score = round(100 &times; min(1, 0.5&times;D + 0.2&times;J + F))</code></p>
+    <p><code>D</code> (drift): where the median of the last 3 answered probes sits between the learned baseline (0) and the warning threshold (1), clamped to 0..1.<br>
+    <code>J</code> (jitter): mean absolute change between consecutive answered probes, divided by the baseline, clamped to 0..1.<br>
+    <code>F</code> (failures): failed probes in the last 5 rounds &times; 0.5, capped at 1.<br>
+    Blocked probes are ignored. Until a baseline is learned, D and J are 0. Bands: 0-29 calm, 30-59 elevated, 60-100 high.</p>
+  </details>
 </section>
-<footer>outage-watch reports what its own probes saw. It does not read Microsoft's status page and cannot confirm a root cause. "Blocked" means your own proxy or firewall refused the probe, not an outage.</footer>
+<footer class="nokiosk">outage-watch reports what its own probes saw. It does not read Microsoft's status page and cannot confirm a root cause. "Blocked" means your own proxy or firewall refused the probe, not an outage.</footer>
 <noscript>This dashboard needs JavaScript. The raw data is at /status.json and /metrics.</noscript>
 </div>
 <script>
@@ -325,7 +412,7 @@ function cap(n){return Object.prototype.hasOwnProperty.call(CAP,n)?CAP[n]:n;}
 function list(a,max){max=max||6;return a.length<=max?a.join(', '):a.slice(0,max).join(', ')+' and '+(a.length-max)+' more';}
 
 /* ---------- data ---------- */
-var live={frames:[],seen:new Set(),edges:[],interval:60,ok:null,admin:false};
+var live={frames:[],seen:new Set(),edges:[],interval:60,ok:null,admin:false,roles:[],drills:null,newAt:Date.now(),failAt:null};
 var sim={on:false,frames:[],edges:[],sc:null,t0:0,k:0,timer:null,svc:new Map(),level:'ok',clean:0};
 var view={idx:null,sel:null,hover:null,playing:null};
 var needHistory=true;
@@ -341,7 +428,10 @@ function ingest(d){
   var add=[];
   (Array.isArray(d.history)?d.history:[]).concat([d]).forEach(function(f){
     if(f&&f.updated&&!live.seen.has(f.updated)){live.seen.add(f.updated);add.push(normFrame(f));}});
+  if(Array.isArray(d.roles))live.roles=d.roles.filter(function(r){return Array.isArray(r)&&typeof r[0]==='string'&&Array.isArray(r[1]);});
+  if(d.drills&&Array.isArray(d.drills.drills)){live.drills=d.drills;fillDrills();}
   if(add.length){
+    live.newAt=Date.now();
     var follow=view.idx===null;
     live.frames=live.frames.concat(add).sort(function(a,b){return a.t<b.t?-1:a.t>b.t?1:0;});
     if(live.frames.length>720){live.frames.splice(0,live.frames.length-720).forEach(function(f){live.seen.delete(f.t);});
@@ -354,7 +444,7 @@ function ingest(d){
 function poll(){
   fetch('status.json'+(needHistory?'?history=1':''),{cache:'no-store'}).then(function(r){
     if(!r.ok)throw new Error('http');return r.json();
-  }).then(function(d){ingest(d);live.ok=true;needHistory=false;}).catch(function(){live.ok=false;needHistory=true;}).then(render);
+  }).then(function(d){ingest(d);live.ok=true;live.failAt=null;needHistory=false;}).catch(function(){live.ok=false;if(!live.failAt)live.failAt=Date.now();needHistory=true;}).then(function(){render();tickAge();});
 }
 function world(){return sim.on?sim:live;}
 function curIdx(w){return view.idx===null?w.frames.length-1:Math.min(view.idx,w.frames.length-1);}
@@ -375,6 +465,22 @@ function derive(frame,T){
   D.forEach(function(d){d.kind=d.own!=='up'?d.own:d.risk>=2?'risk-down':d.risk===1?'risk-warn':'up';});
   return D;
 }
+
+/* ---------- stress score (same formula as stress_score() in outagewatch.py) ---------- */
+function stressAt(frames,i,n){
+  var cur=frames[i].services.get(n);if(!cur)return 0;
+  var win=[],k,x;for(k=Math.max(0,i-9);k<=i;k++){x=frames[k].services.get(n);if(x)win.push(x);}
+  var ok=win.filter(function(v){return v.state==='up'||v.state==='warning';}).map(function(v){return v.ms;}),base=cur.baseline,warn=cur.warn,d=0,j=0;
+  if(base&&ok.length){
+    var last=ok.slice(-3).sort(function(a,b){return a-b;});
+    if(warn&&warn>base)d=Math.min(1,Math.max(0,(last[last.length>>1]-base)/(warn-base)));
+    if(ok.length>=3){var sum=0;for(k=1;k<ok.length;k++)sum+=Math.abs(ok[k]-ok[k-1]);j=Math.min(1,sum/(ok.length-1)/base);}
+  }
+  var f=Math.min(1,.5*win.slice(-5).filter(function(v){return v.state==='down'||v.state==='suspect';}).length);
+  return Math.floor(100*Math.min(1,.5*d+.2*j+f)+.5);
+}
+function band(sc){return sc>=60?'high':sc>=30?'elev':'calm';}
+var BAND_TEXT={calm:'calm',elev:'elevated',high:'high'};
 
 /* ---------- layout ---------- */
 var G={sig:'',nodes:new Map(),edges:[],pos:new Map(),T:null,order:[]};
@@ -580,16 +686,29 @@ function renderBanner(frame,D,w,idx){
   var replaying=idx<w.frames.length-1;
   if(replaying)meta.append(h('span','chip replay','REPLAY · past state from '+hms(frame.t)));
   else{var a=h('span',null,'');a.id='age';meta.append(a);}
-  if(!sim.on&&live.ok===false)meta.append(h('span','chip stale','NO CONNECTION to outage-watch · showing last known data'));
   tickAge();
 }
+function staleInfo(){
+  var now=Date.now(),thr=live.interval*2+15,since=(now-live.newAt)/1000;
+  if(live.failAt&&now-live.failAt>8000)return 'outage-watch has not answered this page for '+ago((now-live.failAt)/1000).replace(' ago','')+
+    '. The monitor itself may be stopped or unreachable. Everything below is the last known state, not the present.';
+  if(live.frames.length&&since>thr)return 'No new probe round for '+ago(since).replace(' ago','')+' (expected every '+live.interval+
+    ' s). The monitor itself may be stuck. Everything below is the last known state, not the present.';
+  return null;
+}
+var wasStale=false;
 function tickAge(){
+  var st=staleInfo(),bar=$('staleBar'),now=new Date();
+  if(st){if(bar.hidden||bar.lastChild.textContent!==st){bar.replaceChildren(h('b',null,'STALE'),document.createTextNode(st));bar.hidden=false;}}
+  else if(!bar.hidden)bar.hidden=true;
+  if(st&&!wasStale)beep(3);
+  wasStale=!!st;
+  $('clockT').textContent=now.toISOString().slice(11,19)+' UTC';$('clockT').setAttribute('datetime',now.toISOString());
+  var cf=$('clockF'),lf=live.frames[live.frames.length-1];$('clock').className=st?'stale':'';
+  cf.replaceChildren(glyph(st?'down':'up'),document.createTextNode(st?'STALE \u00b7 monitor not updating':lf?'last checked '+ago((Date.now()-Date.parse(lf.t))/1000):'waiting for first check'));
   var a=$('age');if(!a)return;var w=world(),f=w.frames[w.frames.length-1];if(!f)return;
-  var sec=(Date.now()-Date.parse(f.t))/1000,iv=sim.on?1.2:live.interval;
-  a.textContent='probe round at '+hms(f.t)+(isFinite(sec)?' · '+ago(sec):'');
-  var stale=!sim.on&&isFinite(sec)&&sec>iv*2+15,old=$('staleChip');
-  if(stale&&!old){old=h('span','chip stale');old.id='staleChip';a.after(old);}
-  if(stale)old.textContent='STALE · expected a round every '+iv+' s';else if(old)old.remove();
+  var sec=(Date.now()-Date.parse(f.t))/1000;
+  a.textContent='probe round at '+hms(f.t)+(isFinite(sec)?' \u00b7 '+ago(sec):'');
 }
 function renderWorks(frame,D){
   var body=$('worksBody'),lead=$('worksLead');body.replaceChildren();
@@ -616,6 +735,54 @@ function renderWorks(frame,D){
     if(!g[3].length)ul.append(h('li',null,'Nothing is answering normally.'));
     body.append(hd,ul);
   });
+}
+function roleStatus(frame,D){
+  return live.roles.map(function(r){
+    var need=r[1].filter(function(n){return frame.services.has(n);}),worst=0,blocked=[],why=[],seen=new Set();
+    function cause(n){var o=D.get(n).own;if(seen.has(n)||!SEV[o])return;seen.add(n);
+      why.push(n+' is '+(o==='down'?'not answering':o==='suspect'?'failing (not yet confirmed)':'slow'));}
+    need.forEach(function(n){var d=D.get(n),sv=Math.max(SEV[d.own],d.risk);if(sv>worst)worst=sv;
+      if(d.own==='blocked')blocked.push(n);
+      cause(n);d.via.forEach(cause);});
+    var k=!need.length?'none':worst>=3?'down':worst>=1?'warning':blocked.length?'blocked':'up';
+    return {name:r[0],k:k,why:k==='none'?'none of its services are monitored here':k==='blocked'?list(blocked,3)+' could not be checked: our own proxy or firewall refused the probe':
+      k==='up'?'needs '+list(need,5)+': all answering':why.join('; ')};
+  });
+}
+var ROLE_WORD={up:'Should work',warning:'May be unreliable',down:'Unlikely to work right now',blocked:'Cannot tell from here',none:'Not monitored'};
+function renderRoles(frame,D){
+  var ul=$('roles');ul.replaceChildren();
+  if(!frame){ul.append(h('li',null,'No probe data yet.'));return;}
+  if(!live.roles.length){ul.append(h('li',null,'No roles configured.'));return;}
+  roleStatus(frame,D).forEach(function(r){
+    var gk=r.k==='none'?'blocked':r.k,li=h('li','k-'+gk),box=h('div');
+    box.append(h('b',null,r.name),h('strong',null,ROLE_WORD[r.k]),h('small',null,r.why));
+    li.append(glyph(gk),box);ul.append(li);});
+}
+function staffUpdate(){
+  var w=world(),idx=curIdx(w),frame=w.frames[idx];if(!frame)return '';
+  var D=derive(frame,G.T),rs=roleStatus(frame,D),L=[],now=new Date();
+  function pick(k){return rs.filter(function(r){return r.k===k;});}
+  if(sim.on)L.push('*** SIMULATION / DRILL - NOT A REAL INCIDENT ***','');
+  L.push('IT service update, '+now.toISOString().slice(0,16).replace('T',' ')+' UTC','');
+  L.push('Our automated checks last ran at '+hms(frame.t)+(idx<w.frames.length-1?' (this is an earlier check, not the latest)':'')+'.','');
+  var bad=pick('down'),shaky=pick('warning'),ok=pick('up'),unk=pick('blocked');
+  if(!bad.length&&!shaky.length)L.push('All the tasks we monitor should work as normal'+(unk.length?', except those listed below that we could not check':'')+'.','');
+  if(bad.length){L.push('Unlikely to work right now:');bad.forEach(function(r){L.push('- '+r.name+' ('+r.why+')');});L.push('');}
+  if(shaky.length){L.push('May be slow or unreliable:');shaky.forEach(function(r){L.push('- '+r.name+' ('+r.why+')');});L.push('');}
+  if(ok.length&&(bad.length||shaky.length)){L.push('Should work as normal:');L.push('- '+ok.map(function(r){return r.name;}).join(', '));L.push('');}
+  if(unk.length){L.push('Could not be checked from our network:');L.push('- '+unk.map(function(r){return r.name;}).join(', '));L.push('');}
+  if(frame.level==='freeze')L.push('Change status: FREEZE. Please hold tenant, Conditional Access and licensing changes and deployments.','');
+  else if(frame.level==='caution')L.push('Change status: CAUTION. Please avoid risky changes for now.','');
+  L.push('This is based on our own automated reachability checks. We have not confirmed a cause, and this is not a statement from Microsoft. We will send another update when things change.');
+  if(sim.on)L.push('','*** SIMULATION / DRILL - NOT A REAL INCIDENT ***');
+  return L.join('\n').replace(/\n{3,}/g,'\n\n');
+}
+function copyText(text,box,msg){
+  box.value=text;box.hidden=false;
+  function fallback(){box.focus();box.select();msg.textContent='Could not copy automatically. The text is selected below: press Ctrl+C / Cmd+C.';}
+  if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(text).then(function(){msg.textContent='Copied. Review it before sending.';},fallback);
+  else fallback();
 }
 function renderDetail(frame,D){
   var box=$('detail'),n=view.hover||view.sel;box.replaceChildren();
@@ -644,8 +811,9 @@ function renderTimeline(w,idx){
     var ymax=warn?Math.min(Math.max(warn*1.35,maxOk*1.1),warn*3):Math.max(maxOk*1.3,200);
     function X(i){return (i+N-win.length)/(N-1)*120;}
     function Y(ms){return 38-Math.min(ms,ymax)/ymax*35;}
-    var sp=s('svg',{'class':'spark',viewBox:'0 0 120 40',preserveAspectRatio:'none',role:'img'});
-    sp.setAttribute('aria-label',n+' latency over the last '+win.length+' probe rounds. Now '+v.ms+' ms, state '+v.state+'. '+
+    var sc=stressAt(frames,idx,n),bd=band(sc);
+    var sp=s('svg',{'class':'spark',viewBox:'0 0 120 50',preserveAspectRatio:'none',role:'img'});
+    sp.setAttribute('aria-label',n+' latency over the last '+win.length+' probe rounds. Now '+v.ms+' ms, state '+v.state+', stress score '+sc+' of 100 ('+BAND_TEXT[bd]+'). '+
       (base==null?'Baseline still being learned.':'Baseline '+base+' ms, warning above '+warn+' ms.'));
     if(warn){sp.append(s('rect',{'class':'zone',x:0,y:0,width:120,height:Y(warn).toFixed(1)}),s('line',{'class':'wline',x1:0,x2:120,y1:Y(warn).toFixed(1),y2:Y(warn).toFixed(1)}));}
     if(base!=null)sp.append(s('line',{'class':'bline',x1:0,x2:120,y1:Y(base).toFixed(1),y2:Y(base).toFixed(1)}));
@@ -658,8 +826,14 @@ function renderTimeline(w,idx){
     });
     if(d)sp.append(s('path',{'class':'lat',d:d}));
     marks.forEach(function(m){sp.append(m);});
-    if(replaying)sp.append(s('line',{'class':'cur',x1:X(idx-start).toFixed(1),x2:X(idx-start).toFixed(1),y1:0,y2:40}));
-    card.append(hd,sp,h('p',null,base==null?'baseline: still learning · warns above '+(warn||'?')+' ms':'baseline '+base+' ms · warns above '+warn+' ms'));
+    sp.append(s('line',{'class':'sbase',x1:0,x2:120,y1:49.5,y2:49.5}));
+    win.forEach(function(f,i){if(!f.services.has(n))return;var q=stressAt(frames,start+i,n),hh=Math.max(.6,q/100*8);
+      sp.append(s('rect',{'class':'sb b-'+band(q),x:(X(i)-.8).toFixed(1),y:(49.5-hh).toFixed(1),width:1.6,height:hh.toFixed(1)}));});
+    if(replaying)sp.append(s('line',{'class':'cur',x1:X(idx-start).toFixed(1),x2:X(idx-start).toFixed(1),y1:0,y2:50}));
+    var stl=h('div','stress b-'+bd),bar=h('i');bar.style.setProperty('--v',String(sc/100));
+    stl.title='Stress = 100 x min(1, 0.5 x drift + 0.2 x jitter + failures). See "How the stress score is calculated" below.';
+    stl.append(document.createTextNode('stress'),bar,h('span',null,sc+' \u00b7 '+BAND_TEXT[bd]));
+    card.append(hd,sp,stl,h('p',null,base==null?'baseline: still learning · warns above '+(warn||'?')+' ms':'baseline '+base+' ms · warns above '+warn+' ms'));
     box.append(card);
   });
 }
@@ -678,6 +852,9 @@ function renderSimBits(){
   document.body.classList.toggle('sim',sim.on);
   $('simToggle').setAttribute('aria-pressed',sim.on?'true':'false');
   var lf=live.frames[live.frames.length-1];
+  var running=!!(drill&&drill.ended==null);
+  document.querySelectorAll('[data-sc]').forEach(function(b){b.disabled=running;});
+  $('drillStart').disabled=running;$('drillSel').disabled=running;
   $('simLive').textContent=sim.on?(lf?'(Real probes right now: level '+lf.level+'.)':'(No real probe data yet.)'):'';
   document.querySelectorAll('[data-sc]').forEach(function(b){b.setAttribute('aria-pressed',sim.on&&sim.sc===b.getAttribute('data-sc')?'true':'false');});
   $('mtOff').hidden=live.admin;$('mtForm').hidden=!live.admin;
@@ -686,7 +863,7 @@ function renderSimBits(){
   if(canRe)rb.textContent='Retest '+view.sel+' now (manual test, real probe)';
   document.title=(sim.on?'[SIMULATION] ':'')+'outage-watch · blast radius';
 }
-var lastLevelKey='';
+var lastLevelKey='',lastLiveLevel=-1;
 function render(){
   var w=world(),idx=curIdx(w),frame=w.frames[idx]||null;
   renderSimBits();
@@ -697,7 +874,9 @@ function render(){
     D=derive(frame,G.T);
     renderGraph(frame,D,w,view.idx===null);
   }
-  renderBanner(frame,D,w,idx);renderWorks(frame,D);renderDetail(frame,D);renderTimeline(w,Math.max(0,idx));renderReplay(w,Math.max(0,idx));
+  renderBanner(frame,D,w,idx);renderRoles(frame,D);renderWorks(frame,D);renderDetail(frame,D);renderTimeline(w,Math.max(0,idx));renderReplay(w,Math.max(0,idx));
+  var lf=live.frames[live.frames.length-1];
+  if(lf){var li=LEVELS.indexOf(lf.level);if(lastLiveLevel>=0&&li>lastLiveLevel)beep(li===2?3:1);lastLiveLevel=li;}
   if(frame&&view.idx===null){var key=(sim.on?'Simulation: ':'')+'level '+frame.level;
     if(key!==lastLevelKey){lastLevelKey=key;$('announce').textContent=key+'. '+frame.verdict;}}
 }
@@ -707,6 +886,8 @@ function simFrame(t){
   var svc={},states=new Map(),e=sim.k-sim.t0,sc=sim.sc;
   sim.svc.forEach(function(o,n){
     var fail=false,add=0;
+    if(sc==='drill'&&drill){var el=e*1.2,evn=null;drill.def.script.forEach(function(x){if(x.service===n&&x.t<=el)evn=x;});
+      if(evn&&evn.effect==='fail')fail=true;else if(evn&&evn.effect==='slow')add=num(evn.add_ms);}
     if(sc==='signin'&&n==='auth'){if(e>=3)fail=true;else add=900+700*e;}
     if(sc==='exchange'){if(n==='exchange'){if(e>=7)fail=true;else add=500*(e+1);}if(n==='outlook-web'&&e>=3)add=1500;}
     if(sc==='copilot'){if(n==='m365-copilot'){if(e>=1)fail=true;else add=1500;}if(n==='copilot-substrate'){if(e>=4)fail=true;else add=1100+300*e;}if(n==='copilot-studio'&&e>=2)add=1300;}
@@ -727,7 +908,9 @@ function simFrame(t){
   else verdict='simulated partial outage: '+bad.join(', ');
   return normFrame({updated:t,level:sim.level,verdict:'SIMULATION — '+verdict,services:svc});
 }
-function simTick(){sim.k++;sim.frames.push(simFrame(new Date().toISOString()));if(sim.frames.length>400){sim.frames.shift();if(view.idx!==null)view.idx=Math.max(0,view.idx-1);}render();}
+function simTick(){sim.k++;sim.frames.push(simFrame(new Date().toISOString()));
+  if(drill&&drill.ended==null){var lv=LEVELS.indexOf(sim.level),el=drillElapsed();if(lv>drill.maxLevel)drill.maxLevel=lv;
+    if(lv>=1&&drill.firstCaution==null)drill.firstCaution=el;if(lv>=2&&drill.firstFreeze==null)drill.firstFreeze=el;}if(sim.frames.length>400){sim.frames.shift();if(view.idx!==null)view.idx=Math.max(0,view.idx-1);}render();}
 function simStart(){
   if(sim.on)return;
   var lf=live.frames[live.frames.length-1],useLive=lf&&lf.services.has('auth');
@@ -744,8 +927,8 @@ function simStart(){
   stopPlay();view.idx=null;view.sel=null;view.hover=null;
   sim.timer=setInterval(simTick,1200);render();
 }
-function simStop(){if(!sim.on)return;clearInterval(sim.timer);sim.on=false;sim.frames=[];sim.sc=null;stopPlay();view.idx=null;view.sel=null;view.hover=null;render();$('simToggle').focus();}
-function simScenario(sc){sim.sc=sc==='heal'?null:sc;sim.t0=sim.k+1;view.idx=null;stopPlay();renderSimBits();}
+function simStop(){if(!sim.on)return;clearInterval(sim.timer);drill=null;$('drill').hidden=true;sim.on=false;sim.frames=[];sim.sc=null;stopPlay();view.idx=null;view.sel=null;view.hover=null;render();$('simToggle').focus();}
+function simScenario(sc){if(drill&&drill.ended==null)return;sim.sc=sc==='heal'?null:sc;sim.t0=sim.k+1;view.idx=null;stopPlay();renderSimBits();}
 
 /* ---------- manual test (admin; real probes, never mixed into frames) ---------- */
 var mtBusy=false,MT_ERR={400:'Request rejected: that service is not in the configured target list.',401:'Token rejected.',
@@ -788,6 +971,100 @@ $('mtForm').addEventListener('submit',function(e){e.preventDefault();mtCall('api
 $('mtAlert').addEventListener('click',function(){mtCall('api/test-alert',{},'Sending test alert',mtShowAlert);});
 $('mtRetest').addEventListener('click',function(){if(!view.sel)return;var n=view.sel;mtCall('api/test',{only:[n]},'Retesting '+n,mtShowTest);
   if($('mtTok').value)$('mtOut').scrollIntoView({block:'nearest'});});
+
+/* ---------- fire drill (runs inside the simulation layer; nothing is sent to the server) ---------- */
+var drill=null;
+function mmss(sec){sec=Math.max(0,Math.round(sec));return String(Math.floor(sec/60)).padStart(2,'0')+':'+String(sec%60).padStart(2,'0');}
+function drillElapsed(){return drill?((drill.ended!=null?drill.endAt:Date.now())-drill.startAt)/1000:0;}
+function fillDrills(){
+  var sel=$('drillSel');if(sel.options.length||!live.drills)return;
+  live.drills.drills.forEach(function(d,i){var o=h('option',null,String(d.title));o.value=String(i);sel.append(o);});
+  $('drillPick').hidden=!sel.options.length;
+}
+function drillStart(){
+  var def=live.drills&&live.drills.drills[Number($('drillSel').value)];if(!def||!sim.on)return;
+  var steps=(live.drills.common_checklist||[]).concat(def.checklist||[]).map(function(c){return {title:String(c.title),detail:String(c.detail||''),owner:String(c.owner||''),at:null};});
+  drill={def:def,startAt:Date.now(),ended:null,endAt:null,steps:steps,maxLevel:0,firstCaution:null,firstFreeze:null};
+  sim.sc='drill';sim.t0=sim.k+1;sim.level='ok';sim.clean=0;sim.svc.forEach(function(o){o.fails=0;});view.idx=null;stopPlay();
+  $('drillTitle').textContent='FIRE DRILL (simulation): '+def.title;$('drillPattern').textContent=String(def.pattern||'');$('drillDesc').textContent=String(def.description||'');
+  var ol=$('drillList');ol.replaceChildren();
+  steps.forEach(function(st){
+    var li=h('li'),lab=h('label'),cb=h('input'),box=h('div',null,st.title),stamp=h('em');cb.type='checkbox';
+    box.append(h('small',null,(st.owner?st.owner+': ':'')+st.detail),stamp);lab.append(cb,box);li.append(lab);ol.append(li);
+    cb.addEventListener('change',function(){if(drill.ended!=null){cb.checked=st.at!=null;return;}
+      st.at=cb.checked?drillElapsed():null;stamp.textContent=cb.checked?'done at '+mmss(st.at):'';li.className=cb.checked?'done':'';});
+    st.cb=cb;});
+  $('drillSum').hidden=true;$('drillEnd').hidden=false;$('drillClose').hidden=true;$('drill').hidden=false;
+  renderSimBits();tickDrill();$('drillTitle').scrollIntoView({block:'nearest'});
+}
+function drillSummary(){
+  var L=['FIRE DRILL SUMMARY (SIMULATION - not a real incident)','Scenario: '+drill.def.title,'Run on: '+new Date(drill.startAt).toISOString().slice(0,16).replace('T',' ')+' UTC',
+    'Duration: '+mmss(drillElapsed()),'Highest simulated level: '+LEVELS[drill.maxLevel]+
+    (drill.firstCaution!=null?' (caution at '+mmss(drill.firstCaution)+')':'')+(drill.firstFreeze!=null?' (freeze at '+mmss(drill.firstFreeze)+')':''),'','Checklist (time from drill start to tick):'];
+  drill.steps.forEach(function(st,i){L.push((i+1)+'. '+(st.at!=null?mmss(st.at):'NOT DONE')+'  '+st.title+(st.owner?' ['+st.owner+']':''));});
+  var done=drill.steps.filter(function(x){return x.at!=null;}).length;
+  L.push('',done+' of '+drill.steps.length+' steps acknowledged.');
+  return L.join('\n');
+}
+function drillEnd(){
+  if(!drill||drill.ended!=null)return;
+  drill.endAt=Date.now();drill.ended=drillElapsed();sim.sc=null;
+  drill.steps.forEach(function(st){st.cb.disabled=true;});
+  var sum=$('drillSum'),txt=drillSummary(),ta=h('textarea'),btn=h('button',null,'Copy drill summary'),msg=h('span');
+  ta.readOnly=true;ta.rows=Math.min(18,txt.split('\n').length+1);ta.value=txt;ta.setAttribute('aria-label','Drill summary (plain text)');btn.type='button';msg.setAttribute('role','status');
+  btn.addEventListener('click',function(){copyText(txt,ta,msg);});
+  var row=h('div','row');row.append(btn,msg);
+  sum.replaceChildren(h('h4',null,'Drill summary'),ta,row);sum.hidden=false;$('drillEnd').hidden=true;$('drillClose').hidden=false;
+  renderSimBits();tickDrill();
+}
+function tickDrill(){if(drill)$('drillClock').textContent=mmss(drillElapsed())+(drill.ended!=null?' (ended)':'');}
+$('drillStart').addEventListener('click',drillStart);
+$('drillEnd').addEventListener('click',drillEnd);
+$('drillClose').addEventListener('click',function(){drill=null;$('drill').hidden=true;renderSimBits();$('drillStart').focus();});
+setInterval(tickDrill,500);
+
+/* ---------- sound (opt-in, needs a click), kiosk, snapshot ---------- */
+var audio=null,soundOn=false;
+function beep(n){
+  if(!soundOn||!audio)return;
+  try{for(var i=0;i<n;i++){var o=audio.createOscillator(),g=audio.createGain(),t=audio.currentTime+i*.35;
+    o.type='square';o.frequency.value=880;g.gain.setValueAtTime(.0001,t);g.gain.exponentialRampToValueAtTime(.2,t+.02);g.gain.exponentialRampToValueAtTime(.0001,t+.25);
+    o.connect(g);g.connect(audio.destination);o.start(t);o.stop(t+.27);}}catch(e){}
+}
+$('sndBtn').addEventListener('click',function(){
+  soundOn=!soundOn;
+  if(soundOn){try{audio=audio||new (window.AudioContext||window.webkitAudioContext)();audio.resume();}catch(e){soundOn=false;}}
+  this.setAttribute('aria-pressed',soundOn?'true':'false');
+  this.textContent=soundOn?'Sound alert: on':'Sound alert: off';
+  if(soundOn)beep(1);
+});
+var kiosk=/[?&]kiosk=1(&|$)/.test(location.search),awakeT=null;
+function wake(){document.body.classList.add('awake');clearTimeout(awakeT);awakeT=setTimeout(function(){
+  var a=document.activeElement;if(a&&a!==document.body&&a.closest&&a.closest('.ctl')){wake();return;}
+  document.body.classList.remove('awake');},6000);}
+if(kiosk){document.documentElement.classList.add('kiosk');
+  ['pointermove','pointerdown','keydown','focusin'].forEach(function(ev){document.addEventListener(ev,wake,{passive:true});});}
+function exportSnapshot(){
+  var w=world(),frame=w.frames[curIdx(w)],root=document.documentElement.cloneNode(true),now=new Date();
+  root.querySelectorAll('script,link,noscript,.nosnap,[hidden],#announce,#clock').forEach(function(e){e.remove();});
+  root.querySelectorAll('[tabindex]').forEach(function(e){e.removeAttribute('tabindex');e.removeAttribute('role');e.removeAttribute('aria-pressed');});
+  root.querySelectorAll('button').forEach(function(e){e.remove();});
+  root.classList.remove('kiosk');
+  root.setAttribute('data-theme',theme!=='auto'?theme:window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+  var body=root.querySelector('body');body.classList.remove('awake');
+  var meta=document.createElement('meta');meta.setAttribute('http-equiv','Content-Security-Policy');meta.setAttribute('content',"default-src 'none'; style-src 'unsafe-inline'");
+  root.querySelector('head').prepend(meta);
+  root.querySelector('title').textContent=(sim.on?'[SIMULATION] ':'')+'outage-watch snapshot '+now.toISOString().slice(0,19)+'Z';
+  var note=h('p','snapNote',(sim.on?'SIMULATION: this snapshot shows invented demo data, not a real incident. ':'')+'Static snapshot exported '+now.toISOString().slice(0,19).replace('T',' ')+
+    ' UTC from outage-watch'+(frame?', showing the probe round of '+hms(frame.t):'')+'. It does not update. It shows what the probes saw, not a confirmed cause.');
+  root.querySelector('.wrap').prepend(note);
+  var html='<!doctype html>\n'+new XMLSerializer().serializeToString(root);
+  var a=document.createElement('a'),url=URL.createObjectURL(new Blob([html],{type:'text/html'}));
+  a.href=url;a.download='outage-watch-snapshot-'+now.toISOString().slice(0,19).replace(/[-:]/g,'').replace('T','-')+'.html';
+  document.body.append(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(url);},4000);
+}
+$('snapBtn').addEventListener('click',exportSnapshot);
+$('copyUpd').addEventListener('click',function(){copyText(staffUpdate(),$('updText'),$('copyMsg'));});
 
 /* ---------- interaction ---------- */
 function stopPlay(){if(view.playing){clearInterval(view.playing);view.playing=null;}}

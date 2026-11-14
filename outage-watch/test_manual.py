@@ -242,3 +242,142 @@ class DashboardExtras(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+import report
+
+
+class StressScore(unittest.TestCase):
+    def test_formula(self):
+        S = ow.stress_score
+        self.assertEqual(S([("up", 100)] * 10, 100, 900), 0)
+        self.assertEqual(S([("up", 100)] * 10, None, 3000), 0)                 # no baseline: D = J = 0
+        # drift: median of last 3 = 500 -> D = 400/800 = .5 ; jitter = (400/9)/100 = .444 -> 25 + 8.9 = 34
+        self.assertEqual(S([("up", 100)] * 7 + [("up", 500)] * 3, 100, 900), 34)
+        self.assertEqual(S([("up", 100)] * 9 + [("suspect", 10000)], 100, 900), 50)   # one failure = +50
+        self.assertEqual(S([("up", 100)] * 8 + [("suspect", 9), ("down", 9)], 100, 900), 100)
+        self.assertEqual(S([("blocked", 5)] * 10, 100, 900), 0)                # blocked ignored
+        self.assertEqual(S([("down", 1)] * 3 + [("up", 100)] * 5, 100, 900), 0)   # failures older than 5 rounds
+        self.assertEqual(S([("up", 9000)] * 20, 100, 900), 50)                 # clamped drift, zero jitter
+        self.assertEqual(S([], 100, 900), 0)
+
+    def test_exposed_in_status_and_metrics(self):
+        snap, m = server.Snapshot(edges=[]), ow.Monitor(min_history=1)
+        for i, (st, ms) in enumerate([("up", 100)] * 3 + [("down", 5000)]):
+            res = [{"name": "a", "state": st, "code": 200, "ms": ms, "error": None}]
+            snap.update(str(i), "ok", "v", res, m.step(res), m)
+        d = snap.get()
+        self.assertEqual(d["services"]["a"]["stress"], 50)
+        self.assertIn('outagewatch_stress_score{service="a"} 50', server.metrics_text(d))
+
+
+class HashChain(unittest.TestCase):
+    def setUp(self):
+        self.p = os.path.join(tempfile.mkdtemp(), "l.jsonl")
+
+    def write(self, n=4, start=0):
+        for i in range(start, start + n):
+            ow.append_log(self.p, {"ts": f"2026-01-01T00:0{i}:00+00:00", "verdict": "v", "published": {"a": "up"}, "results": []})
+
+    def lines(self): return open(self.p).read().splitlines()
+    def put(self, lines): open(self.p, "w").write("\n".join(lines) + "\n")
+
+    def test_intact_chain_verifies(self):
+        self.write()
+        v = report.verify(self.p)
+        self.assertTrue(v["ok"]); self.assertEqual((v["chained"], v["legacy"]), (4, 0))
+        self.assertEqual(v["head"], json.loads(self.lines()[-1])["hash"])
+        self.assertEqual(json.loads(self.lines()[0])["prev"], ow.GENESIS)
+        self.assertEqual(report.main([self.p, "--verify"]), 0)
+        self.assertEqual(len(report.load(self.p)), 4)                         # report still reads chained rows
+
+    def test_edit_detected(self):
+        self.write(); L = self.lines()
+        L[1] = L[1].replace('"up"', '"down"'); self.put(L)
+        v = report.verify(self.p)
+        self.assertFalse(v["ok"]); self.assertEqual(v["problems"][0][0], 2); self.assertIn("edited", v["problems"][0][1])
+        self.assertEqual(report.main([self.p, "--verify"]), 1)
+
+    def test_deletion_reorder_insertion_detected(self):
+        self.write(); L = self.lines()
+        self.put(L[:1] + L[2:]); self.assertEqual(report.verify(self.p)["problems"][0][0], 2)       # deleted line 2
+        self.put(L[1:]); self.assertEqual(report.verify(self.p)["problems"][0][0], 1)               # deleted first
+        self.put([L[0], L[2], L[1], L[3]]); self.assertFalse(report.verify(self.p)["ok"])           # reordered
+        self.put(L[:2] + ['{"ts":"2026-01-01T00:09:00+00:00","results":[]}'] + L[2:])               # unchained insert
+        self.assertEqual(report.verify(self.p)["problems"][0][0], 3)
+
+    def test_tail_truncation_needs_anchor(self):
+        self.write(); L = self.lines(); head = json.loads(L[-1])["hash"]
+        self.put(L[:-1])
+        self.assertTrue(report.verify(self.p)["ok"])                          # honest limit: undetectable alone
+        self.assertFalse(report.verify(self.p, expect_head=head)["ok"])
+        self.assertEqual(report.main([self.p, "--verify", "--expect-head", head]), 1)
+
+    def test_legacy_log_then_chain(self):
+        self.put(['{"ts":"2026-01-01T00:00:00+00:00","results":[]}'])
+        self.assertEqual((report.verify(self.p)["ok"], report.verify(self.p)["chained"]), (True, 0))
+        self.assertIn("NOT CHAINED", report.chain_badge(report.verify(self.p)))
+        self.write(2, start=1)
+        v = report.verify(self.p)
+        self.assertEqual((v["ok"], v["chained"], v["legacy"]), (True, 2, 1))
+        L = self.lines(); self.put([L[0].replace("00:00:00", "00:00:01")] + L[1:])    # edit the legacy line
+        self.assertFalse(report.verify(self.p)["ok"])
+
+    def test_badge_in_report(self):
+        self.write()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out): report.main([self.p])
+        self.assertIn("chain verified, 4 records", out.getvalue())
+        L = self.lines(); self.put([L[0], L[2]])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out): report.main([self.p])
+        self.assertIn("CHAIN BROKEN at line 2", out.getvalue())
+
+    def test_run_cycle_writes_chained_records(self):
+        srv, url, _ = target(200)
+        try:
+            for _ in range(2): ow.run_cycle({"x": (url, {200})}, None, self.p)
+        finally:
+            srv.shutdown(); srv.server_close()
+        self.assertEqual((report.verify(self.p)["ok"], report.verify(self.p)["chained"]), (True, 2))
+
+
+class DrillsAndRoles(unittest.TestCase):
+    def cfg(self, obj):
+        p = os.path.join(tempfile.mkdtemp(), "d.json"); json.dump(obj, open(p, "w")); return p
+
+    def test_example_file_is_valid(self):
+        d = ow.load_drills(os.path.join(os.path.dirname(os.path.abspath(__file__)), "drills.example.json"))
+        self.assertEqual(len(d["drills"]), 4); self.assertTrue(d["common_checklist"])
+        known = set(ow.DEFAULT_TARGETS) | {"sharepoint", "onedrive"}
+        for dr in d["drills"]:
+            self.assertTrue(all(e["service"] in known for e in dr["script"]), dr["id"])
+            self.assertEqual([e["t"] for e in dr["script"]], sorted(e["t"] for e in dr["script"]))
+
+    def test_rejects_bad_drills(self):
+        ok = {"id": "a", "title": "T", "script": [{"t": 0, "service": "auth", "effect": "fail"}]}
+        self.assertEqual(ow.load_drills(self.cfg({"drills": [ok]}))["drills"][0]["checklist"], [])
+        for bad in ([], {"drills": []}, {"drills": [dict(ok, id="Bad Id")]}, {"drills": [dict(ok, title="")]},
+                    {"drills": [dict(ok, script=[])]}, {"drills": [dict(ok, script=[{"t": -1, "service": "a", "effect": "fail"}])]},
+                    {"drills": [dict(ok, script=[{"t": 0, "service": "a", "effect": "explode"}])]},
+                    {"drills": [dict(ok, script=[{"t": 0, "service": "a", "effect": "slow", "add_ms": 10 ** 9}])]},
+                    {"drills": [dict(ok, checklist=[{"detail": "no title"}])]}, {"drills": [ok], "common_checklist": "x"}):
+            with self.assertRaises(ValueError, msg=str(bad)): ow.load_drills(self.cfg(bad))
+        self.assertEqual(run("--serve", "18767", "--drills", self.cfg({"drills": []}), "--once")[0], 2)
+
+    def test_roles_config_and_delivery(self):
+        c = ow.load_config(self.cfg({"roles": {"Payroll": ["auth", "my-app"]}}))
+        self.assertEqual(c["roles"], {"Payroll": ["auth", "my-app"]})
+        for bad in ({"roles": []}, {"roles": {"x": "auth"}}, {"roles": {"x": [1]}}, {"roles": {"x": []}}):
+            with self.assertRaises(ValueError): ow.load_config(self.cfg(bad))
+        self.assertIn("Email & calendar", ow.DEFAULT_ROLES)
+        snap = server.Snapshot(edges=[], roles=c["roles"], drills={"drills": []})
+        self.assertNotIn("roles", snap.get())
+        full = snap.get(history=True)
+        self.assertEqual((full["roles"], full["drills"]), ([["Payroll", ["auth", "my-app"]]], {"drills": []}))
+
+    def test_page_never_posts_simulated_data(self):
+        page = server.PAGE
+        self.assertEqual(page.count("method:'POST'"), 1)       # only the admin manual-test call
+        self.assertEqual(sorted(set(__import__("re").findall(r"'(api/[a-z-]+)'", page))), ["api/test", "api/test-alert"])
+        self.assertNotIn("sim.frames", page[page.index("function mtCall"):page.index("$('mtForm')")])

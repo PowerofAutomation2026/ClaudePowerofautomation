@@ -21,6 +21,12 @@ HISTORY = 120      # probe rounds kept in memory for the dashboard's replay / sp
 SLOW_MS = 3000     # probe() itself reports "degraded" above this, whatever the baseline
 
 
+try:
+    from outagewatch import stress_score
+except Exception:          # keep the server usable on its own
+    stress_score = None
+
+
 def _default_edges():
     try:
         import outagewatch
@@ -39,11 +45,12 @@ class Snapshot:
       history   last HISTORY rounds, only with /status.json?history=1
     """
 
-    def __init__(self, edges=None, interval=60):
+    def __init__(self, edges=None, interval=60, roles=None, drills=None):
         self._lock = threading.Lock()
         self._edges = _default_edges() if edges is None else [list(e) for e in edges]
         self._interval, self._hist = interval, deque(maxlen=HISTORY)
         self._data = {"updated": None, "level": "ok", "verdict": "starting", "services": {}}
+        self._static = {"roles": [[k, list(v)] for k, v in (roles or {}).items()], "drills": drills}
         self.admin = False   # set by make_server: tells the page whether manual tests are enabled
 
     def update(self, ts, level, verdict, results, published, monitor=None):
@@ -54,6 +61,11 @@ class Snapshot:
             svc[r["name"]] = {"state": published.get(r["name"], r["state"]), "code": r["code"], "ms": r["ms"],
                               "error": r["error"], "baseline": base, "warn_ms": warn}
         with self._lock:
+            if stress_score:
+                for n, v in svc.items():
+                    past = [(f["services"][n]["state"], f["services"][n]["ms"]) for f in list(self._hist)[-9:]
+                            if n in f["services"]]
+                    v["stress"] = stress_score(past + [(v["state"], v["ms"])], v["baseline"], v["warn_ms"])
             self._data = {"updated": ts, "level": level, "verdict": verdict, "services": svc}
             self._hist.append(self._data)
 
@@ -61,7 +73,7 @@ class Snapshot:
         with self._lock:
             d = dict(self._data, edges=self._edges, interval=self._interval, admin=self.admin)
             if history:
-                d["history"] = list(self._hist)
+                d.update(self._static, history=list(self._hist))
             return json.loads(json.dumps(d))
 
 
@@ -77,6 +89,10 @@ def metrics_text(d):
     out.append("# TYPE outagewatch_latency_ms gauge")
     for n, s in sorted(d["services"].items()):
         out.append(f'outagewatch_latency_ms{{service="{_label(n)}"}} {s["ms"]}')
+    out.append("# TYPE outagewatch_stress_score gauge")
+    out.append("# HELP outagewatch_stress_score 0-100 heuristic: latency drift, jitter, recent failed probes")
+    for n, s in sorted(d["services"].items()):
+        out.append(f'outagewatch_stress_score{{service="{_label(n)}"}} {s.get("stress", 0)}')
     out += ["# TYPE outagewatch_level gauge", f'outagewatch_level {LEVEL_NUM.get(d["level"], 2)}']
     return "\n".join(out) + "\n"
 
