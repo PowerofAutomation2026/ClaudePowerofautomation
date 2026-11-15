@@ -178,7 +178,7 @@ describe('upgrade from the 15-target version (v1)', () => {
     e.mock.entities.get('owatch_target').attributes.delete('owatch_family')
     db.owatch_targets = db.owatch_targets.filter((t: any) => V1.includes(t.owatch_name) || (withTenant && ['sharepoint-online', 'onedrive-business'].includes(t.owatch_name)))
     for (const t of db.owatch_targets) { delete t.owatch_family; if (t.owatch_name === 'sharepoint-online') t.owatch_name = 'sharepoint'; if (t.owatch_name === 'onedrive-business') t.owatch_name = 'onedrive' }
-    db.owatch_settings.find((s: any) => s.owatch_name === 'roles_json').owatch_value = JSON.stringify(V1_ROLES)
+    db.owatch_settings.push({ owatch_settingid: '55555555-5555-5555-5555-555555555555', owatch_name: 'roles_json', owatch_value: JSON.stringify(V1_ROLES) })   // 332 characters: it fitted in v1
     db.owatch_settings.find((s: any) => s.owatch_name === 'schema_version').owatch_value = '1'
     db.owatch_results.push({ owatch_resultid: '99999999-9999-9999-9999-999999999999', owatch_name: 'sharepoint', owatch_httpstatus: 200, owatch_elapsedms: 90, owatch_probedat: '2026-11-01T00:00:00.000Z', owatch_round: 'old' })
     e.mock.log.length = 0
@@ -218,11 +218,11 @@ describe('upgrade from the 15-target version (v1)', () => {
     expect(mock.problems).toEqual([])
   })
 
-  it('roles: the shipped v1 default is replaced by the new 11 rows, an admin-edited role list is left alone', async () => {
+  it('roles: the shipped v1 default row is removed (the dashboard has the current list built in); an admin-edited list is left alone', async () => {
     const a = await v1(false)
-    await apply(a.client, OPTS)
-    const roles = JSON.parse(a.mock.db.owatch_settings.find((s: any) => s.owatch_name === 'roles_json').owatch_value)
-    expect(Object.keys(roles)).toHaveLength(11); expect(roles['Files & sharing']).toContain('onedrive-sync')
+    const r = await apply(a.client, OPTS)
+    expect(a.mock.db.owatch_settings.find((s: any) => s.owatch_name === 'roles_json')).toBeUndefined()
+    expect(r.updated.join(' ')).toContain('roles_json removed')
     const b = await v1(false)
     b.mock.db.owatch_settings.find((s: any) => s.owatch_name === 'roles_json').owatch_value = '{"Mine":["auth"]}'
     await apply(b.client, OPTS)

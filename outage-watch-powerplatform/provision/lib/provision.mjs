@@ -1,7 +1,7 @@
 // Idempotent provisioning of Outage Watch into one Dataverse environment.
 // Every step first READS, then creates only what is missing: running it again is an upgrade, never a duplicate.
 import { q, DataverseError } from './client.mjs'
-import { CONNREF, FLOW_NAME, PUBLISHER, RENAMED, SOLUTION, TABLES, TENANT_TARGET_NAMES, seedSettings, seedTargets } from './schema.mjs'
+import { CONNREF, FLOW_NAME, PUBLISHER, RENAMED, RETIRED_SETTINGS, SOLUTION, TABLES, TENANT_TARGET_NAMES, assertRowFits, seedSettings, seedTargets } from './schema.mjs'
 import { buildClientData, canonical, estimateRequests, existingHeartbeatUrl, worstCaseRunSeconds } from './flow.mjs'
 
 const SOL = { 'MSCRM.SolutionUniqueName': SOLUTION.uniquename }
@@ -146,7 +146,7 @@ export async function apply(client, o, log = () => {}) {
     const old = haveT.get(oldName)
     if (!old) continue
     if (!haveT.has(newName)) {
-      await client.patch(`${sets.target}(${old.owatch_targetid})`, { owatch_name: newName })
+      await client.patch(`${sets.target}(${old.owatch_targetid})`, assertRowFits('owatch_target', { owatch_name: newName }, { partial: true }))
       haveT.delete(oldName); haveT.set(newName, { ...old, owatch_name: newName })
       did('updated', `target ${oldName} renamed to ${newName}`)
     } else if (old.owatch_enabled !== false) {
@@ -156,14 +156,16 @@ export async function apply(client, o, log = () => {}) {
       res.warnings.push(`both ${oldName} and ${newName} exist; ${oldName} was disabled, delete it when convenient`)
     }
   }
-  for (const row of seedTargets(o.tenant)) {
+  const seeds = seedTargets(o.tenant)
+  for (const row of seeds) assertRowFits('owatch_target', row)        // check ALL rows first: never stop half-way through the list
+  for (const row of seeds) {
     const cur = haveT.get(row.owatch_name)
     if (!cur) {
       await client.post(sets.target, row)
       did('created', `target ${row.owatch_name}${row.owatch_url ? '' : ' (disabled: needs tenant name)'}`); haveT.set(row.owatch_name, row)
     } else if (TENANT_TARGET_NAMES.includes(row.owatch_name) && !cur.owatch_url && row.owatch_url) {
       // tenant name supplied now: fill in the row that was waiting for it (a row that already has a URL is the admin's)
-      await client.patch(`${sets.target}(${cur.owatch_targetid})`, { owatch_url: row.owatch_url, owatch_enabled: true })
+      await client.patch(`${sets.target}(${cur.owatch_targetid})`, assertRowFits('owatch_target', { owatch_url: row.owatch_url, owatch_enabled: true }, { partial: true }))
       cur.owatch_url = row.owatch_url; cur.owatch_enabled = true
       did('updated', `target ${row.owatch_name} configured for the tenant`)
     }
@@ -211,10 +213,15 @@ export async function apply(client, o, log = () => {}) {
   log('[7/8] Settings (flow id, interval, retention, thresholds)')
   const haveS = new Map((await retrySchema(client, 'settings', () => client.get(`${sets.setting}?$select=owatch_name,owatch_value,owatch_settingid`), log)).json.value.map((r) => [r.owatch_name, r]))
   const settings = [...seedSettings({ ...o, heartbeat: res.heartbeat }), { name: 'flow_workflowid', value: flowId, force: true }]
+  for (const s of settings) assertRowFits('owatch_setting', { owatch_name: s.name, owatch_value: s.value })   // all checked before the first write
   for (const s of settings) {
     const cur = haveS.get(s.name)
     if (!cur) { await client.post(sets.setting, { owatch_name: s.name, owatch_value: s.value }); did('created', `setting ${s.name}`) }
-    else if ((s.force || (s.replaceIf ?? []).includes(cur.owatch_value)) && cur.owatch_value !== s.value) { await client.patch(`${sets.setting}(${cur.owatch_settingid})`, { owatch_value: s.value }); did('updated', `setting ${s.name}`) }
+    else if (s.force && cur.owatch_value !== s.value) { await client.patch(`${sets.setting}(${cur.owatch_settingid})`, { owatch_value: s.value }); did('updated', `setting ${s.name}`) }
+  }
+  for (const r of RETIRED_SETTINGS) {       // no longer stored: remove only an untouched shipped default, keep an admin's own value
+    const cur = haveS.get(r.name)
+    if (cur && r.deleteIf.includes(cur.owatch_value)) { await client.del(`${sets.setting}(${cur.owatch_settingid})`); did('updated', `setting ${r.name} removed (the dashboard now uses its built-in list)`) }
   }
 
   log('[8/8] Turning the flow on')

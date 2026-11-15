@@ -8,7 +8,10 @@
 // operationOptions, runtimeConfiguration). NOT documented by Microsoft: the exact parameter names of the
 // Dataverse `CreateRecord` / `DeleteRecord` operations inside clientdata ("item/<column>", "recordId") - they
 // follow what the Power Automate designer itself writes. See DESIGN.md "Unconfirmed".
-import { CONNREF } from './schema.mjs'
+import { CONNREF, columnSpec } from './schema.mjs'
+
+/** Format of the round id: fixed width (20 characters, e.g. 2026-11-15T08:30:00Z), well inside the 40-character column. */
+export const ROUND_FORMAT = 'yyyy-MM-ddTHH:mm:ssZ'
 
 /** Documented maximum for "for each" concurrency in Azure Logic Apps / Power Automate. */
 export const PROBE_CONCURRENCY = 50
@@ -36,11 +39,15 @@ export function buildClientData(o) {
     limit: { timeout: `PT${o.timeoutSeconds}S` },
     operationOptions: 'DisableAsyncPattern',         // never poll a 202 + Location answer
   }
-  const elapsed = "@div(sub(ticks(coalesce(actions('Probe')?['endTime'],utcNow())),ticks(coalesce(actions('Probe')?['startTime'],utcNow()))),10000)"
-  const errorKind = "@if(equals(actions('Probe')?['status'],'Succeeded'),'',coalesce(actions('Probe')?['code'],actions('Probe')?['status'],'Failed'))"
+  // Every runtime value is bounded to its column BEFORE the row is written, so an unexpectedly long error code or
+  // an odd duration can never make a row write fail (which would silently lose that probe's result).
+  // The limits are read from the table definition, not typed twice.
+  const lim = columnSpec('owatch_result')
+  const elapsed = `@max(${lim.owatch_elapsedms.min},min(${lim.owatch_elapsedms.max},div(sub(ticks(coalesce(actions('Probe')?['endTime'],utcNow())),ticks(coalesce(actions('Probe')?['startTime'],utcNow()))),10000)))`
+  const errorKind = `@take(string(if(equals(actions('Probe')?['status'],'Succeeded'),'',coalesce(actions('Probe')?['code'],actions('Probe')?['status'],'Failed'))),${lim.owatch_errorkind.maxLength})`
   const record = dv('CreateRecord', {
     entityName: o.sets.result,
-    'item/owatch_name': "@items('For_each_target')?['owatch_name']",
+    'item/owatch_name': `@take(string(items('For_each_target')?['owatch_name']),${lim.owatch_name.maxLength})`,
     'item/owatch_httpstatus': "@outputs('Probe')?['statusCode']",
     'item/owatch_elapsedms': elapsed,
     'item/owatch_errorkind': errorKind,
@@ -49,7 +56,7 @@ export function buildClientData(o) {
   }, { Probe: ALWAYS })                              // one failing probe must never stop the others, or its own record
 
   const actions = {
-    Round: { runAfter: {}, metadata: {}, type: 'Compose', inputs: "@utcNow('yyyy-MM-ddTHH:mm:ssZ')" },
+    Round: { runAfter: {}, metadata: {}, type: 'Compose', inputs: `@utcNow('${ROUND_FORMAT}')` },     // fixed-width: always 20 characters
     List_targets: dv('ListRecords', {
       entityName: o.sets.target, $select: 'owatch_name,owatch_url', $filter: 'owatch_enabled eq true and owatch_url ne null and statecode eq 0', $top: 100,
     }, { Round: ['Succeeded'] }),

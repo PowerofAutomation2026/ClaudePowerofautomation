@@ -16,9 +16,12 @@ Deploy-OutageWatchPP.cmd 00000000-0000-0000-0000-000000000000
 > machine outside Microsoft 365 as the witness. Mitigations built in: a **STALE** banner, an optional external
 > **heartbeat** (dead man's switch), and this warning in the dashboard footer and the deploy summary.
 
-**Status: not yet run against a real tenant.** Everything that could be verified without one was (see
-"What was verified"). The PowerShell script itself has not been executed: no PowerShell was available where it
-was written. Expect to fix small things on the first real run; `DESIGN.md` lists every unconfirmed item.
+**Status: partly proven on a real tenant, not yet end to end.** Three real runs have been reported: sign-in, tables,
+columns, the 36 targets, the connection reference and the **creation** of the probe flow worked (after two fixes);
+the third run stopped while writing settings (fixed, see Troubleshooting). **Nobody has yet seen** the flow being
+turned on, a flow run, the dashboard publish or the smoke test on a real tenant, and none of the fixes has been
+confirmed by a re-run. No PowerShell or tenant was available where this was written; `DESIGN.md` lists every
+unconfirmed item.
 
 ## What gets deployed
 
@@ -134,8 +137,10 @@ The flow stores facts; `src/logic/classify.ts` judges them, replaying the rounds
 Differences from the Python monitor, on purpose: the dashboard only knows the rows it loaded (last 12 hours), so
 state "before the window" is unknown; there is no freeze file, hook or webhook (a browser page cannot run them);
 `blocked` almost never occurs (see DESIGN.md); the "at risk" list in the verdict is capped at 8 names for display. Thresholds (`confirm`, `factor`, `floor_ms`, `slow_ms`,
-`recover_after`) and the role list (`roles_json`) are rows in `owatch_setting`; targets are rows in
-`owatch_target`. Edit them in the maker portal; a re-deploy never overwrites your edits.
+`recover_after`) are rows in `owatch_setting`; targets are rows in `owatch_target`. Edit them in the maker portal; a
+re-deploy never overwrites your edits. The "Can I do my job?" list is built into the dashboard and is **not** stored
+in Dataverse. To override it, add a setting row named `roles_json` with JSON like `{"Payroll":["auth","graph"]}`; a
+setting value holds 400 characters, so continue a longer list in `roles_json_2`, `roles_json_3`, ... (joined in order).
 
 ## Upgrading from the 15-target version
 
@@ -152,7 +157,7 @@ Run the same command again. The upgrade is additive and tested against a mock of
 
 ## What was verified, and what was not
 
-Verified here (`npm test`, 153 tests; `npm run build`; headless Chromium):
+Verified here (`npm test`, 177 tests; `npm run build`; headless Chromium):
 
 - the TypeScript logic against **golden cases produced by the real Python code** (`tests/golden/gen_golden.py`
   runs the updated 36-service `outage-watch/outagewatch.py`): the catalogue itself (36 services, URLs, alive codes,
@@ -170,9 +175,12 @@ Verified here (`npm test`, 153 tests; `npm run build`; headless Chromium):
 - the dashboard in demo mode with 36 services at 1440 px dark/light and 360 px: no console errors, no horizontal
   overflow, no overlapping nodes (measured on the rendered page), filter / only-problems / collapse exercised.
 
-**Not verified:** anything against a real tenant; `pac` (any command); the real flow import and activation; the
-real Dataverse metadata API; the real code-app publish; execution of the PowerShell script (static checks only).
-The mock Dataverse is a model written from the documentation, not Microsoft's implementation.
+**Not verified here:** nothing in this folder was run against a tenant by its author. From the user's three real
+runs it is known that sign-in, table/column creation, seeding 36 targets, the connection reference and flow
+*creation* work; turning the flow on, a flow run, the code-app publish and the smoke test have never been observed,
+and the fixes made after each run are tested against the mock only. The mock Dataverse is a model written from the
+documentation and from the three observed errors, not Microsoft's implementation. Every value written to a table is
+also checked against the column limits (the mock enforces them; added after the third run).
 
 ## Manual steps that remain
 
@@ -223,3 +231,13 @@ cached copy of the schema; right after a table or column is created it can say a
 created. The script now (a) checks that the Web API can read every new column before it seeds anything and (b) retries the
 settings reads while this specific error appears (waits 5-30 s, about 4 minutes in total). If it still shows after that, wait
 a few minutes and re-run the same command. Tested against the mock only; not yet confirmed on a real tenant.
+
+**`POST owatch_settings: HTTP 400 [0x80044331] ... The length of the 'owatch_value' attribute of the 'owatch_setting' entity exceeded the maximum allowed length of '400'`**
+Seen on the third real run, at step [7/8], after the flow had been created. Cause: a bug in this tool, not in your
+environment. It tried to store the "Can I do my job?" list as a setting (`roles_json`); with 11 tasks that JSON is 618
+characters and the setting column holds 400. Fix: the list is no longer stored at all (the dashboard has it built in),
+so no column is changed and nothing has to be deleted. **Just re-run the same command**: tables, targets, connection
+reference and the flow are found and reused; the run stores the flow id, turns the flow on and continues. Every row
+the tool writes is now checked against its column limits before it is sent, and the flow cuts unbounded runtime
+text (error codes, names) to the column length. Tested against the mock, which now enforces the same limits and
+returns the same error; not yet confirmed by a real re-run.

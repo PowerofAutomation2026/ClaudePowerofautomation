@@ -42,9 +42,16 @@ const hms = (t: string) => { const d = new Date(t); return Number.isNaN(d.getTim
 function ago(sec: number): string { sec = Math.max(0, Math.round(sec)); if (sec < 90) return sec + ' s ago'; if (sec < 5400) return Math.round(sec / 60) + ' min ago'; return Math.round(sec / 3600) + ' h ago' }
 const clampNum = (v: string | undefined, lo: number, hi: number, dflt: number) => { const n = Number(v); return v !== undefined && v !== '' && Number.isFinite(n) && n >= lo && n <= hi ? n : dflt }
 
-function parseRoles(text: string | undefined): Record<string, string[]> {
+/**
+ * "Can I do my job?" list. Built in (shared/catalog.json) and NOT stored in Dataverse by default.
+ * An admin may override it with a setting row `roles_json`; because a setting value holds 400 characters, a longer
+ * list continues in `roles_json_2`, `roles_json_3`, ... (joined in that order). Anything unreadable = built-in list.
+ */
+function parseRoles(settings: Record<string, string>): Record<string, string[]> {
+  let text = settings.roles_json ?? ''
+  for (let i = 2; i <= 9 && settings['roles_json_' + i] !== undefined; i++) text += settings['roles_json_' + i]
   try {
-    const o = JSON.parse(text ?? '')
+    const o = JSON.parse(text)
     if (o && typeof o === 'object' && !Array.isArray(o)) {
       const out: Record<string, string[]> = {}
       for (const [k, v] of Object.entries(o).slice(0, 30)) if (Array.isArray(v) && v.every((x) => typeof x === 'string')) out[k.slice(0, 80)] = (v as string[]).slice(0, 30)
@@ -249,7 +256,7 @@ export default function App() {
     floorMs: clampNum(settings.floor_ms, 0, 60000, DEFAULT_THRESHOLDS.floorMs), slowMs: clampNum(settings.slow_ms, 100, 120000, DEFAULT_THRESHOLDS.slowMs),
     recoverAfter: clampNum(settings.recover_after, 1, 20, DEFAULT_THRESHOLDS.recoverAfter),
   }), [settings.confirm, settings.factor, settings.floor_ms, settings.slow_ms, settings.recover_after])
-  const roles = useMemo(() => parseRoles(settings.roles_json), [settings.roles_json])
+  const roles = useMemo(() => parseRoles(settings), [settings])
 
   const targets = useMemo(() => (snap?.targets.length ? snap.targets : sim.on ? DEMO_TARGETS : []).filter((t) => t.enabled || t.unconfigured), [snap, sim.on])
   const rows = sim.on ? sim.rows : snap?.rows ?? []

@@ -95,6 +95,23 @@ export function createMockDataverse({ token = 'test-token', failActivation = nul
     walk(def?.actions)
   }
 
+  const attrMeta = (a) => ({ type: a?.AttributeType, maxLength: a?.MaxLength ?? null, min: a?.MinValue ?? null, max: a?.MaxValue ?? null, required: a?.RequiredLevel?.Value === 'ApplicationRequired' })
+
+  /** Like the real service: a value that does not fit its column is rejected with 0x80044331 and nothing is written. */
+  function rowError(entity, body, isCreate) {
+    for (const [k, v] of Object.entries(body ?? {})) {
+      const a = entity.attributes.get(k)
+      if (!a || v === null) continue
+      if (a.type === 'String' && typeof v === 'string' && a.maxLength && v.length > a.maxLength)
+        return err(400, `A validation error occurred. The length of the '${k}' attribute of the '${entity.LogicalName}' entity exceeded the maximum allowed length of '${a.maxLength}'.`, '0x80044331')
+      if (a.type === 'Integer' && (!Number.isInteger(v) || v < a.min || v > a.max))
+        return err(400, `A validation error occurred. The value ${v} of '${k}' on record of type '${entity.LogicalName}' is outside the valid range. Accepted Values: ${a.min} to ${a.max}.`, '0x80044330')
+      if (a.type === 'Boolean' && typeof v !== 'boolean') return err(400, `Cannot convert the literal '${v}' to the expected type 'Edm.Boolean'.`, '0x80048d19')
+    }
+    if (isCreate) for (const [k, a] of entity.attributes) if (a.required && (body?.[k] === undefined || body?.[k] === null)) return err(400, `Required field '${k}' is missing for entity '${entity.LogicalName}'.`, '0x80040200')
+    return null
+  }
+
   function runFlowOnce(wf) {           // what the real flow would do on its first run: one raw row per enabled target
     const tset = [...entities.values()].find((e) => e.LogicalName === 'owatch_target')
     const rset = [...entities.values()].find((e) => e.LogicalName === 'owatch_result')
@@ -102,7 +119,10 @@ export function createMockDataverse({ token = 'test-token', failActivation = nul
     const at = new Date().toISOString()
     for (const t of db[tset.EntitySetName] ?? []) {
       if (t.owatch_enabled === false) continue
-      ;(db[rset.EntitySetName] ??= []).push({ owatch_resultid: randomUUID(), owatch_name: t.owatch_name, owatch_httpstatus: 200, owatch_elapsedms: 120, owatch_errorkind: '', owatch_probedat: at, owatch_round: at, _flow: wf.workflowid })
+      const row = { owatch_resultid: randomUUID(), owatch_name: t.owatch_name, owatch_httpstatus: 200, owatch_elapsedms: 120, owatch_errorkind: '', owatch_probedat: at, owatch_round: at, _flow: wf.workflowid }
+      const bad = rowError(rset, row, true)
+      if (bad) { problems.push('flow run wrote a row that does not fit: ' + bad.body); continue }
+      ;(db[rset.EntitySetName] ??= []).push(row)
     }
   }
 
@@ -132,7 +152,7 @@ export function createMockDataverse({ token = 'test-token', failActivation = nul
         const ln = String(body.SchemaName).toLowerCase()
         if (entities.has(ln)) return err(400, `An entity with name ${ln} already exists`)
         const prim = body.Attributes.find((a) => a.IsPrimaryName)
-        const e = { MetadataId: randomUUID(), LogicalName: ln, EntitySetName: ln + entitySetSuffix, PrimaryId: ln + 'id', attributes: new Set([ln + 'id', String(prim?.SchemaName).toLowerCase()]), solution }
+        const e = { MetadataId: randomUUID(), LogicalName: ln, EntitySetName: ln + entitySetSuffix, PrimaryId: ln + 'id', attributes: new Map([[ln + 'id', { type: 'Uniqueidentifier' }], [String(prim?.SchemaName).toLowerCase(), attrMeta(prim)]]), solution }
         entities.set(ln, e)
         return reply(204, undefined, { 'OData-EntityId': `http://mock/api/data/v9.2/EntityDefinitions(${e.MetadataId})` })
       }
@@ -150,7 +170,7 @@ export function createMockDataverse({ token = 'test-token', failActivation = nul
       validateAttribute(body, solution)
       const an = String(body.SchemaName).toLowerCase()
       if (e.attributes.has(an)) return err(400, `Attribute ${an} already exists`)
-      e.attributes.add(an)
+      e.attributes.set(an, attrMeta(body))
       if (state.attrFailsAfterCreate > 0) { state.attrFailsAfterCreate--; return err(400, 'An unexpected error occurred.', '0x80040216') }   // applied, but the reply was an error
       return reply(204, undefined, { 'OData-EntityId': `http://mock/api/data/v9.2/EntityDefinitions(${e.MetadataId})/Attributes(${randomUUID()})` })
     }
@@ -180,6 +200,7 @@ export function createMockDataverse({ token = 'test-token', failActivation = nul
         if (m[1] === 'connectionreferences') { for (const k of ['connectionreferencelogicalname', 'connectorid']) check(!!body?.[k], `connection reference without ${k}`); check(solution !== null, 'connection reference created outside a solution') }
         if (m[1] === 'workflows') { validateWorkflow(body); check(solution !== null, 'flow created outside a solution'); row.statecode = 0 }
         if (set.entity) for (const k of Object.keys(body ?? {})) check(set.entity.attributes.has(k), `row for ${m[1]} uses unknown column ${k}`)
+        if (set.entity) { const bad = rowError(set.entity, body, true); if (bad) return bad }
         set.rows.push(row)
         return reply(204, undefined, { 'OData-EntityId': `http://mock/api/data/v9.2/${m[1]}(${row[set.pk]})` })
       }
@@ -208,6 +229,7 @@ export function createMockDataverse({ token = 'test-token', failActivation = nul
         }
       }
       if (set.entity) for (const k of Object.keys(body ?? {})) check(set.entity.attributes.has(k), `row patch for ${m[1]} uses unknown column ${k}`)
+      if (set.entity) { const bad = rowError(set.entity, body, false); if (bad) return bad }
       Object.assign(row, body)
       return reply(204)
     }

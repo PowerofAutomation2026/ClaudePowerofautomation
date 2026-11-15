@@ -148,6 +148,21 @@ Nothing in this folder has been run against a real tenant. Specifically:
     that the trigger counts; Microsoft's wording is "each trigger and action that runs". Real consumption is visible
     in the Power Platform admin center and may differ by a few percent.
 
+22. **`actions('Probe')` inside the "for each".** The Record action reads `actions('Probe')?['status' | 'code' | 'startTime' | 'endTime']`
+    of the current iteration. That is how the workflow language documents `actions()`, but nobody has seen this flow run. If it misbehaves,
+    the symptom is visible in the run history (Record fails or writes empty error kind / zero elapsed), not silent.
+23. **Null into an Integer column from the connector.** For a probe without an HTTP answer the flow passes `null` as `owatch_httpstatus`.
+    Assumed to leave the column empty. If the Dataverse connector rejects it, Record fails for exactly the probes that matter most
+    (visible in run history; the dashboard would then show STALE for those targets rather than "down").
+24. **`statusCode` is an integer.** Documented in the `result()` example (`"statusCode": 404`); the column accepts 0..999, HTTP uses 100..599.
+    It is not converted or clamped by the flow.
+25. **Expression functions used to bound values** (`take`, `string`, `max`, `min`, `div`, `sub`, `ticks`, `coalesce`, `if`, `equals`, `addDays`,
+    `utcNow` with a format string) are standard workflow-language functions; their exact behaviour on null input (`string(null)`) was not run.
+    Dataverse accepted the definition at creation, which checks syntax, not runtime behaviour.
+26. **Activation (`PATCH workflows(id) {"statecode": 1}`)** is the documented way to turn a flow on, and is the next step no real run has reached.
+27. **Dashboard after the fix**: with no `roles_json` row the built-in list is used; with an old 7-role row left by a 15-target deployment the
+    provisioner deletes it. A dashboard build older than this fix reading a tenant without the row also falls back to its built-in list.
+
 ## Test map
 
 | File | Proves |
@@ -157,6 +172,7 @@ Nothing in this folder has been run against a real tenant. Specifically:
 | `tests/provision.test.ts` | request sequence, idempotency, resume, upgrade from the 15-target version, tenant name added later, failures, uninstall/purge, CLI exit codes (mock Dataverse over HTTP) |
 | `tests/flow.test.ts` | clientdata envelope, run-after, no retries, dumb flow, heartbeat, usage estimate, metadata payloads |
 | `tests/validate.test.ts` | GUID (incl. the `.ps1` literal), org-URL allow-list, tenant, heartbeat URL, hostile input |
+| `tests/limits.test.ts` | every value the provisioner or the flow can write fits its column; mock enforces limits (0x80044331); re-run on top of the failed third real run |
 | `tests/ps1-static.test.ts` | `.ps1` balanced, PS 5.1-compatible syntax, ASCII, no secrets printed, `.cmd` wrappers |
 
 ## Found on the first real run (not from documentation)
@@ -165,4 +181,13 @@ Nothing in this folder has been run against a real tenant. Specifically:
   if it persists, the request id printed by the script is the next diagnostic.
 - Second real run: `GET owatch_settings` failed with 0x80060888 'Could not find a property named owatch_value' although the column creation had succeeded
   (the Web API schema cache lags behind metadata changes). Added wait-for-columns before seeding and a retry on that exact error. UNCONFIRMED against a real tenant.
-- Everything after step 6 (flow creation and activation, code app push, smoke test) has still never run for real: expect further first-run findings there.
+- Third real run: steps 1-6 passed, so **flow creation through `POST workflows` with the hand-written `clientdata` was accepted** by a real
+  environment (item 3 is confirmed for creation only, not for running). Step 7 failed with 0x80044331: the seeded `roles_json` setting was 618
+  characters, the `owatch_value` column holds 400. This was a plain bug that no test caught, because the only length test covered target rows and
+  the mock did not enforce column limits. Fix: the role list is not stored any more (built into the dashboard; optional override rows
+  `roles_json`, `roles_json_2`, ...). Chosen over widening the column or adding a Memo column because it changes nothing on tables that already
+  exist: no metadata call, no publish, no schema-cache wait, nothing to migrate. Class fix: `columnSpec()` derives limits from the same payloads
+  that create the columns; `assertRowFits()` checks every row before it is sent; the flow bounds runtime values (`take(string(..),N)`, clamped
+  elapsed time, fixed-width round id); the mock rejects oversize values with the real error code; `tests/limits.test.ts` covers all of it,
+  including a re-run on top of exactly the state the failed run left behind. UNCONFIRMED against a real tenant.
+- Everything after step 7 (turning the flow on, a flow RUN, code app push, smoke test) has still never run for real: expect further first-run findings there.

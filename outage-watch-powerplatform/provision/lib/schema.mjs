@@ -91,7 +91,59 @@ export function seedSettings(o) {
     { name: 'heartbeat_configured', value: o.heartbeat ? 'yes' : 'no', force: true },
     { name: 'confirm', value: String(d.confirm) }, { name: 'factor', value: String(d.factor) }, { name: 'floor_ms', value: String(d.floorMs) },
     { name: 'slow_ms', value: String(d.slowMs) }, { name: 'recover_after', value: String(d.recoverAfter) },
-    // created once and then the admin's; upgraded only while it still equals a default this tool shipped earlier
-    { name: 'roles_json', value: JSON.stringify(catalog.roles), replaceIf: catalog.previousRoles.map((r) => JSON.stringify(r)) },
   ]
+}
+
+/**
+ * Settings this tool no longer stores. `roles_json` (the "Can I do my job?" list) used to be seeded; with 11 roles its
+ * JSON is 618 characters and no longer fits the 400-character owatch_value column (first seen on a real tenant:
+ * 0x80044331). The dashboard has the same list built in (shared/catalog.json), so it is simply not stored any more.
+ * A row that still holds a default this tool shipped earlier is removed (so the built-in, current list applies);
+ * a row an admin edited is kept and still honoured.
+ */
+export const RETIRED_SETTINGS = [
+  { name: 'roles_json', deleteIf: [...catalog.previousRoles, catalog.roles].map((r) => JSON.stringify(r)) },
+]
+
+// ---------------------------------------------------------------------------------------------
+// Column constraints, derived from the SAME metadata payloads that create the columns.
+// Every row the provisioner writes is checked against them BEFORE it is sent (assertRowFits), the mock Dataverse
+// enforces them like the real service does, and tests check everything the flow can write.
+// ---------------------------------------------------------------------------------------------
+export function columnSpec(tableLogical) {
+  const t = TABLES.find((x) => x.logical === tableLogical)
+  if (!t) throw new Error('unknown table ' + tableLogical)
+  const spec = {}
+  for (const a of [...t.create.Attributes, ...t.columns]) {
+    spec[a.SchemaName.toLowerCase()] = {
+      type: a.AttributeType, maxLength: a.MaxLength ?? null, min: a.MinValue ?? null, max: a.MaxValue ?? null,
+      required: a.RequiredLevel?.Value === 'ApplicationRequired' || a.RequiredLevel?.Value === 'SystemRequired',
+    }
+  }
+  return spec
+}
+
+/** Returns a list of violations (empty = the row fits). `partial` = PATCH: required columns may be absent. */
+export function rowViolations(tableLogical, row, { partial = false } = {}) {
+  const spec = columnSpec(tableLogical)
+  const bad = []
+  for (const [k, v] of Object.entries(row)) {
+    const c = spec[k]
+    if (!c) { bad.push(`${tableLogical}.${k}: no such column`); continue }
+    if (v === null || v === undefined || v === '') { if (c.required) bad.push(`${tableLogical}.${k}: required`); continue }
+    if (c.type === 'String' && (typeof v !== 'string' || v.length > c.maxLength)) bad.push(`${tableLogical}.${k}: ${typeof v === 'string' ? v.length + ' characters, maximum ' + c.maxLength : 'not text'}`)
+    if (c.type === 'Integer' && (!Number.isInteger(v) || v < c.min || v > c.max)) bad.push(`${tableLogical}.${k}: ${v} is outside ${c.min}..${c.max}`)
+    if (c.type === 'Boolean' && typeof v !== 'boolean') bad.push(`${tableLogical}.${k}: not a boolean`)
+    if (c.type === 'DateTime' && (typeof v !== 'string' || !Number.isFinite(Date.parse(v)))) bad.push(`${tableLogical}.${k}: not a date/time`)
+  }
+  if (!partial) for (const [k, c] of Object.entries(spec)) if (c.required && (row[k] === undefined || row[k] === null || row[k] === '')) bad.push(`${tableLogical}.${k}: required`)
+  return [...new Set(bad)]
+}
+
+export class RowTooBig extends Error {}
+/** Throws BEFORE anything is sent, naming the column: a clear local error instead of a half-finished step. */
+export function assertRowFits(tableLogical, row, opts) {
+  const bad = rowViolations(tableLogical, row, opts)
+  if (bad.length) throw new RowTooBig('internal check failed, nothing was sent for this row: ' + bad.join('; '))
+  return row
 }
