@@ -573,10 +573,21 @@ try {
   $teamsConnectionId = ''
   if ($NoAlerts) { $common += '--no-alerts' }
   else {
-    if (-not $TeamsChannelLink -and -not $Yes) {
+    # One guided step. Without a channel NOBODY is told when a service fails, so interactive runs always ask.
+    $guided = (-not $Yes) -and (-not $TeamsChannelLink) -and (-not $SetSlackWebhook) -and (-not $SetWebexWebhook) -and (-not $SetAlertWebhook)
+    if ($guided) {
       Write-Host ''
-      Info 'Optional: alerts to a Teams channel. In Teams: channel name > "..." > "Get link to channel". (Slack / Webex: -SetSlackWebhook / -SetWebexWebhook.)'
-      $TeamsChannelLink = Read-Host 'Paste the Teams channel link, or press Enter to skip (channels configured earlier are kept)'
+      Write-Host '==> Alert channels: who should be told when a service fails? (each is optional; press Enter to skip one)' -ForegroundColor Cyan
+      Info 'Channels set up on an earlier run are kept. Skipping all on a first run means: NO alerts, only the dashboard.'
+      Info '1/4 Microsoft Teams. In Teams: hover the channel name > "..." > "Get link to channel" > Copy. (Standard channels only.)'
+      $TeamsChannelLink = Read-Host '    Teams channel link'
+      Info '2/4 Slack. Needs an "Incoming Webhook" URL for the channel (a webhook, not a Power Platform connector). Input is hidden.'
+      $env:OWPP_SLACK_WEBHOOK = Read-WebhookSecret 'Slack'
+      Info '3/4 Webex. Needs the "Incoming Webhooks" integration URL for the space (a webhook, not a connector). Input is hidden.'
+      $env:OWPP_WEBEX_WEBHOOK = Read-WebhookSecret 'Webex'
+      Info '4/4 Any other tool that accepts POST {"text": "..."} (generic webhook). Input is hidden.'
+      $env:OWPP_ALERT_WEBHOOK = Read-WebhookSecret 'Generic'
+      # (an empty answer leaves the variable unset: assigning an empty string to $env:NAME removes it)
     }
     if ($TeamsChannelLink) {
       $TeamsChannelLink = $TeamsChannelLink.Trim()
@@ -585,9 +596,12 @@ try {
       if ($code -ne 0) { throw 'The Teams channel link was not accepted (see the message above). Nothing has been changed.' }
       $common += @('--teams-channel-link', $TeamsChannelLink)
     }
-    if ($SetSlackWebhook) { $env:OWPP_SLACK_WEBHOOK = Read-WebhookSecret 'Slack' } elseif ($env:OUTAGEWATCH_SLACK_WEBHOOK) { $env:OWPP_SLACK_WEBHOOK = $env:OUTAGEWATCH_SLACK_WEBHOOK }
-    if ($SetWebexWebhook) { $env:OWPP_WEBEX_WEBHOOK = Read-WebhookSecret 'Webex' } elseif ($env:OUTAGEWATCH_WEBEX_WEBHOOK) { $env:OWPP_WEBEX_WEBHOOK = $env:OUTAGEWATCH_WEBEX_WEBHOOK }
-    if ($SetAlertWebhook) { $env:OWPP_ALERT_WEBHOOK = Read-WebhookSecret 'Generic' } elseif ($env:OUTAGEWATCH_ALERT_WEBHOOK) { $env:OWPP_ALERT_WEBHOOK = $env:OUTAGEWATCH_ALERT_WEBHOOK }
+    if ($guided) { }
+    elseif ($SetSlackWebhook) { $env:OWPP_SLACK_WEBHOOK = Read-WebhookSecret 'Slack' } elseif ($env:OUTAGEWATCH_SLACK_WEBHOOK) { $env:OWPP_SLACK_WEBHOOK = $env:OUTAGEWATCH_SLACK_WEBHOOK }
+    if ($guided) { }
+    elseif ($SetWebexWebhook) { $env:OWPP_WEBEX_WEBHOOK = Read-WebhookSecret 'Webex' } elseif ($env:OUTAGEWATCH_WEBEX_WEBHOOK) { $env:OWPP_WEBEX_WEBHOOK = $env:OUTAGEWATCH_WEBEX_WEBHOOK }
+    if ($guided) { }
+    elseif ($SetAlertWebhook) { $env:OWPP_ALERT_WEBHOOK = Read-WebhookSecret 'Generic' } elseif ($env:OUTAGEWATCH_ALERT_WEBHOOK) { $env:OWPP_ALERT_WEBHOOK = $env:OUTAGEWATCH_ALERT_WEBHOOK }
     if ($RemoveChannels) {
       $RemoveChannels = $RemoveChannels.Trim().ToLowerInvariant()
       if ($RemoveChannels -cnotmatch $ChannelListPattern) { throw '-RemoveChannels takes a comma list of: teams,slack,webex,webhook' }
@@ -686,7 +700,11 @@ try {
   $alertStatus = ''
   if ($result -and $result.alerts) { $alertStatus = "$($result.alerts.status)" }
   if ($alertStatus -eq 'on') {
-    Write-Host ("Alerts      : ON to {0} (flow 'Outage Watch - alert'; webhook URLs are never shown)" -f (@($result.alerts.channels) -join ', ')) -ForegroundColor Green
+    Write-Host ("Alerts      : ON to {0}" -f (@($result.alerts.channels) -join ', ')) -ForegroundColor Green
+    Write-Host "              created: cloud flow 'Outage Watch - alert' (Power Automate > Solutions > Outage Watch > Cloud flows), table 'Outage Watch Incident'"
+    if (@($result.alerts.channels) -contains 'teams') { Write-Host "                       connection reference 'Outage Watch - Teams' (owatch_teams), bound to your Microsoft Teams connection" }
+    Write-Host '              Slack / Webex / generic are incoming WEBHOOKS (HTTP action), not connectors: there is no Slack or Webex connection to look for. URLs are never shown.'
+    Write-Host '              see it : re-run with -SendTestAlert; a message titled "TEST - Outage Watch alert test" arrives in every channel within one interval.'
     Write-Host '              test  : re-run with -SendTestAlert, or set the setting alert_test to yes (a TEST message is sent within one interval)'
     Write-Host '              mute  : set the setting alert_snooze_until to a UTC time such as 2026-12-31T18:00:00Z (probing continues)'
     Write-Host '              change: re-run with -TeamsChannelLink / -SetSlackWebhook / -SetWebexWebhook; remove with -RemoveChannels slack; stop with -NoAlerts'
@@ -696,7 +714,15 @@ try {
   } elseif ($alertStatus -eq 'disabled') {
     Write-Host 'Alerts      : OFF (-NoAlerts)' -ForegroundColor Yellow
   } else {
-    Write-Host 'Alerts      : NOT configured - nobody is told when a service fails. Re-run with -TeamsChannelLink, -SetSlackWebhook or -SetWebexWebhook.' -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!' -ForegroundColor Yellow
+    Write-Host 'ALERTS ARE OFF: no channel is configured. Nobody is told when a service fails.' -ForegroundColor Yellow
+    Write-Host 'No Teams / Slack / Webex integration exists until you give a channel. To add one, run:' -ForegroundColor Yellow
+    Write-Host ("  Deploy-OutageWatchPP.cmd {0} -TeamsChannelLink ""<link from Teams: channel > ... > Get link to channel>"" -SendTestAlert" -f $EnvironmentId) -ForegroundColor Yellow
+    Write-Host ("  Deploy-OutageWatchPP.cmd {0} -SetSlackWebhook -SendTestAlert      (asks for the Slack incoming-webhook URL, hidden)" -f $EnvironmentId) -ForegroundColor Yellow
+    Write-Host ("  Deploy-OutageWatchPP.cmd {0} -SetWebexWebhook -SendTestAlert      (asks for the Webex incoming-webhook URL, hidden)" -f $EnvironmentId) -ForegroundColor Yellow
+    Write-Host 'or run it without options and answer the "Alert channels" questions.' -ForegroundColor Yellow
+    Write-Host '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!' -ForegroundColor Yellow
   }
   if ($result -and $result.estimate) { Write-Host ("Flow usage  : about {0} Power Platform requests/day (~{1}% of a 40,000/day Premium licence), {2} result rows/day" -f $result.estimate.perDay, $result.estimate.pctOf40k, $result.estimate.rowsPerDay) }
   Write-Host ''

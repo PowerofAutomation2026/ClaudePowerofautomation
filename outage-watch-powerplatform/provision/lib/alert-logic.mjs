@@ -5,7 +5,7 @@
 // tested thoroughly; tests/alert-flow.test.ts then executes the GENERATED flow definition with a small
 // interpreter (tests/helpers/wdl.mjs) against the mock Dataverse and requires both to agree, round after round.
 // (The interpreter is this project's reading of the workflow language - it is not Microsoft's engine.)
-import { CAPS, ROUND_SETTLE_MINUTES, SAME_FATE, SENTINEL, TAGS, TITLES } from './alert-flow.mjs'
+import { CAPS, COMMON, ROUND_SETTLE_MINUTES, SAME_FATE, SENTINEL, TAGS, TITLES } from './alert-flow.mjs'
 
 /** Same rule the probe flow writes into owatch_failed. `aliveText` is the target's alive-codes text ('' = any). */
 export function isFailure(httpStatus, aliveText) {
@@ -82,14 +82,17 @@ export function itemText(target, failRow, d, lastFamily) {
   return heading + '[' + tag + '] ' + cap(target.owatch_name, CAPS.name) + '\n  URL: ' + cap(target.owatch_url, CAPS.url) + '\n  ' + details + '\n'
 }
 
+/** Header notes. When sign-in fails: the probable common cause first, with the evidence and what cannot be known. */
 export function notesText(targets, failNames) {
   let out = 'Failing in this probe round: ' + failNames.length + ' service(s).\n'
   if (failNames.includes('auth')) {
     const atRisk = targets.filter((t) => t.owatch_dependsonauth === true && t.owatch_enabled === true && (t.owatch_url ?? '') !== '' && t.owatch_name !== 'auth').map((t) => cap(t.owatch_name, CAPS.name))
-    out += 'At risk downstream (sign-in is failing): ' + atRisk.slice(0, CAPS.atRisk).join(', ') + (atRisk.length > CAPS.atRisk ? ' and ' + (atRisk.length - CAPS.atRisk) + ' more' : '') + '\n'
+    const depFailing = targets.filter((t) => t.owatch_dependsonauth === true && failNames.includes(t.owatch_name) && t.owatch_name !== 'auth').length
+    out += COMMON.authLead + '\n' + COMMON.evidence + depFailing + ' of the other ' + (failNames.length - 1) + ' failing service(s) need sign-in; ' + atRisk.length + ' monitored services need sign-in in total.\n' +
+      COMMON.atRisk + atRisk.slice(0, CAPS.atRisk).join(', ') + (atRisk.length > CAPS.atRisk ? ' and ' + (atRisk.length - CAPS.atRisk) + ' more' : '') + '\n' + COMMON.cannotKnow + '\n'
   }
   const under = targets.filter((t) => t.owatch_copilotneeds === true && failNames.includes(t.owatch_name) && t.owatch_name !== 'm365-copilot').map((t) => cap(t.owatch_name, CAPS.name))
-  if (failNames.includes('m365-copilot') && under.length) out += 'Copilot affected; underlying services also unhealthy: ' + under.slice(0, CAPS.atRisk).join(', ') + '\n'
+  if (failNames.includes('m365-copilot') && under.length) out += COMMON.copilot + under.slice(0, CAPS.atRisk).join(', ') + '\n'
   return out
 }
 
@@ -159,5 +162,5 @@ const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
 /** Upper bound of the message TEXT in characters for ANY input (a test proves the caps hold). */
 export function worstCaseTextChars() {
   const item = 6 + CAPS.family + 20 + CAPS.name + 10 + CAPS.url + 60 + CAPS.kind + 1 + CAPS.error + 130 + 80
-  return 250 + (60 + 2 * (60 + CAPS.atRisk * (CAPS.name + 2) + 20)) + CAPS.detailed * (item + 1) + 60 + 420 + SAME_FATE.length + 10
+  return 250 + (60 + 900 + 2 * (60 + CAPS.atRisk * (CAPS.name + 2) + 20)) + CAPS.detailed * (item + 1) + 60 + 420 + SAME_FATE.length + 10
 }

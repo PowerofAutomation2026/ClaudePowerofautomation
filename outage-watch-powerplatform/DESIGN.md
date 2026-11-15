@@ -52,6 +52,9 @@
 | Webhook URLs only inside the flow definition, secure inputs/outputs; status of a failed webhook = HTTP status only | See README "Where the webhook URLs are kept". Key Vault-backed secret environment variables were not verifiable here. |
 | CI / agent status = one setting row rewritten every judged round, read through the Web API | Documented, no extra flow, no HTTP-trigger URL (which would be a bearer secret) and no premium trigger. Its `updated` time doubles as a liveness signal; the gate fails closed on stale data by default. |
 | Incidents per service, in their own table | Matches the per-target state; open / remind / close are single-row operations found by name + open flag. |
+| Insights computed in the browser, on the already loaded window | No flow runs, no quota, no tenant risk; rules can be read and tested as plain TypeScript (`src/logic/insights.ts`). Price: they only see what the dashboard loaded (12 hours of results, 200 incidents). Anything needing weeks of rows (time-of-week baselines, 30-day uptime) was not built instead of being approximated. |
+| "Probable common cause" is a fixed ordered rule list, never a cause label from elsewhere | Early vendor root causes get revised; the monitor only states what its probes saw and always prints the evidence and the limits. The alert flow uses the same wording for the sign-in case (reference and flow compared in tests). |
+| Alerts are opt-in, and the script, summary and dashboard now say so loudly | The first real deployment had no channel and nothing made that visible. |
 | Pruning inside the flow | Simple and visible. It costs one request per deleted row; a Dataverse bulk-delete job would cost none but was not implemented (unverifiable here). |
 | Dashboard reads through `getClient().retrieveMultipleRecordsAsync` | Same proven pattern as the repository's existing code app (find the generated data source by primary key, not by its display name). Read-only. |
 | States shown as shape + icon + word | Never colour alone; reduced motion respected; dark/light tokens from the Python dashboard. |
@@ -205,6 +208,15 @@ Nothing in this folder has been run against a real tenant. Specifically:
     needed for the two new columns to be written. If the patch is rejected the probe flow would stay OFF: the script reports the
     error; turn it back on in Power Automate (the old definition keeps working) and report the message.
 
+36. **Clipboard / download in the Power Apps player.** `navigator.clipboard.writeText` and a Blob download link work in a normal
+    browser tab (tested in headless Chromium); inside the code-app host frame either may be blocked by permissions policy. The
+    generated text is always also placed in a read-only box.
+37. **Community scan.** The feature choices cite a scan of public pages supplied to the author (no vote counts). Nothing in this
+    folder claims a feature is new or unique; no competing product was examined.
+38. **Insight thresholds** (drift 50% and 150 ms over 6 probes; flapping 4 changes in 12 rounds; 80% / 60% in the common-cause
+    rules) are reasoned defaults, not calibrated on real data.
+39. **Guided channel prompts in the script** (four `Read-Host` questions, three hidden) are statically checked only.
+
 ## Test map
 
 | File | Proves |
@@ -217,6 +229,7 @@ Nothing in this folder has been run against a real tenant. Specifically:
 | `tests/alert-flow.test.ts` + `tests/helpers/wdl.mjs` | reference alert logic; both generated flows EXECUTED by an interpreter against the mock and compared with the reference (lifecycle, channels, incidents, CI status, hostile input, fuzz); structure of the alert flow |
 | `tests/upgrade-alerts.test.ts` | upgrade from the deployed version 24090f5 (real old flow definition), channels kept / added / removed, secrets only in the flow definition, alert-flow rejection, CLI exit codes, DryRun |
 | `tests/gate.test.ts` | CI gate decisions and end-to-end read from the mock; pipeline snippets and agent definition (structure, existing columns) |
+| `tests/insights.test.ts` | every insight rule with its evidence, boundaries, hostile and degenerate input, deterministic report |
 | `tests/limits.test.ts` | every value the provisioner or the flow can write fits its column; mock enforces limits (0x80044331); re-run on top of the failed third real run |
 | `tests/ps1-static.test.ts` | `.ps1` balanced, PS 5.1-compatible syntax, ASCII, no secrets printed, `.cmd` wrappers |
 

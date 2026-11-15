@@ -5,6 +5,7 @@ import { ROLE_WORD, SEV, derive, downstream, familySummary, groupFamilies, isPro
 import { SCENARIOS, demoSource, demoTargetList, probed, simulateRows, type Scenario } from './data/demo'
 import { hasDataverse, liveSource } from './data/live'
 import type { IncidentRow, Snapshot } from './data/types'
+import { commonCause, drifting, flapping, incidentReport, incidentStats, parseHeadcount, scorecard, staffUpdate } from './logic/insights'
 
 // ---------- glyphs: state is always shape + icon + word, never colour alone ----------
 const OCT = (() => { const p: string[] = []; for (let i = 0; i < 8; i++) { const a = ((22.5 + 45 * i) * Math.PI) / 180; p.push((23 * Math.cos(a)).toFixed(1) + ',' + (23 * Math.sin(a)).toFixed(1)) } return 'M' + p.join('L') + 'Z' })()
@@ -208,7 +209,15 @@ function AutomationPanel({ settings, incidents, now, interval }: { settings: Rec
     <section className="panel" aria-labelledby="hAuto">
       <h2 id="hAuto">Alerts, CI gate and incidents</h2>
       {!configured ? (
-        <p className="autoLine k-blocked"><Glyph kind="blocked" /><span><b>Alerts: not configured.</b> Nobody is told when a service fails. Re-run the deploy with <span className="mono">-TeamsChannelLink</span>, <span className="mono">-SetSlackWebhook</span> or <span className="mono">-SetWebexWebhook</span>.</span></p>
+        <div className="setup" role="note">
+          <p className="autoLine k-suspect"><Glyph kind="suspect" /><span><b>ALERTS ARE NOT SET UP.</b> Nobody is told when a service fails: there is no Teams, Slack or Webex integration until a channel is given to the deploy script. On the machine where you deployed, run one of:</span></p>
+          <ul className="cmds">
+            <li><b>Teams</b> (needs the channel link: channel name &gt; ... &gt; Get link to channel; a standard channel; one click to create the Teams connection)<code>Deploy-OutageWatchPP.cmd &lt;environment-id&gt; -TeamsChannelLink "&lt;link&gt;" -SendTestAlert</code></li>
+            <li><b>Slack</b> (needs an Incoming Webhook URL for the channel; asked with hidden input; a webhook, not a connector)<code>Deploy-OutageWatchPP.cmd &lt;environment-id&gt; -SetSlackWebhook -SendTestAlert</code></li>
+            <li><b>Webex</b> (needs the Incoming Webhooks integration URL for the space; hidden input)<code>Deploy-OutageWatchPP.cmd &lt;environment-id&gt; -SetWebexWebhook -SendTestAlert</code></li>
+          </ul>
+          <p className="hint">Or run the script with no options and answer the "Alert channels" questions. A TEST message then arrives within one probe interval, and this panel shows each channel's last delivery.</p>
+        </div>
       ) : (
         <>
           <p className={'autoLine k-' + (muted || disabled ? 'warning' : 'up')}><Glyph kind={muted || disabled ? 'warning' : 'up'} /><span>
@@ -243,6 +252,84 @@ function AutomationPanel({ settings, incidents, now, interval }: { settings: Rec
   )
 }
 
+// ---------- insights ----------
+interface InsightsProps {
+  frame: Frame | null; frames: Frame[]; D: Map<string, Derived>; targets: { name: string; family: string; dependsOnAuth: boolean; copilotNeeds: boolean }[]
+  settings: Record<string, string>; incidents: IncidentRow[]; now: number; interval: number; roles: Record<string, string[]>; sim: boolean
+}
+/** Explainable analysis of what is already loaded. Every statement shows the numbers it rests on. No prediction, no model. */
+function InsightsPanel({ frame, frames, D, targets, settings, incidents, now, interval, roles, sim }: InsightsProps) {
+  const [msg, setMsg] = useState('')
+  const [draft, setDraft] = useState('')
+  const familyOf = useMemo(() => { const m = new Map(targets.map((t) => [t.name, t.family])); return (n: string) => m.get(n) ?? 'Independent' }, [targets])
+  const cause = useMemo(() => (frame ? commonCause(frame, D, targets) : null), [frame, D, targets])
+  const drift = useMemo(() => drifting(frames, { window: 6, percent: clampNum(settings.drift_percent, 10, 500, 50), minMs: clampNum(settings.drift_min_ms, 10, 10000, 150) }), [frames, settings.drift_percent, settings.drift_min_ms])
+  const flaps = useMemo(() => flapping(frames, 12, clampNum(settings.flap_changes, 2, 12, 4)), [frames, settings.flap_changes])
+  const card = useMemo(() => scorecard(frames, familyOf), [frames, familyOf])
+  const stats = useMemo(() => incidentStats(incidents, now), [incidents, now])
+  const headcount = useMemo(() => parseHeadcount(settings.impact_headcount), [settings.impact_headcount])
+  const latest = incidents[0] ?? null
+  const report = () => (latest ? incidentReport(latest, incidents, now, { intervalMinutes: interval, headcount, roles }) : '')
+  const copy = async (text: string, what: string) => {
+    setDraft(text)
+    try { await navigator.clipboard.writeText(text); setMsg(what + ' copied to the clipboard.') } catch { setMsg('Could not copy automatically. The text is in the box below: select it and copy.') }
+  }
+  const download = () => {
+    try {
+      const url = URL.createObjectURL(new Blob([report()], { type: 'text/markdown' }))
+      const a = document.createElement('a'); a.href = url; a.download = 'outage-watch-incident-report.md'; a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 5000); setMsg('Download started. If nothing happens (some embedded views block downloads), use Copy instead.')
+    } catch { setMsg('Downloads are not available here. Use Copy instead.') }
+  }
+  const worst = card.services.filter((x) => (x.answeredPct ?? 100) < 100).slice(0, 5)
+  return (
+    <section className="panel insights" aria-labelledby="hIns">
+      <h2 id="hIns">Insights{sim && <span className="simTag">SIMULATED</span>}</h2>
+      <p className="hint">Deterministic checks on the loaded probe results, each with the numbers it used. Nothing here predicts anything or changes the level.</p>
+      <div className="insGrid">
+        <div className={'ins k-' + (cause ? 'down' : 'up')}>
+          <h3><Glyph kind={cause ? 'down' : 'up'} />Probable common cause</h3>
+          {cause ? (<>
+            <p className="big">{cause.title}</p>
+            <ul>{cause.evidence.map((e, i) => <li key={i}>{e}</li>)}</ul>
+            <p className="cannot">{cause.cannotKnow}</p>
+          </>) : <p>{frame ? 'No shared cause to report: nothing is failing, or the failures have nothing in common in the dependency map.' : 'No probe data yet.'}</p>}
+        </div>
+        <div className={'ins k-' + (drift.length || flaps.length ? 'warning' : 'up')}>
+          <h3><Glyph kind={drift.length || flaps.length ? 'warning' : 'up'} />Drifting and flapping</h3>
+          {drift.length ? <ul>{drift.slice(0, 5).map((d) => <li key={d.name}><b>{d.name}</b> is drifting: last 6 answers median {d.recentMedian} ms vs {d.baseline} ms before (+{d.percentUp}%), still below its warning threshold.</li>)}</ul> : <p>No service is drifting (recent median at least {clampNum(settings.drift_percent, 10, 500, 50)}% and {clampNum(settings.drift_min_ms, 10, 10000, 150)} ms above its earlier median).</p>}
+          {flaps.length ? <ul>{flaps.slice(0, 5).map((f) => <li key={f.name}><b>{f.name}</b> is flapping: {f.changes} changes between answering and failing in the last {f.rounds} rounds.</li>)}</ul> : <p>No service is flapping.</p>}
+        </div>
+        <div className="ins k-up">
+          <h3><Glyph kind="up" />Scorecard (loaded window)</h3>
+          {card.rounds ? (<>
+            <p>{card.rounds} probe rounds, {card.from ? utc(card.from) : ''} to {card.to ? utc(card.to) : ''}.</p>
+            <div className="tblWrap"><table className="mini"><thead><tr><th scope="col">Family</th><th scope="col">Answered</th><th scope="col">p50</th><th scope="col">p95</th></tr></thead>
+              <tbody>{card.families.map((f) => <tr key={f.name}><th scope="row">{f.name}</th><td>{f.answeredPct ?? '-'}%</td><td>{f.p50 ?? '-'}</td><td>{f.p95 ?? '-'}</td></tr>)}</tbody></table></div>
+            {worst.length > 0 && <p>Below 100%: {worst.map((x) => `${x.name} ${x.answeredPct}%`).join(', ')}.</p>}
+          </>) : <p>No probe data yet.</p>}
+        </div>
+        <div className={'ins k-' + (stats.open ? 'down' : 'up')}>
+          <h3><Glyph kind={stats.open ? 'down' : 'up'} />Incidents, last {stats.days} days</h3>
+          <p>{stats.total} incident(s), {stats.open} open. Mean time to recover: {stats.mttrMinutes === null ? 'n/a' : dur(stats.mttrMinutes)}. Alert messages: {stats.alerts}{stats.alertsPerWeek !== null ? ` (${stats.alertsPerWeek} per week` + (stats.reminderPct !== null ? `, ${stats.reminderPct}% reminders)` : ')') : ''}.</p>
+          {stats.chronic.length > 0 && <p>Repeat offenders: {stats.chronic.map((c) => `${c.name} (${c.incidents} incidents, ${dur(c.minutes)})`).join('; ')}.</p>}
+          {stats.hint && <p className="cannot">Noise hint: {stats.hint}</p>}
+          {Object.keys(headcount).length > 0 && <p className="cannot">People per task (admin-supplied figures from the setting impact_headcount, not measured): {Object.entries(headcount).map(([k, v]) => `${k} about ${v}`).join('; ')}.</p>}
+          {latest ? (
+            <div className="btns">
+              <button type="button" onClick={() => void copy(report(), 'Post-incident report (Markdown)')}>Copy post-incident report</button>
+              <button type="button" onClick={download}>Download .md</button>
+              <button type="button" onClick={() => void copy(staffUpdate(latest, incidents, now), 'Staff update draft')}>Copy staff update draft</button>
+            </div>
+          ) : <p>No incident recorded yet: the report and the staff update are built from the incident records.</p>}
+          <p role="status" className="hint">{msg}</p>
+          {draft && <textarea className="draft" readOnly rows={8} value={draft} aria-label="Generated text" onFocus={(e) => e.currentTarget.select()} />}
+        </div>
+      </div>
+    </section>
+  )
+}
+
 // ---------- app ----------
 type Theme = 'auto' | 'light' | 'dark'
 const params = new URLSearchParams(typeof location !== 'undefined' ? location.search : '')
@@ -273,7 +360,7 @@ export default function App() {
     const sc = SCENARIOS.find((s) => s.id === qSim)?.id
     if (!sc) return { on: false, scenario: 'healthy', rows: [], k: 0 }
     const names = probed(DEMO_TARGETS)
-    return { on: true, scenario: sc, rows: simulateRows(names, 11, Date.now(), SIM_STEP_MS, (i) => (i < 8 ? 'healthy' : sc)), k: 11 }
+    return { on: true, scenario: sc, rows: simulateRows(names, 30, Date.now(), SIM_STEP_MS, (i) => (i < 16 ? 'healthy' : sc)), k: 30 }
   })
 
   useEffect(() => {
@@ -302,7 +389,7 @@ export default function App() {
     if (!sim.on || qSim) return
     const t = setInterval(() => setSim((s) => {
       const names = probed(snap?.targets.length ? snap.targets : DEMO_TARGETS)
-      const add = simulateRows(names, 1, Date.now(), SIM_STEP_MS, () => s.scenario).map((r) => ({ ...r }))
+      const add = simulateRows(names, 1, Date.now(), SIM_STEP_MS, () => s.scenario, s.k).map((r) => ({ ...r }))
       return { ...s, rows: [...s.rows, ...add].slice(-names.length * 60), k: s.k + 1 }
     }), SIM_STEP_MS)
     return () => clearInterval(t)
@@ -317,6 +404,7 @@ export default function App() {
     recoverAfter: clampNum(settings.recover_after, 1, 20, DEFAULT_THRESHOLDS.recoverAfter),
   }), [settings.confirm, settings.factor, settings.floor_ms, settings.slow_ms, settings.recover_after])
   const roles = useMemo(() => parseRoles(settings), [settings])
+  const headcountAll = useMemo(() => parseHeadcount(settings.impact_headcount), [settings.impact_headcount])
 
   const targets = useMemo(() => (snap?.targets.length ? snap.targets : sim.on ? DEMO_TARGETS : []).filter((t) => t.enabled || t.unconfigured), [snap, sim.on])
   const rows = sim.on ? sim.rows : snap?.rows ?? []
@@ -340,7 +428,7 @@ export default function App() {
   const startSim = () => {
     const names = probed(targets.length ? targets : DEMO_TARGETS)
     setSelected(null)
-    setSim({ on: true, scenario: 'healthy', rows: simulateRows(names, 8, Date.now(), SIM_STEP_MS, () => 'healthy'), k: 8 })
+    setSim({ on: true, scenario: 'healthy', rows: simulateRows(names, 16, Date.now(), SIM_STEP_MS, () => 'healthy'), k: 16 })
   }
   const stopSim = () => { setSelected(null); setSim({ on: false, scenario: 'healthy', rows: [], k: 0 }) }
 
@@ -457,7 +545,7 @@ export default function App() {
             <ul className="roles">
               {!frame && <li>No probe data yet.</li>}
               {roleRows.map((r) => { const gk: Kind = r.k === 'none' ? 'blocked' : r.k; return (
-                <li key={r.name} className={'k-' + gk}><Glyph kind={gk} /><div><b>{r.name}</b><strong>{ROLE_WORD[r.k]}</strong><small>{r.why}</small></div></li>
+                <li key={r.name} className={'k-' + gk}><Glyph kind={gk} /><div><b>{r.name}</b><strong>{ROLE_WORD[r.k]}</strong><small>{r.why}</small>{headcountAll[r.name] && r.k !== 'up' && r.k !== 'none' ? <small>about {headcountAll[r.name]} people use this (admin-supplied figure)</small> : null}</div></li>
               ) })}
             </ul>
           </section>
@@ -470,6 +558,8 @@ export default function App() {
           </section>
         </div>
       </div>
+
+      <InsightsPanel frame={frame} frames={frames} D={D} targets={targets} settings={settings} incidents={sim.on ? [] : snap?.incidents ?? []} now={now} interval={interval} roles={roles} sim={sim.on} />
 
       <section className="panel" aria-labelledby="hAll">
         <h2 id="hAll">Services (same information as the map, as text; follows the filter above)</h2>

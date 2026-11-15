@@ -111,6 +111,10 @@ export function seedSettings(o) {
     { name: 'heartbeat_configured', value: o.heartbeat ? 'yes' : 'no', force: true },
     { name: 'confirm', value: String(d.confirm) }, { name: 'factor', value: String(d.factor) }, { name: 'floor_ms', value: String(d.floorMs) },
     { name: 'slow_ms', value: String(d.slowMs) }, { name: 'recover_after', value: String(d.recoverAfter) },
+    // --- Insights (computed in the dashboard). Admin-editable: ---
+    { name: 'drift_percent', value: '50' }, { name: 'drift_min_ms', value: '150' },     // "drifting" = recent median this much above the baseline (both must hold)
+    { name: 'flap_changes', value: '4' },                                              // changes between answering and failing in 12 rounds = "flapping"
+    { name: 'impact_headcount', value: '' },                                           // e.g. "Email & calendar=240; Meetings=300" - YOUR numbers, shown as such
     // --- Teams alerts. Admin-editable (created once, then yours): ---
     { name: 'alert_enabled', value: 'yes' },                 // 'no' = never post (state is still tracked)
     { name: 'alert_confirm', value: String(d.confirm) },     // failed rounds in a row before an incident is posted

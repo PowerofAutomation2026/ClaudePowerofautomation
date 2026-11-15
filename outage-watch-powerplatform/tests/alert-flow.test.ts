@@ -16,7 +16,7 @@ import { createMockDataverse } from '../provision/lib/mock-dataverse.mjs'
 // @ts-expect-error plain .mjs helpers
 import { apply } from '../provision/lib/provision.mjs'
 // @ts-expect-error plain .mjs helpers
-import { CAPS, CHANNELS, SAME_FATE, TAGS, TITLES, buildAlertClientData, estimateAlertRequests, existingChannels } from '../provision/lib/alert-flow.mjs'
+import { CAPS, CHANNELS, COMMON, SAME_FATE, TAGS, TITLES, buildAlertClientData, estimateAlertRequests, existingChannels } from '../provision/lib/alert-flow.mjs'
 // @ts-expect-error plain .mjs helpers
 import { ciStatus, context, decide, escapeHtml, evaluateRun, isFailure, latestCompleteRound, slackText, teamsHtml, webexText, webhookText, worstCaseTextChars } from '../provision/lib/alert-logic.mjs'
 // @ts-expect-error plain .mjs helpers
@@ -206,7 +206,7 @@ describe('reference logic: one text, safely encoded per channel', () => {
     expect(CAPS.detailed).toBeGreaterThanOrEqual(10); expect(CAPS.error).toBe(300)
   })
   it('the fixed texts contain no apostrophe (they sit inside workflow-language string literals) and the same-fate line is honest', () => {
-    for (const t of [SAME_FATE, ...Object.values(TITLES), ...Object.values(TAGS)]) expect(String(t)).not.toContain("'")
+    for (const t of [SAME_FATE, ...Object.values(TITLES), ...Object.values(TAGS), ...Object.values(COMMON)]) expect(String(t)).not.toContain("'")
     expect(SAME_FATE).toMatch(/same Microsoft cloud/); expect(SAME_FATE).toMatch(/may be late or never arrive/)
   })
 })
@@ -352,9 +352,14 @@ describe('generated flows, executed: incident lifecycle on every channel (each r
     const order = ['== Copilot ==', '[NEW FAILURE] m365-copilot', '== Exchange ==', '[NEW FAILURE] exchange', '== Identity & platform ==', '[NEW FAILURE] auth', '== Power Platform & dashboards ==', '[NEW FAILURE] power-bi'].map((x) => h.indexOf(x))
     expect(order.every((x) => x >= 0)).toBe(true); expect([...order].sort((a, b) => a - b)).toEqual(order)
     expect(h).toContain("Result: no HTTP answer after 150 ms\n  Error: BadGateway Http request failed as there is an error: 'No such host is known.")
-    expect(h).toMatch(/At risk downstream \(sign-in is failing\): copilot-studio, .* and \d+ more\n/)
+    // root cause first: ONE statement of the probable common cause, with its evidence and what cannot be known
+    expect(h).toContain('PROBABLE COMMON CAUSE: sign-in (auth) is failing its probe.')
+    expect(h).toContain('Evidence: 3 of the other 3 failing service(s) need sign-in; 28 monitored services need sign-in in total.')
+    expect(h).toMatch(/At risk downstream: copilot-studio, .* and \d+ more\n/)
+    expect(h).toContain('What the probes cannot know: the actual root cause')
+    expect(h.indexOf('PROBABLE COMMON CAUSE')).toBeLessThan(h.indexOf('[NEW FAILURE]'))
     expect(h).not.toMatch(/At risk[^\n]*sharepoint-online/)                                  // unconfigured targets are never listed as at risk
-    expect(h).toContain('Copilot affected; underlying services also unhealthy: exchange')
+    expect(h).toContain('Probable cause of the Copilot failure: services it reads from are failing too: exchange')
     expect(teams[0]).toContain('== Identity &amp; platform ==')
     expect(w.incidents().filter((x: any) => x.owatch_isopen)).toHaveLength(4)
     expect(JSON.parse(w.setting('ci_status').owatch_value)).toMatchObject({ level: 'freeze', failing: 4, confirmed: 4 })

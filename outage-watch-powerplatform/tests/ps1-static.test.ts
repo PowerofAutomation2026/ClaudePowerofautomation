@@ -135,7 +135,7 @@ describe('Deploy-OutageWatchPP.ps1 static checks (NOT an execution test)', () =>
     // Teams: connection found or created by polling; a missing connection never fails the deployment
     expect(ps).toMatch(/connections\/available\?apiName=shared_teams/); expect(ps).toMatch(/\$code -eq 6/); expect(ps).toMatch(/continuing WITHOUT Teams alerts/)
     expect(ps).toMatch(/'owatch_target', 'owatch_result', 'owatch_setting', 'owatch_incident'/)
-    expect(ps).toMatch(/Alerts      : NOT configured/); expect(ps).toMatch(/alert_snooze_until/); expect(ps).toMatch(/-SendTestAlert/)
+    expect(ps).toMatch(/ALERTS ARE OFF: no channel is configured/); expect(ps).toMatch(/Deploy-OutageWatchPP\.cmd \{0\} -SetSlackWebhook -SendTestAlert/); expect(ps).toMatch(/incoming WEBHOOKS \(HTTP action\), not connectors/); expect(ps).toMatch(/Alert channels: who should be told/); expect(ps).toMatch(/connection reference 'Outage Watch - Teams' \(owatch_teams\)/); expect(ps).toMatch(/alert_snooze_until/); expect(ps).toMatch(/-SendTestAlert/)
   })
 
   it('states the same-fate warning and the manual steps in the summary', () => {

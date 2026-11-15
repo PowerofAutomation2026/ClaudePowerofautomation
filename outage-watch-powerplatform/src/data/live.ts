@@ -88,7 +88,7 @@ async function readTargets(): Promise<any[]> {
 /** Incident history. The table arrived with the alert feature: a dashboard on older tables simply shows none. */
 async function readIncidents(): Promise<IncidentRow[]> {
   try {
-    const rows = await readAll('owatch_incident', { select: ['owatch_name', 'owatch_family', 'owatch_isopen', 'owatch_openedat', 'owatch_closedat', 'owatch_durationminutes', 'owatch_failedrounds', 'owatch_reminders', 'owatch_firsterror'], orderBy: ['owatch_openedat desc'], top: 25 })
+    const rows = await readAll('owatch_incident', { select: ['owatch_name', 'owatch_family', 'owatch_isopen', 'owatch_openedat', 'owatch_closedat', 'owatch_durationminutes', 'owatch_failedrounds', 'owatch_reminders', 'owatch_firsterror'], orderBy: ['owatch_openedat desc'], top: 200 })
     return rows.filter((x) => x?.owatch_name).map((x) => ({
       name: text(x.owatch_name, 100), family: text(x.owatch_family, 100), open: bool(x.owatch_isopen), openedAt: text(x.owatch_openedat, 40),
       closedAt: bool(x.owatch_isopen) ? null : text(x.owatch_closedat, 40), minutes: num(x.owatch_durationminutes) ?? 0, rounds: num(x.owatch_failedrounds) ?? 0,

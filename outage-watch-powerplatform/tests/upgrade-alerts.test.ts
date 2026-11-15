@@ -188,3 +188,54 @@ describe('CLI: channels, secrets from the environment only, exit codes', () => {
     expect(r.out).not.toContain('SECRET'); expect(r.out).not.toContain('hooks.slack.com')
   }, 30000)
 })
+
+// ------------------------------------------------------------------------------------------------
+// @ts-expect-error test fixture
+import { buildAlertClientData as alertFlow5a09ecd } from './helpers/alert-flow-5a09ecd.mjs'
+
+describe('upgrade from commit 5a09ecd (alerts already deployed) to the insights version', () => {
+  const NEW_SETTINGS = ['drift_percent', 'drift_min_ms', 'flap_changes', 'impact_headcount']
+  async function deployed5a09ecd() {
+    const mock = createMockDataverse({ autoRun: false }); const srv = await mock.listen(); closers.push(srv.close)
+    const client = createClient({ orgUrl: srv.url, token: mock.token, sleep: async () => {} })
+    await apply(client, { ...BASE, teams: parseTeamsChannelLink(LINK), teamsConnectionId: 'ffffffffbbbbccccddddeeeeeeeeeeee', webhooks: { slack: SLACK } })
+    const db = mock.db
+    // the alert flow exactly as that commit built it; the settings that commit did not know are absent
+    const alert = db.workflows.find((w: any) => w.name === 'Outage Watch - alert')
+    alert.clientdata = JSON.stringify(alertFlow5a09ecd({ intervalMinutes: 10, channels: { teams: { groupId: '11111111-2222-3333-4444-555555555555', channelId: '19:aBc123_-xyz@thread.tacv2' }, slack: SLACK }, sets: { target: 'owatch_targets', result: 'owatch_results', setting: 'owatch_settings', incident: 'owatch_incidents' } }))
+    db.owatch_settings = db.owatch_settings.filter((s: any) => !NEW_SETTINGS.includes(s.owatch_name))
+    // state the running system has accumulated and that must survive
+    db.owatch_incidents = [{ owatch_incidentid: '12121212-1212-4121-8121-121212121212', owatch_name: 'exchange', owatch_family: 'Exchange', owatch_isopen: true, owatch_openedat: '2026-11-15T08:10:00Z', owatch_closedat: '2000-01-01T00:00:00Z', owatch_firsterror: 'HTTP 503 - x', owatch_reminders: 1, owatch_durationminutes: 60, owatch_failedrounds: 7 }]
+    Object.assign(db.owatch_targets.find((t: any) => t.owatch_name === 'exchange'), { owatch_failcount: 7, owatch_alertopen: true, owatch_failingsince: '2026-11-15T08:10:00Z', owatch_lastalertat: '2026-11-15T09:23:00Z', owatch_lastok: '2026-11-15T08:00:00Z' })
+    db.owatch_settings.find((s: any) => s.owatch_name === 'alert_reminder_minutes').owatch_value = '120'
+    db.owatch_settings.find((s: any) => s.owatch_name === 'alert_last_round').owatch_value = '2026-11-15T09:20:00Z'
+    mock.log.length = 0
+    return { mock, client, alertId: alert.workflowid as string, probe: JSON.stringify(db.workflows.find((w: any) => w.name === 'Outage Watch - probe')), targets: JSON.stringify(db.owatch_targets), incidents: JSON.stringify(db.owatch_incidents) }
+  }
+
+  it('plain re-run: only the alert flow definition and four new settings change; channels (incl. the Slack secret), alert state, incidents and admin settings survive', async () => {
+    const e = await deployed5a09ecd()
+    const lines: string[] = []
+    const r = await apply(e.client, BASE, (t: string) => lines.push(t))
+    expect(e.mock.problems).toEqual([])
+    const writes = e.mock.log.filter((l: any) => l.method !== 'GET').map((l: any) => `${l.method} ${l.path.replace(/\(.*/, '')}`)
+    expect(writes.sort()).toEqual(['PATCH workflows', 'PATCH workflows', 'PATCH workflows', 'POST owatch_settings', 'POST owatch_settings', 'POST owatch_settings', 'POST owatch_settings'])
+    expect(r.created.sort()).toEqual(NEW_SETTINGS.map((n) => 'setting ' + n).sort())
+    expect(r.updated).toEqual(['cloud flow "Outage Watch - alert" definition', 'cloud flow "Outage Watch - alert" turned ON'])
+    const alert = e.mock.db.workflows.find((w: any) => w.name === 'Outage Watch - alert')
+    expect(alert.workflowid).toBe(e.alertId); expect(alert.statecode).toBe(1)
+    expect(alert.clientdata).toContain('PROBABLE COMMON CAUSE')                                 // the new wording is in
+    expect(existingChannels(alert.clientdata)).toEqual({ teams: { groupId: '11111111-2222-3333-4444-555555555555', channelId: '19:aBc123_-xyz@thread.tacv2' }, slack: SLACK, webex: null, webhook: null })
+    expect(r.alerts).toMatchObject({ status: 'on', channels: ['teams', 'slack'] })
+    expect(JSON.stringify(e.mock.db.workflows.find((w: any) => w.name === 'Outage Watch - probe'))).toBe(e.probe)   // the probe flow is not touched at all
+    expect(JSON.stringify(e.mock.db.owatch_targets)).toBe(e.targets); expect(JSON.stringify(e.mock.db.owatch_incidents)).toBe(e.incidents)
+    expect(e.mock.db.owatch_settings.find((s: any) => s.owatch_name === 'alert_reminder_minutes').owatch_value).toBe('120')
+    expect(e.mock.db.owatch_settings.find((s: any) => s.owatch_name === 'alert_last_round').owatch_value).toBe('2026-11-15T09:20:00Z')
+    expect(lines.join('\n') + JSON.stringify(r) + JSON.stringify(e.mock.db.owatch_settings)).not.toContain('SECRET')
+    for (const s of e.mock.db.owatch_settings) expect(rowViolations('owatch_setting', { owatch_name: s.owatch_name, owatch_value: s.owatch_value }), s.owatch_name).toEqual([])
+    expect(r.estimate).toMatchObject({ alertPerDay: 3600, pctOf40k: 48, high: false })           // quota unchanged: insights run in the browser
+    e.mock.log.length = 0
+    await apply(e.client, BASE)
+    expect(e.mock.log.filter((l: any) => l.method !== 'GET')).toEqual([])
+  })
+})

@@ -103,6 +103,29 @@ A second flow, **Outage Watch - alert**, runs at the same interval as the probe 
 | CI gate | Setting `ci_status`: `ok` / `caution` / `freeze` with since-when and the failing services. See `ci/` (gate script, GitHub Actions, Azure DevOps, PowerShell, curl). |
 | Agents | `agent/openapi.json`: three read-only operations for an AI agent. **Unconfirmed** in Copilot Studio; see `agent/README.md`. |
 
+### "I deployed it and see no Teams / Slack / Webex integration"
+
+That is expected until a channel is given: **alerts are off by default**. The alert flow, the Teams connection
+reference and the incident history are only created when at least one channel is configured. Since this version
+the script asks for the channels in one guided step, the summary ends with a loud `ALERTS ARE OFF` block with the
+exact command, and the dashboard panel "Alerts, CI gate and incidents" shows the same commands.
+
+**How to see it worked** (after a run with a channel):
+
+1. Summary of the script: `Alerts      : ON to teams, slack` and the names of what was created.
+2. Power Automate (make.powerautomate.com) > **Solutions** > **Outage Watch** > **Cloud flows**: a second flow
+   **Outage Watch - alert**, status On, next to "Outage Watch - probe". (Solution flows are not under "My flows"
+   in every view: look in the solution.)
+3. For Teams: the same solution > **Connection references**: **Outage Watch - Teams** (`owatch_teams`), connected.
+   **Slack and Webex have no connection or connector to look for**: they are incoming *webhooks* called by an HTTP
+   action inside the alert flow, so nothing appears under Connections.
+4. Run with `-SendTestAlert`: within one probe interval (10 minutes by default, plus up to 2 minutes) a message
+   that starts with "TEST - Outage Watch alert test" arrives in every channel.
+5. Dashboard > "Alerts, CI gate and incidents": each channel shows "delivered <time>" or the failure.
+
+If step 4 brings nothing: open the run history of "Outage Watch - alert" and see Troubleshooting > Alerts. None of
+this was observed on a real tenant by the author.
+
 ### Set it up
 
 ```
@@ -143,6 +166,29 @@ the safety nets.
 **Not built** (asked for, left out rather than faked): scheduled digest, maintenance windows (use
 `alert_snooze_until`), automatic ticket creation, escalation to a second channel, per-channel severity/family
 filters, a Slack/Webex connector route (webhooks were chosen), an MCP server, Key Vault secrets.
+
+## Insights (explainable checks, computed in the browser)
+
+"Insights" are deterministic rules applied to rows the dashboard already loaded. No model, no prediction, **no
+extra flow runs and no extra quota**. Each one prints the numbers it used; none of them changes the level.
+
+| Insight | Rule | Shows |
+|---|---|---|
+| **Probable common cause** | In order: nearly everything failing (>= 80% of at least 5 probed) -> the probe path; sign-in failing -> sign-in; Copilot failing with a service it reads -> that service; >= 3 failures with >= 60% in one family -> that family. Otherwise nothing is claimed. | The statement, its evidence (counts, which services), and what the probes cannot know. The alert message leads with the same statement when sign-in fails. |
+| **Drifting** | Median of the last 6 answered probes is at least `drift_percent` (50) % **and** `drift_min_ms` (150) ms above the median before, while still "up". | "teams: last 6 answers median 420 ms vs 180 ms before (+133%)". Advisory only. |
+| **Flapping** | `flap_changes` (4) or more changes between answering and failing in the last 12 rounds. | The service and the count. |
+| **Scorecard** | Share of probe rounds answered, p50 / p95 latency, per family and worst services. **Only for the loaded window (12 hours)**: the browser does not load 30 days of rows. | Table. |
+| **Incident statistics** | From the incident table, last 30 days: count, mean time to recover, repeat offenders (2+ incidents), alert messages per week and the share that were reminders, plus a noise hint when the data supports one. | Numbers and the hint with its number. |
+| **Post-incident report / staff update** | Built from the incident records only: timeline, scope by family, duration, recovery order, error themes (ids, numbers and times removed so equal errors group), what the facts can and cannot say. | "Copy" (clipboard) and "Download .md"; a draft staff update. |
+| **Impact estimate** | Setting `impact_headcount`, e.g. `Email & calendar=240; Meetings=300`. | "about 240 people use this (admin-supplied figure)". Without the setting, no number is shown: none is ever invented. |
+
+Try them without an outage: **Simulation** > "Sign-in outage", "Flapping Exchange", "Slow drift", "Several at once".
+
+**Asked for and NOT built** (left out rather than faked): time-of-week baselines (would need a week or more of
+rows per service in the browser, or server-side aggregation); flap suppression inside the alert flow; 7-day /
+30-day scorecards; per-channel severity and family routing; escalation to a second channel; scheduled digests;
+maintenance windows (use `alert_snooze_until`); acknowledge (the dashboard is read-only; the Teams "post card and
+wait" route was not verified and would hold a flow run open); ticket creation; a Copilot Studio agent package.
 
 ## Cost: flow runs count against your request quota (read before lowering the interval)
 
@@ -229,7 +275,7 @@ Run the same command again. The upgrade is additive and tested against a mock of
 
 ## What was verified, and what was not
 
-Verified here (`npm test`, 244 tests; `npm run build`; headless Chromium):
+Verified here (`npm test`, 267 tests; `npm run build`; headless Chromium):
 
 - the TypeScript logic against **golden cases produced by the real Python code** (`tests/golden/gen_golden.py`
   runs the updated 36-service `outage-watch/outagewatch.py`): the catalogue itself (36 services, URLs, alive codes,
@@ -272,6 +318,17 @@ also checked against the column limits (the mock enforces them; added after the 
   Microsoft's reference documentation), how the message renders in Teams / Slack / Webex, real webhook delivery,
   flow activation with a Teams connection reference, real request consumption, the agent definition in any agent
   platform.
+
+### Insights: how they were verified
+
+`tests/insights.test.ts` (22 tests): every rule with its evidence text, thresholds at their boundaries, hostile
+service names, a 100,000-character error text, empty and tiny history, unreadable and future-dated incident rows.
+The report is checked to be deterministic and to keep its Markdown structure under hostile input. The panel was
+rendered at 360, 390, 412 and 1440 px, dark and light, with no console error and no horizontal overflow; copying
+to the clipboard was exercised in headless Chromium. **Not verified:** clipboard and file download inside the
+real Power Apps player (embedded frames may block either; the text is always also shown in a box to copy by
+hand), rendering on real iOS Safari / Android Chrome (only Chromium at phone widths), and whether the default
+drift and flap thresholds suit real Microsoft 365 latency patterns (they are settings for that reason).
 
 ## Manual steps that remain
 

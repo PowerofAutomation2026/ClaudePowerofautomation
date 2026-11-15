@@ -43,6 +43,14 @@ export const ROUND_SETTLE_MINUTES = 2               // a round younger than this
 export const SAME_FATE = 'Same-fate warning: this alert is produced by Power Automate, which runs in the same Microsoft cloud that is being watched (and Teams does too). In a Microsoft 365 or Power Platform outage it may be late or never arrive. Rely on the external heartbeat and the independent monitor for that case.'
 export const TITLES = { failure: '\u{1F534} SERVICE FAILURE - Outage Watch', recovered: '✅ RECOVERED - Outage Watch', test: '\u{1F9EA} TEST - Outage Watch alert test. No outage is implied; no action needed.' }
 export const TAGS = { open: 'NEW FAILURE', reminder: 'STILL FAILING', recovered: 'RECOVERED' }
+/** Common-cause wording (no apostrophes: these sit inside workflow-language string literals). */
+export const COMMON = {
+  authLead: 'PROBABLE COMMON CAUSE: sign-in (auth) is failing its probe. Services that need sign-in will fail for signed-in users even if their own probe still answers.',
+  evidence: 'Evidence: ',
+  atRisk: 'At risk downstream: ',
+  cannotKnow: 'What the probes cannot know: the actual root cause, or whether your tenant is affected. They only saw that the sign-in endpoint did not answer normally.',
+  copilot: 'Probable cause of the Copilot failure: services it reads from are failing too: ',
+}
 const FMT = 'yyyy-MM-ddTHH:mm:ssZ'
 const NL = "decodeUriComponent('%0A')"
 const CR = "decodeUriComponent('%0D')"
@@ -104,9 +112,12 @@ export function buildAlertClientData(o) {
   const itemText = `concat(${heading},'[',${tag},'] ',${cap(T('owatch_name'), CAPS.name)},${NL},'  URL: ',${cap(T('owatch_url'), CAPS.url)},${NL},'  ',if(${c1('failNow')},${failingDetails},${recoveredDetails}),${NL})`
 
   const failNames = "body('FailNames')"
+  // Root cause first: when sign-in fails, say so ONCE with the evidence, instead of leaving the reader to infer it from a
+  // list of equal-looking failures. Always "probable": the probes see symptoms, never causes.
   const notes = `concat('Failing in this probe round: ',string(length(${failNames})),' service(s).',${NL},` +
-    `if(contains(${failNames},'auth'),concat('At risk downstream (sign-in is failing): ',join(take(body('AtRiskNames'),${CAPS.atRisk}),', '),if(greater(length(body('AtRiskNames')),${CAPS.atRisk}),concat(' and ',string(sub(length(body('AtRiskNames')),${CAPS.atRisk})),' more'),''),${NL}),''),` +
-    `if(and(contains(${failNames},'m365-copilot'),greater(length(body('CopNames')),0)),concat('Copilot affected; underlying services also unhealthy: ',join(take(body('CopNames'),${CAPS.atRisk}),', '),${NL}),''))`
+    `if(contains(${failNames},'auth'),concat('${COMMON.authLead}',${NL},'${COMMON.evidence}',string(length(body('DepFailing'))),' of the other ',string(sub(length(${failNames}),1)),' failing service(s) need sign-in; ',string(length(body('AtRiskNames'))),' monitored services need sign-in in total.',${NL},` +
+    `'${COMMON.atRisk}',join(take(body('AtRiskNames'),${CAPS.atRisk}),', '),if(greater(length(body('AtRiskNames')),${CAPS.atRisk}),concat(' and ',string(sub(length(body('AtRiskNames')),${CAPS.atRisk})),' more'),''),${NL},'${COMMON.cannotKnow}',${NL}),''),` +
+    `if(and(contains(${failNames},'m365-copilot'),greater(length(body('CopNames')),0)),concat('${COMMON.copilot}',join(take(body('CopNames'),${CAPS.atRisk}),', '),${NL}),''))`
 
   const nOpen = "length(body('Ev_open'))"; const nStill = "length(body('Ev_still'))"; const nRec = "length(body('Ev_recovered'))"
   const title = `if(equals(length(variables('Events')),0),'${TITLES.test}',if(greater(add(${nOpen},${nStill}),0),'${TITLES.failure}','${TITLES.recovered}'))`
@@ -285,7 +296,8 @@ export function buildAlertClientData(o) {
           actions: {
             AtRisk: query("@body('List_targets')?['value']", "@and(equals(item()?['owatch_dependsonauth'],true),equals(item()?['owatch_enabled'],true),not(empty(coalesce(item()?['owatch_url'],''))),not(equals(item()?['owatch_name'],'auth')))", {}),
             AtRiskNames: select("@body('AtRisk')", `@${cap("item()?['owatch_name']", CAPS.name)}`, ok('AtRisk')),
-            CopUnder: query("@body('List_targets')?['value']", `@and(equals(item()?['owatch_copilotneeds'],true),contains(${failNames},item()?['owatch_name']),not(equals(item()?['owatch_name'],'m365-copilot')))`, ok('AtRiskNames')),
+            DepFailing: query("@body('List_targets')?['value']", `@and(equals(item()?['owatch_dependsonauth'],true),contains(${failNames},item()?['owatch_name']),not(equals(item()?['owatch_name'],'auth')))`, ok('AtRiskNames')),
+            CopUnder: query("@body('List_targets')?['value']", `@and(equals(item()?['owatch_copilotneeds'],true),contains(${failNames},item()?['owatch_name']),not(equals(item()?['owatch_name'],'m365-copilot')))`, ok('DepFailing')),
             CopNames: select("@body('CopUnder')", `@${cap("item()?['owatch_name']", CAPS.name)}`, ok('CopUnder')),
             Set_notes: { runAfter: ok('CopNames'), type: 'SetVariable', inputs: { name: 'Notes', value: `@${notes}` } },
           },

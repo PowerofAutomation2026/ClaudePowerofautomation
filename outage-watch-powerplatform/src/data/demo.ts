@@ -21,12 +21,14 @@ export const demoTargets: TargetRow[] = demoTargetList(null)
 /** Names that are actually probed (enabled and set up). */
 export const probed = (targets: TargetRow[]) => targets.filter((t) => t.enabled && !t.unconfigured).map((t) => t.name)
 
-export type Scenario = 'healthy' | 'auth' | 'slow' | 'copilot' | 'exchange' | 'mixed'
+export type Scenario = 'healthy' | 'auth' | 'slow' | 'copilot' | 'exchange' | 'mixed' | 'flap' | 'drift'
 export const SCENARIOS: { id: Scenario; label: string; hint: string }[] = [
   { id: 'auth', label: 'Sign-in outage', hint: 'auth stops answering: everything that needs sign-in is at risk' },
   { id: 'exchange', label: 'Exchange down', hint: 'mail fails; Copilot is affected underneath' },
   { id: 'slow', label: 'Teams slow', hint: 'latency far above its own baseline: early warning' },
   { id: 'copilot', label: 'Copilot errors', hint: 'Copilot returns 503 while the services underneath are fine' },
+  { id: 'flap', label: 'Flapping Exchange', hint: 'exchange fails every other round: shows up under Insights as flapping' },
+  { id: 'drift', label: 'Slow drift', hint: 'Teams gets a little slower every round, below the warning rule: shows up as drifting' },
   { id: 'mixed', label: 'Several at once', hint: 'Power BI down, Purview failing, Teams CDN slow: problems in three families' },
   { id: 'healthy', label: 'Recover', hint: 'everything answers again; the level de-escalates slowly' },
 ]
@@ -52,15 +54,17 @@ export function sampleRow(name: string, i: number, atMs: number, scenario: Scena
   if (scenario === 'copilot' && name === 'm365-copilot') { httpStatus = 503; errorKind = 'ServiceUnavailable' }
   if (scenario === 'mixed' && (name === 'power-bi' || name === 'purview')) { httpStatus = 503; errorKind = 'ServiceUnavailable' }
   if (scenario === 'mixed' && name === 'teams-cdn') ms = 2600
+  if (scenario === 'flap' && name === 'exchange' && i % 2 === 1) { httpStatus = 503; errorKind = 'ServiceUnavailable' }
+  if (scenario === 'drift' && name === 'teams') ms = 180 + Math.min(i, 30) * 22
   return { name, httpStatus, elapsedMs: ms, errorKind, at, round: at }
 }
 
 /** `rounds` rounds ending at `endMs`, spaced by `stepMs`; `scenarioAt(i)` picks the scenario of round i. */
-export function simulateRows(names: string[], rounds: number, endMs: number, stepMs: number, scenarioAt: (i: number) => Scenario): RawRow[] {
+export function simulateRows(names: string[], rounds: number, endMs: number, stepMs: number, scenarioAt: (i: number) => Scenario, firstIndex = 0): RawRow[] {
   const rows: RawRow[] = []
   for (let i = 0; i < rounds; i++) {
     const at = endMs - (rounds - 1 - i) * stepMs
-    for (const n of names) rows.push(sampleRow(n, i, at, scenarioAt(i)))
+    for (const n of names) rows.push(sampleRow(n, firstIndex + i, at, scenarioAt(i)))
   }
   return rows
 }
@@ -80,6 +84,7 @@ export function demoSource(staleMinutes = 0, tenant: string | null = null, alert
         settings: {
           interval_minutes: String(interval), retention_days: String(catalog.defaults.retentionDays), heartbeat_configured: 'no',
           ...(alerts === 'on' ? {
+            impact_headcount: 'Email & calendar=240; Meetings=310; Dashboards & reporting=45',
             alert_configured: 'yes', alert_channels: 'teams,slack,webex', alert_channel_name: 'Ops Alerts', alert_enabled: 'yes', alert_snooze_until: '', alert_channels_off: '',
             last_alert_at: iso(end - 95 * 60_000), last_delivery_teams: 'ok ' + iso(end - 95 * 60_000), last_delivery_slack: 'ok ' + iso(end - 95 * 60_000),
             last_delivery_webex: 'FAILED ' + iso(end - 95 * 60_000) + ' HTTP 404 NotFound',
@@ -88,6 +93,8 @@ export function demoSource(staleMinutes = 0, tenant: string | null = null, alert
         },
         incidents: alerts === 'on' ? [
           { name: 'exchange', family: 'Exchange', open: false, openedAt: iso(end - 175 * 60_000), closedAt: iso(end - 95 * 60_000), minutes: 80, rounds: 8, reminders: 1, error: 'HTTP 503 - ServiceUnavailable <html><body>Service Unavailable - upstream connect error</body></html>' },
+          { name: 'exchange', family: 'Exchange', open: false, openedAt: iso(end - 9 * 86_400_000), closedAt: iso(end - 9 * 86_400_000 + 20 * 60_000), minutes: 20, rounds: 2, reminders: 0, error: 'HTTP 503 - ServiceUnavailable <html><body>Service Unavailable - upstream connect error</body></html>' },
+          { name: 'outlook-web', family: 'Exchange', open: false, openedAt: iso(end - 165 * 60_000), closedAt: iso(end - 105 * 60_000), minutes: 60, rounds: 6, reminders: 1, error: 'HTTP 503 - ServiceUnavailable upstream connect error' },
           { name: 'power-bi', family: 'Power Platform & dashboards', open: false, openedAt: iso(end - 26 * 3_600_000), closedAt: iso(end - 25.5 * 3_600_000), minutes: 30, rounds: 3, reminders: 0, error: 'no HTTP answer - ActionTimedOut The execution of template action timed out.' },
         ] : [],
       }
