@@ -1,235 +1,314 @@
-# Ownership Command Center
+<div align="center">
 
-A Power Apps **code app** (React + TypeScript) for Power Platform admins:
-enter a user's email → see every canvas/model app and cloud flow they own **across all environments** →
-transfer ownership of selected items, or everything, to a new owner.
+<img src="docs/img/pp-insights.png" alt="Outage Watch dashboard in a simulated sign-in outage" width="860">
 
-**No Azure app registration.** It runs on the signed-in admin's own connector connections:
-Power Apps for Admins, Power Platform for Admins, Power Automate Management (+ optional Power Automate for Admins), Office 365 Users.
+# Outage Watch
 
-## Deploy (zero touch)
+### Hear the tremor before the outage.
 
-```powershell
-./scripts/Deploy-OwnershipCommandCenter.ps1                 # prompts for environment ID
-./scripts/Deploy-OwnershipCommandCenter.ps1 -EnvironmentId <guid>
-```
-It installs Node/`pac` if missing, signs you in, wires the three connectors (opens the Connections page if one is missing), builds and runs `pac code push`.
+**Early-warning monitoring for Microsoft 365, Power Platform and Copilot.**
+It checks 36 to 37 services from the outside, learns what normal looks like for each one,
+and sends a detailed alert to Teams, Slack or Webex when something fails.
+It deploys from a single command.
 
-Requirements: Power Apps premium licence for the admin users (code apps + premium connectors) and code apps enabled on the target environment.
+![Microsoft 365](https://img.shields.io/badge/Microsoft_365-37_services-0b6f8c?style=for-the-badge)
+![Power Platform](https://img.shields.io/badge/Power_Platform-Dataverse_%2B_Flows_%2B_Code_App-742774?style=for-the-badge)
+![Python](https://img.shields.io/badge/Python-3.9%2B-3776ab?style=for-the-badge&logo=python&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-React-3178c6?style=for-the-badge&logo=typescript&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-445_unit_%2B_84_deploy_checks-2ea44f?style=for-the-badge)
+![Real tenant](https://img.shields.io/badge/real_tenant-probe_flow_%2B_dashboard_only-d97706?style=for-the-badge)
+
+[**Case study**](#why-this-exists) &nbsp;·&nbsp; [**Quick start**](#quick-start) &nbsp;·&nbsp; [**Features**](#features) &nbsp;·&nbsp; [**Honest limits**](#what-is-proven-and-what-is-not) &nbsp;·&nbsp; [**Connect on LinkedIn**](https://www.linkedin.com/search/results/people/?keywords=Kirolos%20Power%20of%20Automation)
+
+</div>
+
+---
+
+## Why this exists
+
+Microsoft 365 and Outlook had several outages in 2026. For many companies the first sign was a phone call from a user.
+
+| Date (2026) | What was reported | Reported cause |
+|---|---|---|
+| Jan 22 to 23 | Microsoft 365, many services, nearly ten hours | Load during a maintenance window plus a third-party network provider problem ([The Register](https://www.theregister.com/2026/01/23/microsoft_365_outage/)) |
+| Mar 16 | Exchange Online mailbox access | Supporting network infrastructure ([National CIO Review](https://nationalcioreview.com/articles-insights/extra-bytes/breaking-microsoft-exchange-online-outage-disrupts-outlook-email/)) |
+| Aug 31 | Outlook and sign-in | Preliminary: an issue in a core authentication configuration shared by several services ([Tom's Guide](https://www.tomsguide.com/au/news/live/microsoft-outlook-outage-august-31-2026)) |
+| Nov 6 and 9 | Mail to Outlook.com, and Outlook on the web in EMEA | Smaller incidents, both marked resolved |
+
+> Causes are as reported at the time. Several were preliminary, and Microsoft's final reports may differ.
+
+Status pages lag, and monitoring that runs inside the affected cloud can fail with it.
+Outage Watch starts from one rule: **ask the services yourself, from somewhere that does not depend on the thing that might be failing.**
+
+## At a glance
+
+| | |
+|---|---|
+| **Services watched** | 36 (host edition) or 37 (Power Platform edition), in 9 families |
+| **Editions** | A host monitor (Windows, Linux, macOS) and a Power Platform app |
+| **States** | `up` · `warning` · `suspect` · `down` · `blocked` |
+| **Alert channels** | Teams · Slack · Webex · generic webhook (Power Platform). Slack · Teams · Discord · Telegram · ntfy · Mattermost · email (host) |
+| **Deploy** | One command that takes a Power Platform environment ID |
+| **Tests** | 126 (host) + 319 (Power Platform) unit tests, plus 84 deploy-script checks |
+
+<div align="center">
+<img src="docs/img/host-map-signin-outage.png" alt="Blast-radius map with sign-in down and dependent services at risk" width="46%">
+&nbsp;
+<img src="docs/img/host-can-i-do-my-job.png" alt="Can I do my job view: tasks with status and the services behind them" width="28%">
+<br><sub>Host edition, simulated sign-in outage, and the staff-language task view. Demo data.</sub>
+</div>
 
 ## Features
-- Email → user → inventory across all (or one) environment, with scan progress and recent-user chips
-- Stats dashboard, per-environment bars (click to filter), search / type / state filters, sorting
-- Select individual rows, all visible, all apps, all flows, or stale items (>6 months) — or transfer everything
-- **Replace owner** or **add as co-owner** (flows), optionally remove previous owner
-- **Dry run** (default on), typed confirmation for big batches, per-item status, **retry failed**, **undo last batch**
-- Risk flags: solution-aware items, flows with connections tied to the old owner, stopped/suspended flows
-- **Generate the equivalent PowerShell** for change tickets
-- Audit history (CSV export), inventory export (CSV/JSON)
-- Dark/light theme, Ctrl+K command palette, `/` to focus search, Demo mode with a sample tenant
 
-## Develop
-```bash
-npm install
-npm run dev      # Demo mode in the browser
-npm run build
+<details open>
+<summary><b>Detection: early warning, not just up or down</b></summary>
+
+- Probes public, unauthenticated endpoints for **sign-in, Exchange, Teams, SharePoint and OneDrive, Power Platform and Power BI, Office on the web, security and compliance, and Copilot**.
+- Learns each service's own normal speed. When a service answers at three times that baseline (and at least 800 ms slower) it turns to **warning** while it is still up.
+- **Blip filtering:** one failed probe is `suspect`, two in a row is `down`.
+- **`blocked` is not `down`:** your own proxy or firewall refusing a probe is reported separately, so a locked-down office never raises a false freeze.
+- Services that need your tenant name (SharePoint, OneDrive) show as *not set up*, never as failures.
+</details>
+
+<details>
+<summary><b>Dashboard: the blast-radius map, insights and staff view</b></summary>
+
+- A dependency map from sign-in to every service and to Copilot, with failures spreading along the lines. State is shown by shape, icon and text, never colour alone.
+- **Probable common cause:** when many services fail together it names the shared dependency, shows the evidence, and says what the probes cannot know.
+- **Insights:** drift, flapping services, repeat offenders, a reliability scorecard, alert-noise counts and a post-incident report you can copy or download.
+- **"Can I do my job?":** plain tasks (email, meetings, files, Copilot) with a calm, factual staff-update draft that never claims Microsoft's root cause.
+- Light and dark themes, phone layouts, and a clearly labelled **simulation mode** so every state can be demoed without an outage.
+</details>
+
+<details>
+<summary><b>Alerts: Teams, Slack and Webex with the real error</b></summary>
+
+- One message per round, **grouped by family**, with the real error text, URL, HTTP status and timing.
+- Opening, reminder and recovery messages, snooze, and a deliberate **"probing stopped"** notice if the probes go silent.
+- Per-channel limits counted in bytes, with a visible "message shortened" footer. Mentions and markup in probe data are neutralised.
+- An admin **Send test notification now** button posts a labelled live status message to the channels you pick and shows what each returned.
+- A warning when an alert channel is hosted on Microsoft 365, because it can fail in the same outage.
+
+```mermaid
+stateDiagram-v2
+  [*] --> Healthy
+  Healthy --> Suspect: 1 failed probe
+  Suspect --> Healthy: next probe answers
+  Suspect --> Down: N failures in a row
+  Down --> Down: reminder every 60 min
+  Down --> Recovered: probe answers again
+  Recovered --> Healthy: recovery message sent
+```
+</details>
+
+<details>
+<summary><b>Automation: CI gate, agent API, incidents and drills</b></summary>
+
+- A **machine-readable "safe to change?" answer** (`ok` / `caution` / `freeze`) with ready-made gate steps for GitHub Actions, Azure DevOps and PowerShell.
+- An **OpenAPI definition** so an AI agent can ask about service health (unconfirmed in Copilot Studio).
+- An incident table records when each incident began and ended, what failed and the worst error.
+- Host edition: **fire drills** that rehearse the 2026 outage patterns with a timed checklist, a **tamper-evident hash-chained log** (`report.py --verify`), uptime and SLA reports, maintenance windows and a dead-man's-switch heartbeat.
+</details>
+
+<details>
+<summary><b>Deployment: zero-touch, idempotent, with rollback</b></summary>
+
+- Give a Power Platform environment ID. The script checks prerequisites, creates what is missing, runs its own tests, starts the service and smoke-tests it.
+- **Re-running is an upgrade.** Tokens, config, data and history are kept. A failed run says what it left behind.
+- The Power Platform script **finds your SharePoint tenant name itself** (Azure sign-in, then Microsoft Graph), then verifies the address answers before seeding it. It never seeds a host it has not seen answer.
+- Webhook URLs come from a hidden prompt or an environment variable, never the command line, and are never printed, logged or shown on screen.
+</details>
+
+## Architecture
+
+**Power Platform edition** (runs in your tenant, 10-minute interval):
+
+```mermaid
+flowchart LR
+  P["Probe flow<br/>every 10 min"] -->|"GET, 37 targets"| M365["Microsoft 365 · Power Platform · Copilot"]
+  P -->|"raw facts"| DV[("Dataverse<br/>targets · results · settings<br/>incidents · commands")]
+  DV --> A["Alert flow"]
+  A -->|"connector"| T[Teams]
+  A -->|"webhook"| S[Slack]
+  A -->|"webhook"| W[Webex]
+  DV --> D["Dashboard code app<br/>map · insights · reports"]
+  D -->|"command row"| C["Test-notification flow"]
+  C --> T
+  C --> S
+  C --> W
+  DV --> CI["CI gate and agent API<br/>ci_status row · OpenAPI"]
 ```
 
-## Fallback without the UI (still no app registration)
-In the transfer panel click **⬇ Plan CSV** (put the new owner's *object id* in `NewOwnerId`), then run
-`./scripts/Invoke-OwnershipPlan.ps1 -PlanCsv plan.csv -WhatIf` and again without `-WhatIf`. It uses Microsoft's own admin
-module with interactive sign-in.
+**Host edition** (runs outside Microsoft 365 as the independent witness, 60-second interval):
 
-## Important: verify the connector bindings
-The app calls connectors through the code-apps SDK (`getClient().executeAsync`) using the operations in the generated
-`.power/schemas/appschemas/dataSourcesInfo.ts`. `src/services/live.ts` finds each operation by its REST path and verb
-(e.g. `POST …/modifyAppOwner`), so generated method names don't matter. After deploying, open **🩺 Diagnostics**:
-every operation should say *bound*. If one is missing, adjust its path pattern in `OPS`. This could not be tested
-against a live tenant while building, so treat the first Live run as a pilot: use **Dry run**, then try one item.
+```mermaid
+flowchart TB
+  PR["Concurrent probes<br/>36 services, every 60 s"] --> MON["Monitor<br/>baselines · 5 states"]
+  MON --> AUTO["Automation<br/>ok · caution · freeze"]
+  AUTO --> DASH["Dashboard and metrics"]
+  AUTO --> GATE["Freeze file and pipeline gate"]
+  AUTO --> CH["Alert channels<br/>Slack · Teams · Discord · ntfy · email"]
+  MON --> LOG[("Hash-chained log<br/>and history DB")]
+```
 
-Notes: Power Apps have a single owner (co-owner mode applies to flows only). Solution flows may need their
-connection references re-pointed after transfer.
+**The dependency model** both editions share:
 
-## Connectors needed (create each once in the target environment)
-| Connector | Id | Used for |
-|---|---|---|
-| Power Apps for Admins | `shared_powerappsforadmins` | list apps, change app owner |
-| Power Platform for Admins | `shared_powerplatformforadmins` | list all environments |
-| Power Automate Management | `shared_flowmanagement` | list flows, change flow owner as admin |
-| Office 365 Users | `shared_office365users` | email → user object id |
-| Power Automate for Admins *(optional)* | `shared_microsoftflowforadmins` | flow list with creator, flow owner lookups |
-| Power Platform for Admins V2 | `shared_powerplatformadminv2` | **Copilot Studio agents**: tenant-wide inventory query + *Reassign the owner of the bot* |
+```mermaid
+flowchart TD
+  auth["Sign-in (auth)"] --> EX["Exchange"]
+  auth --> TM["Teams"]
+  auth --> SP["SharePoint / OneDrive"]
+  auth --> PP["Power Platform and dashboards"]
+  auth --> OA["Office apps"]
+  auth --> SC["Security, compliance, admin"]
+  EX --> CP["Copilot"]
+  TM --> CP
+  SP --> CP
+  auth --> CP
+  IND["Independent: copilot-web, github-copilot, CDNs"]
+```
 
-## Troubleshooting
-* **"Connector operation … not found"** → open 🩺 Diagnostics, click *Copy diagnostics*; each connector's real operations are listed.
-  Re-run the deploy script to add the missing connector, then redeploy.
-* Re-running the script on an existing folder reuses `power.config.json` (same app, updated in place). Extract new versions *over* the old folder.
-* **Build fails inside `src/generated/...` (e.g. `api-version?: string`)** → a `pac` code-generation bug; the app doesn't use `src/generated`
-  (it reads `.power/schemas/appschemas/dataSourcesInfo.ts`). `tsconfig.json` excludes that folder and the deploy script falls back to a plain `vite build`.
-* **`ApplicationDisplayNameIsInUse` on publish** → `power.config.json` was lost/recreated. The deploy script now binds to the existing app automatically
-  (sets `appId` in `power.config.json`) and updates it in place. Keep `power.config.json` between runs.
-* **`power.config.json is required to push an app`** → the file was missing/unreadable (a UTF-8 BOM from Windows PowerShell breaks `pac`). The deploy script
-  now edits it without a BOM, keeps a copy in `.deploy-state/`, restores it if `pac` removes it, and as a last resort publishes under a new dated name.
-* **`InvalidApiVersion`** → the connectors list `api-version` as optional but the service requires it. The app always sends it and, if rejected, reads the accepted versions from the error and retries.
+> **Why two editions?** A flow inside Microsoft's cloud can fail with it. The host edition runs outside as the independent witness. The Power Platform edition is the convenient in-tenant view. **Run both.**
 
-## Copilot Studio agents (experimental)
-**This app's own environment** is read through the app's built-in Dataverse access: the deploy script runs `pac code add-data-source -a dataverse -t bot` and `-t systemuser`
-(no extra connection). **Other environments** need the optional *Microsoft Dataverse (legacy)* connector.
-Agents are Dataverse `bot` rows. With the optional *Microsoft Dataverse (legacy)* connector the app finds the user's Dataverse record in each
-environment that has a database, lists `bots` owned by them and transfers ownership with `ownerid@odata.bind`. The new owner must already be a user in
-that environment. Agents have a single owner. Verify with a dry run, then one agent, first.
+## Quick start
 
-## Scan report
-After every scan the *Scan report* card lists, per environment, how many apps / flows / agents were listed and how many belong to the user, plus any
-warnings (for example "not an admin in this environment"). Use *Copy* to share it when something looks missing.
+Always start with a dry run. Replace the zeros with your Power Platform environment ID (the part after `/environments/` in the maker portal URL).
 
-* **Browser tab crashes with "Out of Memory"** → fixed in v1.3.0: one SDK client for the whole session, environments scanned one at a time, owner lookups
-  capped (400 flows/environment) and limited to 4 at once. If it still happens, scan one environment at a time (pick it in the dropdown) and close other tabs.
+<details open>
+<summary><b>Power Platform edition</b></summary>
 
-* **Crash breadcrumb** → if a tab dies, the next load shows "Last time this page stopped unexpectedly while …" naming the environment/phase it was scanning.
-* Large environments are read page by page (max 10 pages / 20,000 items per list) and the report tells you if a list was cut off.
-* **Agents show 0 although the Dataverse tables were added** → `pac` names the data sources by display name (`agents`, `users`); v1.4.1 identifies them by primary key / entity set instead. 🩺 shows which data source each table mapped to.
-* **Transfer "does nothing"** → the new owner's email must be entered first. v1.5.0 explains this inline, accepts Enter, and shows the result (dry-run or real) in the drawer.
-* **Agents in other environments** → agents are read from the environment the app is deployed in. Run the deploy script again with that environment's ID (state is kept per environment in `.deploy-state/<envId>`).
+```bat
+cd outage-watch-powerplatform
+Deploy-OutageWatchPP.cmd 00000000-0000-0000-0000-000000000000 -DryRun
+Deploy-OutageWatchPP.cmd 00000000-0000-0000-0000-000000000000
+```
 
-## Copilot Studio agents (v1.6.0 – tenant-wide)
-Discovery uses the **Power Platform inventory** (action *Query Power Platform resources*, type `microsoft.copilotstudio/agents`, property `ownerId`) so agents in **every environment**
-show up from one deployment. Transfer uses *Reassign the owner of the bot* (`ReassignCopilotAgent`, body `NewOwnerAadUserId`).
-Requirements: the connection's account must be a tenant/Power Platform admin and hold **System Administrator** in the agent's environment; the new owner needs the
-**System Customizer** role there (temporarily) and a Microsoft 365 Copilot licence. Classic chatbots are not supported by the reassign API (HTTP 405).
-If discovery shows 0, open the Scan report: it prints the owner ids it saw so the id format can be compared.
+Needs a Dataverse environment with code apps enabled, Power Automate Premium for the flow owner and Power Apps Premium for dashboard viewers.
+The script asks which alert channels to set up. Teams takes a channel link ("Get link to channel" in Teams). Slack and Webex take an incoming-webhook URL with hidden input.
+Add `-SendTestAlert` afterwards to post a labelled TEST message to every channel. Details: [`outage-watch-powerplatform/README.md`](outage-watch-powerplatform/README.md).
+</details>
 
-## v1.7.0 – only real Copilot Studio agents + new look
-* The tenant inventory type `microsoft.copilotstudio/agents` also contains Agent Builder agents, CLI-harness agents and tool / MCP style entries. Every item is
-  classified (`agent`, `agentbuilder`, `tool`, `mcp`, `cli`, `other`) from its inventory properties. **Only `agent` is shown and transferable by default**; the rest are
-  counted in a banner ("N other inventory items are hidden") with a *Show them* toggle. The Scan report prints the classification counts and the property values it saw,
-  so the rules can be tuned from real data.
-* New interface: animated aurora background, profile hero with type-mix bar (blue = apps, orange = flows, aqua = agents – validated colour slots 1-3 with direct labels),
-  icon stat tiles with count-up, tabs with counts, type chips, status dots, shimmer skeleton while scanning. Dark and light themes.
+<details>
+<summary><b>Host edition on Windows</b></summary>
 
-## v1.7.1 – agent transfer failures
-* A failed transfer no longer clears the item list: the error stays on screen (full service text, HTTP status) with a plain-language "Why this usually fails" box and **Retry**.
-* Agent transfer first calls *Reassign the owner of the bot*; if that fails and the agent lives in the app's own environment it falls back to a Dataverse assign.
-* Known causes (Microsoft docs / community): the **new owner needs the System Customizer role** in the agent's environment (temporarily) and a Microsoft 365 Copilot licence;
-  the connection account needs System Administrator there; **managed-solution** agents can be blocked (make an unmanaged edit or use the admin center *Change owner*);
-  **classic chatbots** return HTTP 405.
+```bat
+cd outage-watch-package
+Deploy.cmd 00000000-0000-0000-0000-000000000000 -Yes -Tenant contoso
+```
 
-## v1.7.2 – "HTTP 502 … only partially updated" when transferring an agent
-That is the Copilot Studio reassign API refusing to finish. Documented cause: the **new owner lacks the System Customizer security role in the agent's environment**
-(or isn't a user there / has no licence). The connector only shows a generic *"The response is not in a JSON format"*; the real reason is in `innerError`, which the app now shows.
-1. Admin center → Environments → *(agent's environment)* → Users → new owner → Manage security roles → tick **System Customizer** → Save (wait 1-2 min).
-2. Click **Retry** in the transfer panel. If a failed attempt left the agent half-updated, **↩ Restore original owner** puts it back.
+Needs Python 3.9+ for all users and administrator rights. It runs as a start-at-boot scheduled task and listens on `127.0.0.1` only. Details: [`outage-watch-package/README-DEPLOY.txt`](outage-watch-package/README-DEPLOY.txt).
+</details>
 
-## v1.7.3 – transferring an agent WITHOUT System Customizer
-Microsoft's documented requirements for the new owner of a reassigned agent are only: a **Copilot Studio / Microsoft 365 Copilot licence** and **membership of the agent's environment**; the service
-then grants *Environment Maker* itself. (System Customizer appears only in a community fix, most likely because adding any role creates the environment user record.)
-* Add the new owner as a **member** of the environment first (admin center → Environments → *env* → Users → Add user, lowest role), wait 1-2 min, transfer.
-* The app now asks you to confirm the checklist before a real agent transfer, and for agents in the app's own environment it **checks the new owner's user record first** and stops *before* calling the service (no half-updated agents).
-* Only if it still fails: temporarily add System Customizer, retry, remove.
+<details>
+<summary><b>Host edition on Linux or macOS, or just run it</b></summary>
 
-## v1.7.4 – built-in "add new owner to the environment" step (no roles)
-Before a real agent transfer the app calls the Power Platform for Admins operation **Add Admin Power Apps Sync User** for each agent environment, which makes the new owner a
-member (Dataverse user record) of that environment without assigning any security role – Microsoft's documented requirement for a reassign. Untick it in the panel to skip. If it fails
-(for example the connection account lacks rights) the error is shown and the transfer still proceeds. Wait ~1 min and Retry if the reassign reports "partially updated".
+```bash
+cd outage-watch
+./deploy/deploy.sh --env-id 00000000-0000-0000-0000-000000000000 --dry-run
+./deploy/deploy.sh --env-id 00000000-0000-0000-0000-000000000000 --yes
 
-## v1.7.5 – recovering agents left half-updated
-* **History → "↩ Restore to <original owner>"** appears on every failed agent transfer and works after a page reload (the audit log is kept in the browser).
-* Re-running a reassignment for the **same owner** is allowed for agents (repair mode): scan the new owner, select the agent, enter the same email, transfer.
-* Failure tips now include the discriminating test (same agent → a different fully licensed user) and verification (open the agent in Copilot Studio as its owner).
+# or without installing anything:
+python3 outagewatch.py --serve 8080 --tenant contoso
+```
 
-## v1.7.6
-Agent reassign retries once automatically (after 8 s) when the service answers HTTP 502 / "partially updated" – Microsoft's own error text says another reassignment is the repair.
-Advisor findings (see chat): the most likely cause is the **new owner has no Copilot Studio licence / no enabled environment user**; check licence and sign-in first, or reassign to a healthy licensed admin.
+The monitor has no dependencies beyond Python's standard library. Details: [`outage-watch/README.md`](outage-watch/README.md).
+</details>
 
-## v1.8.0 – safe agent transfer protocol (no more corrupted agents from a batch)
-Found by code review + an independent advisor review + a simulated Copilot Studio service (9 scenarios, `src/transferPlan.ts`):
-* **Pilot / stop-on-first-failure:** agents are reassigned strictly one at a time; the first service failure STOPS the batch (remaining agents are `skipped`, untouched). Before, 3 parallel workers kept going and one click could half-update every selected agent.
-* **Membership gate:** the new owner is added to each environment (Add Admin Power Apps Sync User) and, where checkable, confirmed; any failure blocks that environment's agents ("Not attempted – nothing was changed"). "user does not exist" is no longer mistaken for "already a member".
-* **No automatic retry, no Dataverse fallback after a failed reassign** (both could worsen/hide a half-updated agent). Retry is manual, after fixing the cause.
-* **Only real Copilot Studio agents** can be sent to the reassign API; tool / MCP / Agent Builder / CLI rows are refused. Classification no longer looks at display names.
-* **Verification:** after a successful reassign the inventory is queried; the result is shown per agent (inventory may lag 5–15 min).
-* **Restore / Undo** are audited, appear only for genuine "partially updated" failures, stop at the first failure, and use the options of the original batch.
-Residual risk: the app cannot read licences. An unlicensed new owner can still half-update the *first* (pilot) agent – check the licence first; use History → Restore if it happens.
+<details>
+<summary><b>Tenant name for SharePoint and OneDrive</b></summary>
 
-## v1.9.0 – "moved" now means CONFIRMED at the source
-Audit result: every transfer is a real server-side admin API call (agents: `ReassignCopilotAgent`; apps: `Set-AdminAppOwner`; flows: `modifyPermissions` Owner role). The UI never changes ownership by itself.
-But "success" used to mean only "the service answered 2xx". Now, after each transfer the owner is **read back from the source** (agents: Dataverse `bot.ownerid` in the app's own environment, otherwise the tenant inventory, re-read after 12 s;
-apps: Get Admin App; flows: owner roles) and each row shows **Verified at the source** or **⚠ NOT confirmed**. Only confirmed rows leave the table; unconfirmed rows stay with a **🔄 Re-check at the source** button.
-* Flows keep an immutable *creator*; a rescan now also checks the Owner role, so a transferred flow is no longer listed under the old owner.
-* Membership settle time before an agent reassign raised from 4 s to 8 s.
-* Where to look as the new owner: Copilot Studio → pick the SAME environment as the agent (e.g. *microsoft (default)*) → Agents. Admin center / inventory can lag 5–15 min.
+SharePoint hosts are named after your tenant's original `onmicrosoft.com` domain. The Power Platform script detects it. If detection fails it tells you the exact flag to add:
 
-## v1.9.1 – live agent count (deleted agents no longer listed)
-The tenant inventory keeps showing deleted agents for a while. After the inventory read, every agent is now checked against the Dataverse `bot` table of its own environment: deleted agents and agents whose owner already changed are dropped, name/state are refreshed. The Scan report says how many were confirmed, how many deleted ones were removed, and how many could not be live-checked (environments this app cannot reach).
+```bat
+Deploy-OutageWatchPP.cmd <environment-id> -TenantName contoso
+```
+</details>
 
-## v1.9.2 – accurate live agents, real operation log, auto-refresh
-- **CLI / GitHub-Copilot-powered agents** (e.g. `copilotowner26`, `TESTOWNERTRANSFER`) are real Copilot Studio agents and are now listed (tagged "GitHub Copilot") instead of hidden.
-- **Live check**: agents are confirmed against Dataverse; rows show `✓ live` or `⚠ not live-checked`. The inventory can still list DELETED agents, so for the exact count deploy the app into the agents' environment (e.g. `-EnvironmentId Default-<tenantId>`) or add the optional Microsoft Dataverse connector (the deploy script now offers it).
-- **Agent pre-flight**: before reassigning, the agent must still exist in Dataverse, otherwise nothing is sent.
-- **Operation log** (Transfer drawer and Diagnostics): every connector call, pre-flight, transfer, read-back result with timestamps; Copy log button.
-- **Auto-refresh**: 5 s after a real transfer the user is re-scanned so the table shows live data.
+## Screenshots
 
-## v1.9.4 – a failed agent transfer never takes the agent from the original user
-- When the reassign fails half-way (HTTP 502 "partially updated") the app first READS the owner at the source: if the new owner is already confirmed it says so; if the original owner is still confirmed it says "nothing changed"; only otherwise it reassigns back to the original owner automatically (one attempt) and reads back again. The batch still stops at the first failure.
-- New pre-flight: a disabled or non-interactive target user in the agent's environment blocks the transfer before anything is sent (environment this app runs in).
-- If it still fails with the target a licensed environment member, the usual cause is the target's Copilot Studio licence/service plan - test by signing in as that user in Copilot Studio.
+<div align="center">
+<img src="docs/img/pp-sharepoint-onedrive.png" alt="SharePoint and OneDrive family in the map" width="62%">
+&nbsp;
+<img src="docs/img/pp-test-notification.png" alt="Test notification panel showing a partly delivered result" width="30%">
+<br><sub>Power Platform edition: the SharePoint and OneDrive family, and the admin test-notification panel with one failing channel (demo data).</sub>
+<br><br>
+<img src="docs/img/pp-phone-incidents.png" alt="Phone view of incident history and post-incident report" width="28%">
+<br><sub>On a phone: incident history and the post-incident report (demo data).</sub>
+</div>
 
-## v1.9.5 – licence-first guidance for the agent 502
-Microsoft: agent ownership can only be reassigned to a user with an ACTIVE Microsoft 365 Copilot licence. If a transfer returns 502 "partially updated" while the target is an environment member and the app shows "Nothing changed … still the owner (CONFIRMED)", assign the licence to the target in the Microsoft 365 admin center, wait ~10 minutes, and retry. The pre-flight now says honestly when the target's user status could not be checked.
+## What is proven and what is not
 
-## v1.9.6 – live agents from Dataverse (any environment), no more false "nothing changed"
-- The tenant inventory lags BOTH ways (transferred/deleted agents linger, new agents missing). Agents are now reconciled against Dataverse of each environment: this app's own environment natively, every other environment through the Microsoft Dataverse connector (added by the deploy script). Agents that exist in Dataverse but not yet in the inventory are added; deleted / already-moved ones are removed. Rows show `✓ live`.
-- Read-backs (after a transfer) use the same Dataverse source. An inventory mismatch is never treated as proof of "nothing changed", and the automatic rollback only runs when Dataverse itself shows the agent is neither with the new nor the original owner.
-- New: `↗ open` link on every row (opens the item in its own portal to check the Owner column) and `⬇ Download receipt` (the full operation log as a text file).
-- Observed in a real tenant: a 502 "partially updated" can still end with the agent owned by the new user - always check the Owner column in Copilot Studio.
+| Area | Status |
+|---|---|
+| Live probes of the Microsoft 365 and Copilot endpoints | **Run live**: all 36 services answered in one round |
+| Power Platform probe flow and dashboard | **Deployed on a real tenant** by the author |
+| Alert flow, Teams/Slack/Webex delivery, test button, CI snippets, tenant auto-detect | **Tested against a simulator and a workflow-language interpreter only.** Not yet delivered to a real channel |
+| Slack and Webex message limits | Written from memory. Not yet checked against their docs |
+| Failure behaviour (`warning`, `down`, `freeze`) | Exercised in simulation and tests. **Never watched a real Microsoft outage** |
+| PowerShell scripts | Statically checked. The Power Platform script has run on a real tenant. The Windows host script has not been run on Windows by its author |
 
-## v1.9.7 – transfer a whole solution
-`📦 Solutions` (also Ctrl K → "Transfer a whole solution") lists the solutions that contain the scanned user's apps, cloud flows and Copilot Studio agents (read through the Microsoft Dataverse connector). Pick one to select all of that user's items in it, then transfer them with the normal verified pipeline (dry run, read-back, rollback protection).
-Limits (by design): a solution itself has no owner; tables, security roles, plug-ins, model-driven apps are organisation-owned; classic workflows / connection references / environment variable values are not moved by this app; flows keep the OLD owner's connections until the new owner re-binds them; managed solutions may block some changes.
+### What the first real deployment found
 
-## v1.9.8 – Report studio (CSV + PDF)
-`📄 Report` (or Ctrl K → "Report") opens a report for the scanned user: choose apps / flows / agents (or only the selected items), preview, then download a CSV (UTF-8 with BOM, opens in Excel) or a PDF (built in the browser, no libraries). Columns: type, name, id, created time, environment name, environment id, owner, state.
+The first run against a real tenant found three bugs that every simulated test had missed. Each fix came with a test that catches the whole class.
 
-## v1.9.9 – new agents appear immediately, multi-user PDF report, agent 502 polling
-- **Live source**: 🩺 Diagnostics now has a real "Live Dataverse test" per environment (✔ = agents are read live there, so a brand-new agent shows up on the next scan). If the live source is unavailable for some environments the main screen shows an amber banner with "↻ Re-scan now" instead of silently listing a stale inventory.
-- **Agent transfer**: when the service answers 502 "partially updated", the app now polls the REAL owner for ~50 s (Copilot Studio often finishes the change after answering with an error) before deciding; only then does the read-before-rollback logic run.
-- **Report studio**: add more users (emails, comma/space/new line); each is scanned across all environments; one CSV (all rows, Owner column) and one PDF with a section per user. Filter apps / flows / agents with the three count buttons.
+1. A column was rejected right after its table was created. The script now waits for the table, checks whether the change landed anyway, and retries only that error.
+2. The Web API cache lagged a successful schema change and said a column did not exist. The script now waits until every new column is readable before seeding data.
+3. A setting was 618 characters in a 400-character column. Every written value is now checked against its column, and the simulator rejects oversize values like the real service.
 
-## v1.9.10 – make the live Dataverse source reachable for other environments
-- The environment list often omits each environment's Dataverse address, which silently disabled the live agent check outside the app's own environment. Missing addresses are now read per environment (and `$expand=properties.linkedEnvironmentMetadata` is requested when supported).
-- The Dataverse connector is called with the organisation as `host` and, if that fails, as `https://host` (the working form is remembered).
-- Transfer drawer: every item has a link to check its Owner in its own portal.
-- **Most reliable setup**: deploy the app INTO the environment that holds the agents (`-EnvironmentId e6c360d6-57a5-473e-9188-3bfac0e3250e` for "microsoft (default)"). There the app reads and verifies agents natively, with no connector guesswork.
+A later audit of the alert logic found five more defects, the worst being an alert that could be lost if every channel failed at once. All five are fixed and covered by regression tests.
 
-## v1.9.11 – Dataverse connector call matches Microsoft's own parameters
-Cross-environment reads use `ListRecordsWithOrganization` with `organization = https://orgXXXX.crm.dynamics.com`, `entityName`, `$filter/$select/$top` and `accept` (found in public code-app samples). Parameters are matched by meaning, wherever the connector places them; the plain hostname is tried as a fallback.
+### Limits you should know
 
-## v1.9.12 – cloud flow transfer fix
-The flow permission API rejected `roleName: "Owner"` (HTTP 400: accepted values are CanEdit, CanViewWithShare, CanView). Flows are now transferred by adding the new user as a **CanEdit co-owner** (what Power Automate shows as an owner); "Replace" then tries to remove the previous owner in a second call and reports honestly if Power Automate refuses (the creator stays recorded on the flow). Scan and read-back treat `Owner` (creator) and `CanEdit` (co-owner) as owners.
+- It checks that services answer and how fast. It does not sign in and open a file, send a mail or join a meeting.
+- The Power Platform edition shares a cloud with the services it watches. At a 5-minute interval it would use 98% of a Premium licence's 40,000 daily requests, so the default is 10 minutes (about half).
+- Not built yet: signed-in SharePoint and OneDrive checks, scheduled digests, maintenance windows and escalation in the Power Platform edition, and a security role for the test button.
 
-## v1.9.13 – flow "replace owner" removes the previous owner correctly
-The previous owner is removed by ROLE id (looked up from the flow's owner list) after the new CanEdit owner was added first. Solution-aware flows are also owned in Dataverse; that record owner is not changed by this step.
+### Roadmap
 
-## v1.10.0 – enterprise pack: email reports, schedules, notifications
-Based on what admins ask for most (offboarding checklists, bulk reassign, orphan detection, telling the right people):
-- **✉ Email this report** (📄 Report): recipients + CSV/PDF attachments + an HTML summary, sent from the signed-in admin's own mailbox through the **Office 365 Outlook** connector (the deploy script adds it as an optional connector; approve it on first launch).
-- **⏰ Schedules**: save report definitions (users, apps/flows/agents, recipients, daily / weekly / monthly at an hour). They run **while the app is open** and catch up when it is opened after a missed run ("Run now" any time). A code app has no server, so nothing runs when nobody has it open.
-- **✉ Email the new owner** (and optionally the previous owner's manager, looked up in Office 365 Users) after a transfer, with a per-item result table.
+- [ ] Deliver a real test message to Teams, Slack and Webex and record the result
+- [ ] Check Slack and Webex payload formats and limits against their documentation
+- [ ] Signed-in SharePoint and OneDrive checks (opt-in)
+- [ ] Digest, maintenance windows and escalation in the Power Platform edition
+- [ ] Authenticated mail send-and-receive check
+- [ ] Watch a real outage and compare detection time with Microsoft's own reports
 
-### Unattended reports (fully automatic, nobody has the app open)
-Use a scheduled Power Automate cloud flow owned by an admin or service account (premium licence for the admin connectors):
-1. Power Automate → Create → **Scheduled cloud flow** (e.g. weekly Monday 08:00).
-2. Add **Power Apps for Admins - Get Apps as Admin** (per environment), **Power Automate Management - List Flows as Admin**, filter by the user's id, and **Create CSV table**.
-3. Add **Office 365 Outlook - Send an email (V2)** with the CSV as attachment.
-4. Put the flow in a solution with connection references so it can be reassigned later (this app can do that).
+## Features I could not find elsewhere
 
-## v1.10.2 – more complete scans (apps, flows, all kinds of agents) in every environment
-Based on the connector schemas and Microsoft's inventory docs:
-- **Cloud flows**: the admin flow-list operations expose `$top` but no continuation parameter, so the scan now asks for pages of 250 (falls back if rejected) and tries `$skiptoken` anyway, stopping safely when a page adds nothing. If the first list operation returns nothing the next one is tried. The V2 list has no creator, so owners are looked up per flow (up to 400 per environment). In environments with Dataverse, `workflow` rows (category 5) owned by the user are cross-checked and any solution flow the list missed is added. (Flows in "My flows" exist only in the flow service, so only the admin API can see them.)
-- **Apps**: canvas apps from the admin list plus **code apps** found through the tenant inventory (tagged "Code app").
-- **Agents**: Copilot Studio agents, GitHub-Copilot-powered agents and **Agent Builder** agents are shown by default (tools / MCP / other stay behind the toggle). Only classic Copilot Studio agents are checked against the Dataverse `bot` table; Agent Builder agents are shown as the inventory reports them.
-- The Scan report ends with "Per environment (apps / flows / agents)" so you can compare each environment with its portal.
+I read through Uptime Kuma's issue tracker, StatusGator, IsDown, Better Stack, Microsoft's own monitoring pages and the public pages of Microsoft 365 monitoring vendors. I did not find a dependency map that includes Copilot, a "can I do my job" view for staff, built-in outage fire drills, a check that your alert channel can fail with the outage, or a free one-command Power Platform edition.
+Not finding something does not prove nobody built it, so check before you rely on this.
 
-## v1.11.0 – agent flows and Copilot Studio "Workflows"
-Copilot Studio's **Workflows** page lists "workflow agent flows" (`microsoft.powerautomate/m365agentflows`); "agent flows" are `microsoft.powerautomate/agentflows`. Both are cloud flows with a Dataverse `workflow` row (`workflowEntityId`). The scan now reads them from the tenant inventory in every environment, shows them in the **Flows** tab with an "Agent flow" / "Workflow" tag and tags matching flows already found by the flow list.
-Transfer: the new owner is added as a CanEdit co-owner through the flow API **and**, for Dataverse-backed flows (solution, agent, workflow), the Dataverse `workflow` owner is set to the new owner through the Microsoft Dataverse connector (update row). The read-back confirms through the flow owner list or the Dataverse owner, whichever shows the new owner. If one route is refused the row says which one worked.
+## Repository map
+
+```text
+.
+├── outage-watch-powerplatform/   Power Platform edition: Dataverse, 3 flows, React code app,
+│                                 zero-touch deploy script, CI gate, agent OpenAPI, 319 tests
+├── outage-watch/                 Host monitor (Python, standard library only), dashboard,
+│                                 alerts, reports, Docker and systemd files, deploy.sh, 126 tests
+├── outage-watch-package/         Windows zero-touch package: Deploy.cmd, PowerShell script, installer
+├── docs/
+│   ├── img/                      Screenshots used in this README
+│   └── ownership-command-center.md   Docs for the separate Ownership Command Center app
+├── src/ · scripts/ · Deploy.cmd  The Ownership Command Center code app and its deploy script
+└── .github/workflows/            Test workflow for the host monitor
+```
+
+> The repository also contains **Ownership Command Center**, a separate Power Apps code app that transfers ownership of apps, flows and agents. Its documentation moved to [`docs/ownership-command-center.md`](docs/ownership-command-center.md).
+
+## Built with AI, verified by hand
+
+Outage Watch was built with **Claude Code** as an AI pair programmer. The author set the requirements, reviewed the work and re-ran every check, including a clean-unzip install and test run for each handoff. Every claim above is backed by a test or a real run, and the limits are listed.
+
+## Author
+
+<div align="center">
+
+**Kirolos** · **Power of Automation**
+
+If you run Microsoft 365 or Power Platform and an outage has ever reached you through a phone call, I would like to hear what your monitoring missed.
+
+[![Connect on LinkedIn](https://img.shields.io/badge/Connect_on_LinkedIn-0a66c2?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/search/results/people/?keywords=Kirolos%20Power%20of%20Automation)
+
+<sub>License: none chosen yet, so all rights are reserved until one is added.</sub>
+
+</div>
