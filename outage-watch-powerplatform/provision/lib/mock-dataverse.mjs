@@ -13,7 +13,7 @@ export function createMockDataverse({ token = 'test-token', failActivation = nul
   const entities = new Map()        // logical -> { MetadataId, LogicalName, EntitySetName, PrimaryId, attributes:Set, solution }
   const log = []                    // every request: { method, path, solution }
   const problems = []               // payload-shape violations the mock noticed
-  const state = { failActivation, autoRun, transientAttrFails: 0, attrFailsAfterCreate: 0, attrAlwaysFails: false, staleSchemaReads: 0 }
+  const state = { failActivation, autoRun, failAlertCreate: null, failAlertActivation: null, transientAttrFails: 0, attrFailsAfterCreate: 0, attrAlwaysFails: false, staleSchemaReads: 0 }
 
   const reply = (status, json, headers = {}) => ({ status, headers: { 'content-type': 'application/json', ...headers }, body: json === undefined ? '' : JSON.stringify(json) })
   const err = (status, message, code = '0x0') => reply(status, { error: { code, message } })
@@ -87,7 +87,7 @@ export function createMockDataverse({ token = 'test-token', failActivation = nul
         if (a.type === 'OpenApiConnection') {
           check(a.inputs?.host?.connectionName in (cd.properties.connectionReferences ?? {}), `action ${n} uses an undeclared connection`)
           const set = a.inputs?.parameters?.entityName
-          check(!!setFor(set), `action ${n} targets unknown entity set ${set}`)
+          if (a.inputs?.host?.connectionName === 'shared_commondataserviceforapps') check(!!setFor(set), `action ${n} targets unknown entity set ${set}`)
         }
         if (a.actions) walk(a.actions)
       }
@@ -189,7 +189,10 @@ export function createMockDataverse({ token = 'test-token', failActivation = nul
         let rows
         try { rows = set.rows.filter((r) => matches(r, qp('$filter'))) } catch (e) { return err(400, e.message) }
         const ob = qp('$orderby')
-        if (ob) { const [f, dir] = ob.split(/\s+/); rows = [...rows].sort((a, b) => (a[f] < b[f] ? -1 : a[f] > b[f] ? 1 : 0) * (dir === 'desc' ? -1 : 1)) }
+        if (ob) {                                   // "a asc,b desc"; null sorts first, like an empty value
+          const keys = ob.split(',').map((x) => x.trim().split(/\s+/))
+          rows = [...rows].sort((a, b) => { for (const [f, dir] of keys) { const x = a[f] ?? ''; const y = b[f] ?? ''; if (x !== y) return (x < y ? -1 : 1) * (dir === 'desc' ? -1 : 1) } return 0 })
+        }
         if (qp('$top')) rows = rows.slice(0, Number(qp('$top')))
         return reply(200, { value: rows.map(({ _publisherid, _flow, ...r }) => r) })
       }
@@ -198,6 +201,7 @@ export function createMockDataverse({ token = 'test-token', failActivation = nul
         if (m[1] === 'publishers') { for (const k of ['uniquename', 'friendlyname', 'customizationprefix', 'customizationoptionvalueprefix']) check(body?.[k] !== undefined, `publisher without ${k}`); check(/^[a-z][a-z0-9]{1,7}$/.test(body?.customizationprefix ?? ''), 'publisher prefix must be 2-8 lowercase alphanumerics') ; check(body?.customizationoptionvalueprefix >= 10000 && body?.customizationoptionvalueprefix <= 99999, 'option value prefix must be 10000-99999') }
         if (m[1] === 'solutions') { const b = /^\/publishers\(([0-9a-f-]{36})\)$/.exec(body?.['publisherid@odata.bind'] ?? ''); check(!!b && db.publishers.some((p) => p.publisherid === b[1]), 'solution must bind an existing publisher'); check(!!body?.uniquename && !!body?.version, 'solution needs uniquename and version'); row._publisherid = b?.[1]; delete row['publisherid@odata.bind'] }
         if (m[1] === 'connectionreferences') { for (const k of ['connectionreferencelogicalname', 'connectorid']) check(!!body?.[k], `connection reference without ${k}`); check(solution !== null, 'connection reference created outside a solution') }
+        if (m[1] === 'workflows' && state.failAlertCreate && /alert/i.test(body?.name ?? '')) return err(400, state.failAlertCreate, '0x80040216')
         if (m[1] === 'workflows') { validateWorkflow(body); check(solution !== null, 'flow created outside a solution'); row.statecode = 0 }
         if (set.entity) for (const k of Object.keys(body ?? {})) check(set.entity.attributes.has(k), `row for ${m[1]} uses unknown column ${k}`)
         if (set.entity) { const bad = rowError(set.entity, body, true); if (bad) return bad }
@@ -217,14 +221,15 @@ export function createMockDataverse({ token = 'test-token', failActivation = nul
       if (m[1] === 'workflows') {
         if (body.clientdata !== undefined) { check(row.statecode !== 1, 'flow definition patched while ON'); validateClientData(body.clientdata) }
         if (body.statecode === 1 && row.statecode !== 1) {
-          if (state.failActivation) return err(400, state.failActivation, '0x80060467')
+          if (state.failActivation && !/alert/i.test(row.name)) return err(400, state.failActivation, '0x80060467')
+          if (state.failAlertActivation && /alert/i.test(row.name)) return err(400, state.failAlertActivation, '0x80060467')
           const cd = JSON.parse(row.clientdata)
           for (const r of Object.values(cd.properties.connectionReferences)) {
             const cr = db.connectionreferences.find((c) => c.connectionreferencelogicalname === r.connection.connectionReferenceLogicalName)
             if (!cr?.connectionid) return err(400, 'Flow client error returned with status code "BadRequest": connection reference has no connection', 'ConnectionAuthorizationFailed')
           }
           Object.assign(row, body)
-          if (state.autoRun) runFlowOnce(row)
+          if (state.autoRun && !/alert/i.test(row.name)) runFlowOnce(row)
           return reply(204)
         }
       }

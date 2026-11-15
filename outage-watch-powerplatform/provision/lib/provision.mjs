@@ -1,12 +1,14 @@
 // Idempotent provisioning of Outage Watch into one Dataverse environment.
 // Every step first READS, then creates only what is missing: running it again is an upgrade, never a duplicate.
 import { q, DataverseError } from './client.mjs'
-import { CONNREF, FLOW_NAME, PUBLISHER, RENAMED, RETIRED_SETTINGS, SOLUTION, TABLES, TENANT_TARGET_NAMES, assertRowFits, seedSettings, seedTargets } from './schema.mjs'
+import { ALERT_FLOW_NAME, CONNREF, FLOW_NAME, PUBLISHER, RENAMED, RETIRED_SETTINGS, SOLUTION, TABLES, TEAMS_CONNREF, TENANT_TARGET_NAMES, assertRowFits, seedSettings, seedTargets } from './schema.mjs'
+import { buildAlertClientData, estimateAlertRequests, existingChannel } from './alert-flow.mjs'
 import { buildClientData, canonical, estimateRequests, existingHeartbeatUrl, worstCaseRunSeconds } from './flow.mjs'
 
 const SOL = { 'MSCRM.SolutionUniqueName': SOLUTION.uniquename }
 
 export class NeedsConnection extends Error {}
+export class NeedsTeamsConnection extends Error {}
 
 /** Dataverse answers a metadata change that collides with another one with this generic, usually transient error. */
 export const isTransientMetadata = (e) => e instanceof DataverseError &&
@@ -234,9 +236,98 @@ export async function apply(client, o, log = () => {}) {
     }
   }
   res.flowOn = true
+
+  log('[alerts] Teams alert flow (separate from the probe flow: a Teams problem can never stop probing)')
+  res.alerts = await applyAlerts(client, o, sets, did, log)
   res.estimate = estimateRequests(res.enabledTargets, o.intervalMinutes, res.heartbeat)
+  // total for BOTH flows: the alert flow costs requests only while it is on
+  res.estimate.probePerDay = res.estimate.perDay
+  res.estimate.alertPerDay = res.alerts.status === 'on' ? estimateAlertRequests(o.intervalMinutes).perDay : 0
+  res.estimate.perDay = res.estimate.probePerDay + res.estimate.alertPerDay
+  res.estimate.pctOf40k = Math.round((res.estimate.perDay / 40000) * 100)
+  res.estimate.pctOf6k = Math.round((res.estimate.perDay / 6000) * 100)
+  res.estimate.high = res.estimate.pctOf40k > 60
+  res.estimate.over = res.estimate.perDay > 40000
   res.worstCaseRunSeconds = worstCaseRunSeconds(res.enabledTargets, o.timeoutSeconds)
   return res
+}
+
+async function upsertSetting(client, sets, name, value, did) {
+  assertRowFits('owatch_setting', { owatch_name: name, owatch_value: value })
+  const cur = (await client.get(`${sets.setting}?$select=owatch_value,owatch_settingid&$filter=owatch_name eq ${q(name)}`)).json.value[0]
+  if (!cur) { await client.post(sets.setting, { owatch_name: name, owatch_value: value }); did?.('created', `setting ${name}`) }
+  else if ((cur.owatch_value ?? '') !== value) { await client.patch(`${sets.setting}(${cur.owatch_settingid})`, { owatch_value: value }); did?.('updated', `setting ${name}`) }
+}
+
+async function findAlertFlow(client) {
+  return (await client.get(`workflows?$select=workflowid,name,statecode,clientdata&$filter=category eq 5 and name eq ${q(ALERT_FLOW_NAME)}`)).json.value[0] ?? null
+}
+
+/**
+ * Teams alerts. Returns { status: 'on' | 'not-configured' | 'disabled' | 'failed', ... } and NEVER throws for a
+ * problem of the alert flow itself: tables, targets and the probe flow are already deployed and must stay usable.
+ * (The one exception is "a Teams connection is needed", which the deploy script resolves and then retries.)
+ *   o.teams              { groupId, channelId, channelName }  parsed from -TeamsChannelLink (optional)
+ *   o.teamsConnectionId  id of the caller's Microsoft Teams connection (optional when the reference already exists)
+ *   o.noAlerts           turn the alert flow off        o.sendTestAlert   ask for a TEST message on the next run
+ */
+async function applyAlerts(client, o, sets, did, log) {
+  const flow = await findAlertFlow(client)
+  if (o.noAlerts) {
+    if (flow && flow.statecode === 1) { await client.patch(`workflows(${flow.workflowid})`, { statecode: 0 }); did('updated', `cloud flow "${ALERT_FLOW_NAME}" turned OFF (-NoAlerts)`) }
+    await upsertSetting(client, sets, 'alert_configured', 'no', did)
+    return { status: 'disabled' }
+  }
+  const kept = flow ? existingChannel(flow.clientdata) : null
+  const channel = o.teams ?? kept
+  if (!channel) {
+    await upsertSetting(client, sets, 'alert_configured', 'no', did)
+    log('  not configured: no Teams channel link was given (re-run with -TeamsChannelLink to add alerts)')
+    return { status: 'not-configured' }
+  }
+  let ref = (await client.get(`connectionreferences?$select=connectionreferenceid,connectionid&$filter=connectionreferencelogicalname eq ${q(TEAMS_CONNREF.logicalName)}`)).json.value[0]
+  if (!ref?.connectionid && !o.teamsConnectionId) throw new NeedsTeamsConnection('a Microsoft Teams connection is needed for the alert flow')
+  try {
+    if (!ref) {
+      const r = await client.post('connectionreferences', { connectionreferencelogicalname: TEAMS_CONNREF.logicalName, connectionreferencedisplayname: TEAMS_CONNREF.displayName, connectorid: TEAMS_CONNREF.connectorId, connectionid: o.teamsConnectionId, description: 'Used by the Outage Watch alert flow to post in a Teams channel.' }, SOL)
+      ref = { connectionreferenceid: r.entityId, connectionid: o.teamsConnectionId }
+      did('created', `connection reference ${TEAMS_CONNREF.logicalName}`)
+    } else if (o.teamsConnectionId && ref.connectionid !== o.teamsConnectionId) {
+      await client.patch(`connectionreferences(${ref.connectionreferenceid})`, { connectionid: o.teamsConnectionId })
+      did('updated', `connection reference ${TEAMS_CONNREF.logicalName} -> current connection`)
+    }
+    const clientdata = buildAlertClientData({ intervalMinutes: o.intervalMinutes, groupId: channel.groupId, channelId: channel.channelId, sets })
+    const description = 'Outage Watch alerts: posts to a Teams channel when a service fails, keeps failing, or recovers. Managed by Deploy-OutageWatchPP; manual edits are overwritten on the next deploy.'
+    let flowId = flow?.workflowid ?? null
+    let state = flow?.statecode ?? 0
+    if (!flow) {
+      const r = await client.post('workflows', { category: 5, name: ALERT_FLOW_NAME, type: 1, description, primaryentity: 'none', clientdata: JSON.stringify(clientdata) }, SOL)
+      flowId = r.entityId ?? (await findAlertFlow(client))?.workflowid ?? null
+      if (!flowId) throw new DataverseError('the alert flow was created but its id could not be read back', 0, 'FlowId')
+      did('created', `cloud flow "${ALERT_FLOW_NAME}"`)
+    } else if (!sameDefinition(flow.clientdata, clientdata)) {
+      if (state === 1) { await client.patch(`workflows(${flowId})`, { statecode: 0 }); state = 0 }
+      await client.patch(`workflows(${flowId})`, { clientdata: JSON.stringify(clientdata), description })
+      did('updated', `cloud flow "${ALERT_FLOW_NAME}" definition`)
+    }
+    if (state !== 1) { await client.patch(`workflows(${flowId})`, { statecode: 1 }); did('updated', `cloud flow "${ALERT_FLOW_NAME}" turned ON`) }
+    await upsertSetting(client, sets, 'alert_configured', 'yes', did)
+    if (o.teams) await upsertSetting(client, sets, 'alert_channel_name', o.teams.channelName ?? '', did)
+    if (o.sendTestAlert) { await upsertSetting(client, sets, 'alert_test', 'yes', did); log('  TEST message requested: it is posted by the next run of the alert flow (within one interval)') }
+    return { status: 'on', flowId, channelChanged: !!(o.teams && kept && (kept.groupId !== o.teams.groupId || kept.channelId !== o.teams.channelId)) }
+  } catch (e) {
+    // The probe flow, tables and dashboard are fine. Say exactly what happened and carry on.
+    try { await upsertSetting(client, sets, 'alert_configured', 'no') } catch { /* the original error is the one to report */ }
+    log('  ALERT FLOW NOT ACTIVE: ' + e.message)
+    return { status: 'failed', message: String(e.message).slice(0, 500) }
+  }
+}
+
+/** Stores the URL of the published dashboard so alert messages can link to it. */
+export async function setDashboardUrl(client, url) {
+  const sm = await client.find(`EntityDefinitions(LogicalName='owatch_setting')?$select=EntitySetName`)
+  if (!sm) throw new DataverseError('the settings table does not exist', 404, 'Missing')
+  await upsertSetting(client, { setting: sm.EntitySetName }, 'dashboard_url', url)
 }
 
 function sameDefinition(existingText, wanted) {
@@ -298,9 +389,17 @@ export async function uninstall(client, { purge = false } = {}, log = () => {}) 
     await client.del(`workflows(${flow.workflowid})`)
     gone(`cloud flow "${FLOW_NAME}"`)
   }
+  const alertFlow = await findAlertFlow(client)
+  if (alertFlow) {
+    if (alertFlow.statecode === 1) await client.patch(`workflows(${alertFlow.workflowid})`, { statecode: 0 })
+    await client.del(`workflows(${alertFlow.workflowid})`)
+    gone(`cloud flow "${ALERT_FLOW_NAME}"`)
+  }
   if (!purge) { res.kept.push('tables and collected data', 'connection reference', 'solution', 'publisher'); return res }
   const ref = (await client.get(`connectionreferences?$select=connectionreferenceid&$filter=connectionreferencelogicalname eq ${q(CONNREF.logicalName)}`)).json.value[0]
   if (ref) { await client.del(`connectionreferences(${ref.connectionreferenceid})`); gone(`connection reference ${CONNREF.logicalName}`) }
+  const tref = (await client.get(`connectionreferences?$select=connectionreferenceid&$filter=connectionreferencelogicalname eq ${q(TEAMS_CONNREF.logicalName)}`)).json.value[0]
+  if (tref) { await client.del(`connectionreferences(${tref.connectionreferenceid})`); gone(`connection reference ${TEAMS_CONNREF.logicalName}`) }
   for (const t of [...TABLES].reverse()) {
     if (await client.find(`EntityDefinitions(LogicalName=${q(t.logical)})?$select=MetadataId`)) { await client.del(`EntityDefinitions(LogicalName=${q(t.logical)})`); gone(`table ${t.logical} (with its rows)`) }
   }

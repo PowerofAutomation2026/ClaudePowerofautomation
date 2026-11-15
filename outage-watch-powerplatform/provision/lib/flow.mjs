@@ -45,6 +45,14 @@ export function buildClientData(o) {
   const lim = columnSpec('owatch_result')
   const elapsed = `@max(${lim.owatch_elapsedms.min},min(${lim.owatch_elapsedms.max},div(sub(ticks(coalesce(actions('Probe')?['endTime'],utcNow())),ticks(coalesce(actions('Probe')?['startTime'],utcNow()))),10000)))`
   const errorKind = `@take(string(if(equals(actions('Probe')?['status'],'Succeeded'),'',coalesce(actions('Probe')?['code'],actions('Probe')?['status'],'Failed'))),${lim.owatch_errorkind.maxLength})`
+  // The real error text of a failed probe (for the Teams alert): the HTTP action's own error message when it has one,
+  // otherwise the start of the response body. Empty when the action succeeded. Always cut to the column length.
+  const errorMessage = `@take(string(if(equals(actions('Probe')?['status'],'Succeeded'),'',coalesce(actions('Probe')?['error']?['message'],outputs('Probe')?['body'],''))),${lim.owatch_errormessage.maxLength})`
+  // Raw failure flag for the alert flow (which cannot run the dashboard's TypeScript): no HTTP answer, 5xx, 429,
+  // or - when the target lists alive codes - a status that is not in the list. Never throws: every part is total.
+  const S = "coalesce(outputs('Probe')?['statusCode'],0)"
+  const A = "replace(coalesce(items('For_each_target')?['owatch_alivecodes'],''),' ','')"
+  const failed = `@or(equals(${S},0),greaterOrEquals(${S},500),equals(${S},429),and(not(empty(${A})),not(contains(concat(',',${A},','),concat(',',string(${S}),',')))))`
   const record = dv('CreateRecord', {
     entityName: o.sets.result,
     'item/owatch_name': `@take(string(items('For_each_target')?['owatch_name']),${lim.owatch_name.maxLength})`,
@@ -53,12 +61,14 @@ export function buildClientData(o) {
     'item/owatch_errorkind': errorKind,
     'item/owatch_probedat': '@utcNow()',
     'item/owatch_round': "@outputs('Round')",
+    'item/owatch_errormessage': errorMessage,
+    'item/owatch_failed': failed,
   }, { Probe: ALWAYS })                              // one failing probe must never stop the others, or its own record
 
   const actions = {
     Round: { runAfter: {}, metadata: {}, type: 'Compose', inputs: `@utcNow('${ROUND_FORMAT}')` },     // fixed-width: always 20 characters
     List_targets: dv('ListRecords', {
-      entityName: o.sets.target, $select: 'owatch_name,owatch_url', $filter: 'owatch_enabled eq true and owatch_url ne null and statecode eq 0', $top: 100,
+      entityName: o.sets.target, $select: 'owatch_name,owatch_url,owatch_alivecodes', $filter: 'owatch_enabled eq true and owatch_url ne null and statecode eq 0', $top: 100,
     }, { Round: ['Succeeded'] }),
     For_each_target: {
       runAfter: { List_targets: ['Succeeded'] }, metadata: {}, type: 'Foreach',

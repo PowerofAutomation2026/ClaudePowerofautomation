@@ -6,12 +6,13 @@
 import { writeFileSync } from 'node:fs'
 import { createClient, DataverseError } from './lib/client.mjs'
 import { createMockDataverse } from './lib/mock-dataverse.mjs'
-import { apply, smoke, uninstall, NeedsConnection, FlowNotOn } from './lib/provision.mjs'
+import { apply, setDashboardUrl, smoke, uninstall, NeedsConnection, NeedsTeamsConnection, FlowNotOn } from './lib/provision.mjs'
+import { estimateAlertRequests } from './lib/alert-flow.mjs'
 import { catalog } from './lib/schema.mjs'
 import { PROBE_CONCURRENCY, estimateRequests, worstCaseRunSeconds } from './lib/flow.mjs'
-import { InputError, assertConnectionId, assertGuid, assertHeartbeatUrl, assertInt, assertOrgUrl, assertTenantName } from './lib/validate.mjs'
+import { InputError, assertConnectionId, assertDashboardUrl, assertGuid, assertHeartbeatUrl, assertInt, assertOrgUrl, assertTenantName, parseTeamsChannelLink } from './lib/validate.mjs'
 
-export const EXIT = { ok: 0, failed: 1, badInput: 2, needsConnection: 3, flowNotOn: 4, smokeTimeout: 5 }
+export const EXIT = { ok: 0, failed: 1, badInput: 2, needsConnection: 3, flowNotOn: 4, smokeTimeout: 5, needsTeamsConnection: 6 }
 
 function parseArgs(argv) {
   const [cmd, ...rest] = argv
@@ -19,7 +20,7 @@ function parseArgs(argv) {
   for (let i = 0; i < rest.length; i++) {
     const k = rest[i]
     if (!/^--[a-z][a-z-]*$/.test(k)) throw new InputError(`unexpected argument #${i + 1}`)
-    const flag = ['--purge', '--clear-heartbeat', '--no-wait'].includes(k)
+    const flag = ['--purge', '--clear-heartbeat', '--no-wait', '--no-alerts', '--send-test-alert'].includes(k)
     a[k.slice(2)] = flag ? true : rest[++i]
     if (!flag && a[k.slice(2)] === undefined) throw new InputError(`${k} needs a value`)
   }
@@ -35,6 +36,10 @@ function options(a) {
     tenant: a.tenant ? assertTenantName(a.tenant) : null,
     connectionId: a['connection-id'] ? assertConnectionId(a['connection-id']) : null,
     clearHeartbeat: !!a['clear-heartbeat'],
+    teams: a['teams-channel-link'] ? parseTeamsChannelLink(a['teams-channel-link']) : null,
+    teamsConnectionId: a['teams-connection-id'] ? assertConnectionId(a['teams-connection-id']) : null,
+    noAlerts: !!a['no-alerts'],
+    sendTestAlert: !!a['send-test-alert'],
     heartbeatUrl: null,
   }
   const hb = process.env.OWPP_HEARTBEAT_URL
@@ -51,13 +56,29 @@ function client(a) {
 const say = (t) => console.log(t)
 function out(a, obj) { if (a.out) writeFileSync(a.out, JSON.stringify(obj, null, 2), { encoding: 'utf8' }) }
 
+function withAlerts(e, alertPerDay) {
+  const perDay = e.perDay + alertPerDay
+  const pctOf40k = Math.round((perDay / 40000) * 100)
+  return { ...e, probePerDay: e.perDay, alertPerDay, perDay, pctOf40k, pctOf6k: Math.round((perDay / 6000) * 100), high: pctOf40k > 60, over: perDay > 40000 }
+}
+
+function alertsLine(al) {
+  if (!al) return ''
+  if (al.status === 'on') return `Teams alerts: ON (flow "Outage Watch - alert")${al.channelChanged ? ' - channel changed' : ''}`
+  if (al.status === 'disabled') return 'Teams alerts: OFF (-NoAlerts)'
+  if (al.status === 'failed') return 'Teams alerts: NOT ACTIVE - the alert flow could not be created or turned on: ' + al.message
+  return 'Teams alerts: not configured (no -TeamsChannelLink given)'
+}
+
 function printEstimate(e, targets, interval, timeout = catalog.defaults.probeTimeoutSeconds) {
   if (e.over) say(`  *** WARNING: this needs MORE than the 40,000 requests/day of a Premium licence (${e.pctOf40k}%). The flow WILL be throttled. Use a longer -IntervalMinutes or a Process licence (250,000/day). ***`)
   else if (e.high) say(`  *** WARNING: this uses ${e.pctOf40k}% of the 40,000 requests/day of a Premium licence - little headroom for the owner's other flows. Consider a longer -IntervalMinutes (default 10) or a Process licence on the flow. ***`)
   const worst = worstCaseRunSeconds(targets, timeout)
   say(`  One run: ${targets} probes in parallel (up to ${PROBE_CONCURRENCY} at once, ${timeout} s timeout each) = at most ~${worst} s, inside the ${interval * 60} s interval${worst > interval * 30 ? ' (TIGHT: raise the interval)' : ''}.`)
-  say(`  Flow usage estimate: ${targets} enabled targets every ${interval} min = ${e.runsPerDay} runs/day x ~${e.perRun} actions = ~${e.perDay.toLocaleString('en-US')} Power Platform requests/day`)
-  say(`  (about ${e.pctOf40k}% of the 40,000/day of a Power Automate Premium / Power Apps Premium user; ${e.pctOf6k}% of the 6,000/day of a Microsoft 365 seeded licence), and ${e.rowsPerDay.toLocaleString('en-US')} result rows/day.`)
+  const probe = e.probePerDay ?? e.perDay
+  say(`  Probe flow: ${targets} enabled targets every ${interval} min = ${e.runsPerDay} runs/day x ~${e.perRun} actions = ~${probe.toLocaleString('en-US')} Power Platform requests/day`)
+  if (e.alertPerDay) say(`  Alert flow: ${e.runsPerDay} runs/day x ~${Math.round(e.alertPerDay / e.runsPerDay)} actions when nothing is failing = ~${e.alertPerDay.toLocaleString('en-US')} requests/day (plus about 7 per failing service per run, and about 12 per posted message)`)
+  say(`  TOTAL: ~${e.perDay.toLocaleString('en-US')} requests/day = about ${e.pctOf40k}% of the 40,000/day of a Power Automate Premium / Power Apps Premium user (${e.pctOf6k}% of the 6,000/day of a Microsoft 365 seeded licence); ${e.rowsPerDay.toLocaleString('en-US')} result rows/day.`)
 }
 
 export async function main(argv) {
@@ -72,13 +93,15 @@ export async function main(argv) {
       }
       case 'estimate': {
         const o = options(a); const n = catalog.targets.length + (o.tenant ? catalog.tenantTargets.length : 0)
-        const e = estimateRequests(n, o.intervalMinutes, !!o.heartbeatUrl)
+        const e = withAlerts(estimateRequests(n, o.intervalMinutes, !!o.heartbeatUrl), o.noAlerts ? 0 : estimateAlertRequests(o.intervalMinutes).perDay)
+        if (!o.noAlerts) say('  (estimate INCLUDES the Teams alert flow; it costs nothing while alerts are not configured)')
         printEstimate(e, n, o.intervalMinutes, o.timeoutSeconds)
         out(a, e); return EXIT.ok
       }
       case 'plan': {
         // Offline: replays the provisioning against an in-memory model of an EMPTY environment and prints every request.
         const o = options(a); o.connectionId = o.connectionId ?? 'your-dataverse-connection-id'
+        if (o.teams) o.teamsConnectionId = o.teamsConnectionId ?? 'your-teams-connection-id'
         const mock = createMockDataverse({ autoRun: false })
         const c = createClient({ orgUrl: 'https://plan.invalid', token: mock.token, fetchImpl: mock.mockFetch, sleep: async () => {} })
         const r = await apply(c, o)
@@ -86,6 +109,7 @@ export async function main(argv) {
         mock.log.forEach((l, i) => say(`  ${String(i + 1).padStart(3)}. ${l.method.padEnd(6)} ${l.path}${l.query ? ' ' + l.query.slice(0, 90) : ''}${l.solution ? '   [solution ' + l.solution + ']' : ''}`))
         say(`  = ${mock.log.length} requests; creates: ${r.created.length} objects (${r.targets} targets, ${r.enabledTargets} enabled). A re-run only reads and patches what changed.`)
         say(`  Heartbeat (dead man's switch): ${r.heartbeat ? 'configured (URL not shown)' : 'not configured'}`)
+        say('  ' + alertsLine(r.alerts) + (r.alerts.status === 'not-configured' ? '. With -TeamsChannelLink the plan also creates the connection reference owatch_teams and the flow "Outage Watch - alert".' : ''))
         if (r.unconfigured.length) say(`  Not set up (seeded disabled, never probed, shown as "unconfigured"): ${r.unconfigured.join(', ')} - pass -TenantName contoso to enable them.`)
         printEstimate(r.estimate, r.enabledTargets, o.intervalMinutes, o.timeoutSeconds)
         return EXIT.ok
@@ -97,14 +121,25 @@ export async function main(argv) {
           out(a, { ok: true, ...r })
           say(`  ${r.created.length} created, ${r.updated.length} updated, flow is ON, heartbeat ${r.heartbeat ? 'configured' : 'not configured'}`)
           for (const w of r.warnings) say('  note: ' + w)
+          say('  ' + alertsLine(r.alerts))
           if (r.unconfigured.length) say(`  Not set up (disabled, shown as "unconfigured"): ${r.unconfigured.join(', ')} - re-run with -TenantName contoso to enable them.`)
           printEstimate(r.estimate, r.enabledTargets, o.intervalMinutes, o.timeoutSeconds)
           return EXIT.ok
         } catch (e) {
+          if (e instanceof NeedsTeamsConnection) { out(a, { ok: false, reason: 'needs-teams-connection' }); say('  NEEDS TEAMS CONNECTION: ' + e.message); return EXIT.needsTeamsConnection }
           if (e instanceof NeedsConnection) { out(a, { ok: false, reason: 'needs-connection' }); say('  NEEDS CONNECTION: ' + e.message); return EXIT.needsConnection }
           if (e instanceof FlowNotOn) { out(a, { ok: false, reason: 'flow-not-on', flowId: e.flowId, message: e.message }); say('  FLOW CREATED BUT NOT TURNED ON: ' + e.message); return EXIT.flowNotOn }
           throw e
         }
+      }
+      case 'set-dashboard-url': {
+        const url = assertDashboardUrl(a.url)
+        await setDashboardUrl(client(a), url)
+        say('  dashboard link stored for alert messages'); return EXIT.ok
+      }
+      case 'check-teams-link': {       // offline: used by the deploy script to validate the pasted link before anything else happens
+        const t = parseTeamsChannelLink(a['teams-channel-link'])
+        say(`ok: channel "${t.channelName || '(no name in the link)'}"`); out(a, { ok: true, channelName: t.channelName }); return EXIT.ok
       }
       case 'smoke': {
         const c = client(a)
@@ -122,7 +157,7 @@ export async function main(argv) {
         return EXIT.ok
       }
       default:
-        say('usage: owpp.mjs <validate|estimate|plan|apply|smoke|uninstall> [--org-url URL] [--environment-id GUID] [--connection-id ID] [--interval MIN] [--retention DAYS] [--timeout SEC] [--tenant NAME] [--out FILE] [--purge] [--clear-heartbeat] [--wait-seconds N]')
+        say('usage: owpp.mjs <validate|estimate|plan|apply|smoke|uninstall|set-dashboard-url|check-teams-link> [--org-url URL] [--environment-id GUID] [--connection-id ID] [--interval MIN] [--retention DAYS] [--timeout SEC] [--tenant NAME] [--out FILE] [--purge] [--clear-heartbeat] [--wait-seconds N]')
         return EXIT.badInput
     }
   } catch (e) {
