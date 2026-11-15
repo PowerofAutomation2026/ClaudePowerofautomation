@@ -31,6 +31,8 @@ export const SCENARIOS: { id: Scenario; label: string; hint: string }[] = [
   { id: 'healthy', label: 'Recover', hint: 'everything answers again; the level de-escalates slowly' },
 ]
 
+const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d+Z$/, 'Z')
+
 /** Small deterministic jitter (no Math.random: screenshots and tests are reproducible). */
 function jitter(name: string, i: number): number {
   let h = 2166136261
@@ -64,7 +66,8 @@ export function simulateRows(names: string[], rounds: number, endMs: number, ste
 }
 
 /** Demo source. `staleMinutes` makes the newest row that old (to show the STALE banner). */
-export function demoSource(staleMinutes = 0, tenant: string | null = null): DataSource {
+/** `alerts`: 'on' = channels configured with sample deliveries and incidents, 'off' = not configured (the default). */
+export function demoSource(staleMinutes = 0, tenant: string | null = null, alerts: 'on' | 'off' = 'off'): DataSource {
   const targets = demoTargetList(tenant)
   return {
     kind: 'demo',
@@ -74,7 +77,19 @@ export function demoSource(staleMinutes = 0, tenant: string | null = null): Data
       return {
         targets,
         rows: simulateRows(probed(targets), 24, end, interval * 60_000, () => 'healthy'),
-        settings: { interval_minutes: String(interval), retention_days: String(catalog.defaults.retentionDays), heartbeat_configured: 'no', roles_json: JSON.stringify(catalog.roles) },
+        settings: {
+          interval_minutes: String(interval), retention_days: String(catalog.defaults.retentionDays), heartbeat_configured: 'no',
+          ...(alerts === 'on' ? {
+            alert_configured: 'yes', alert_channels: 'teams,slack,webex', alert_channel_name: 'Ops Alerts', alert_enabled: 'yes', alert_snooze_until: '', alert_channels_off: '',
+            last_alert_at: iso(end - 95 * 60_000), last_delivery_teams: 'ok ' + iso(end - 95 * 60_000), last_delivery_slack: 'ok ' + iso(end - 95 * 60_000),
+            last_delivery_webex: 'FAILED ' + iso(end - 95 * 60_000) + ' HTTP 404 NotFound',
+            ci_status: JSON.stringify({ level: 'ok', since: iso(end - 95 * 60_000), updated: iso(end), round: iso(end), failing: 0, confirmed: 0, services: '' }),
+          } : { alert_configured: 'no' }),
+        },
+        incidents: alerts === 'on' ? [
+          { name: 'exchange', family: 'Exchange', open: false, openedAt: iso(end - 175 * 60_000), closedAt: iso(end - 95 * 60_000), minutes: 80, rounds: 8, reminders: 1, error: 'HTTP 503 - ServiceUnavailable <html><body>Service Unavailable - upstream connect error</body></html>' },
+          { name: 'power-bi', family: 'Power Platform & dashboards', open: false, openedAt: iso(end - 26 * 3_600_000), closedAt: iso(end - 25.5 * 3_600_000), minutes: 30, rounds: 3, reminders: 0, error: 'no HTTP answer - ActionTimedOut The execution of template action timed out.' },
+        ] : [],
       }
     },
   }

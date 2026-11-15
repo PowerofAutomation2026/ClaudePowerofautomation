@@ -2,7 +2,7 @@
 // Every step first READS, then creates only what is missing: running it again is an upgrade, never a duplicate.
 import { q, DataverseError } from './client.mjs'
 import { ALERT_FLOW_NAME, CONNREF, FLOW_NAME, PUBLISHER, RENAMED, RETIRED_SETTINGS, SOLUTION, TABLES, TEAMS_CONNREF, TENANT_TARGET_NAMES, assertRowFits, seedSettings, seedTargets } from './schema.mjs'
-import { buildAlertClientData, estimateAlertRequests, existingChannel } from './alert-flow.mjs'
+import { CHANNELS, buildAlertClientData, estimateAlertRequests, existingChannels } from './alert-flow.mjs'
 import { buildClientData, canonical, estimateRequests, existingHeartbeatUrl, worstCaseRunSeconds } from './flow.mjs'
 
 const SOL = { 'MSCRM.SolutionUniqueName': SOLUTION.uniquename }
@@ -135,7 +135,7 @@ export async function apply(client, o, log = () => {}) {
   }
   log('  checking that the Web API can read the new columns')
   await waitForColumns(client, res.entitySets, log)
-  const sets = { target: res.entitySets.owatch_target, result: res.entitySets.owatch_result, setting: res.entitySets.owatch_setting }
+  const sets = { target: res.entitySets.owatch_target, result: res.entitySets.owatch_result, setting: res.entitySets.owatch_setting, incident: res.entitySets.owatch_incident }
 
   log('[4/8] Seeding targets (existing rows are never overwritten)')
   const existing = (await client.get(`${sets.target}?$select=owatch_name,owatch_url,owatch_enabled,owatch_targetid`)).json.value
@@ -242,7 +242,7 @@ export async function apply(client, o, log = () => {}) {
   res.estimate = estimateRequests(res.enabledTargets, o.intervalMinutes, res.heartbeat)
   // total for BOTH flows: the alert flow costs requests only while it is on
   res.estimate.probePerDay = res.estimate.perDay
-  res.estimate.alertPerDay = res.alerts.status === 'on' ? estimateAlertRequests(o.intervalMinutes).perDay : 0
+  res.estimate.alertPerDay = res.alerts.status === 'on' ? estimateAlertRequests(o.intervalMinutes).perDay : 0     // quiet-day figure; failures and messages add a little (see README)
   res.estimate.perDay = res.estimate.probePerDay + res.estimate.alertPerDay
   res.estimate.pctOf40k = Math.round((res.estimate.perDay / 40000) * 100)
   res.estimate.pctOf6k = Math.round((res.estimate.perDay / 6000) * 100)
@@ -264,40 +264,50 @@ async function findAlertFlow(client) {
 }
 
 /**
- * Teams alerts. Returns { status: 'on' | 'not-configured' | 'disabled' | 'failed', ... } and NEVER throws for a
- * problem of the alert flow itself: tables, targets and the probe flow are already deployed and must stay usable.
- * (The one exception is "a Teams connection is needed", which the deploy script resolves and then retries.)
+ * Alert channels (Teams / Slack / Webex / generic webhook). Returns { status: 'on' | 'not-configured' | 'disabled' |
+ * 'failed', channels: [...] } and NEVER throws for a problem of the alert flow itself: tables, targets and the
+ * probe flow are already deployed and must stay usable. (The one exception is "a Teams connection is needed",
+ * which the deploy script resolves and then retries.)
  *   o.teams              { groupId, channelId, channelName }  parsed from -TeamsChannelLink (optional)
  *   o.teamsConnectionId  id of the caller's Microsoft Teams connection (optional when the reference already exists)
- *   o.noAlerts           turn the alert flow off        o.sendTestAlert   ask for a TEST message on the next run
+ *   o.webhooks           { slack?, webex?, webhook? }  incoming-webhook URLs. SECRETS: only ever placed in the flow definition
+ *   o.removeChannels     ['slack', ...]   o.noAlerts   turn the flow off      o.sendTestAlert   TEST message on the next run
+ * Channels given earlier are kept when a later run does not mention them.
  */
 async function applyAlerts(client, o, sets, did, log) {
   const flow = await findAlertFlow(client)
   if (o.noAlerts) {
     if (flow && flow.statecode === 1) { await client.patch(`workflows(${flow.workflowid})`, { statecode: 0 }); did('updated', `cloud flow "${ALERT_FLOW_NAME}" turned OFF (-NoAlerts)`) }
     await upsertSetting(client, sets, 'alert_configured', 'no', did)
-    return { status: 'disabled' }
+    return { status: 'disabled', channels: [] }
   }
-  const kept = flow ? existingChannel(flow.clientdata) : null
-  const channel = o.teams ?? kept
-  if (!channel) {
+  const kept = flow ? existingChannels(flow.clientdata) : { teams: null, slack: null, webex: null, webhook: null }
+  const channels = { teams: o.teams ? { groupId: o.teams.groupId, channelId: o.teams.channelId } : kept.teams, slack: o.webhooks?.slack ?? kept.slack, webex: o.webhooks?.webex ?? kept.webex, webhook: o.webhooks?.webhook ?? kept.webhook }
+  for (const c of o.removeChannels ?? []) channels[c] = null
+  const names = CHANNELS.filter((c) => channels[c])
+  if (!names.length) {
+    if (flow && flow.statecode === 1) { await client.patch(`workflows(${flow.workflowid})`, { statecode: 0 }); did('updated', `cloud flow "${ALERT_FLOW_NAME}" turned OFF (no channel left)`) }
     await upsertSetting(client, sets, 'alert_configured', 'no', did)
-    log('  not configured: no Teams channel link was given (re-run with -TeamsChannelLink to add alerts)')
-    return { status: 'not-configured' }
+    await upsertSetting(client, sets, 'alert_channels', '', did)
+    log('  not configured: no alert channel was given (re-run with -TeamsChannelLink, -SetSlackWebhook or -SetWebexWebhook to add alerts)')
+    return { status: 'not-configured', channels: [] }
   }
-  let ref = (await client.get(`connectionreferences?$select=connectionreferenceid,connectionid&$filter=connectionreferencelogicalname eq ${q(TEAMS_CONNREF.logicalName)}`)).json.value[0]
-  if (!ref?.connectionid && !o.teamsConnectionId) throw new NeedsTeamsConnection('a Microsoft Teams connection is needed for the alert flow')
+  let ref = null
+  if (channels.teams) {
+    ref = (await client.get(`connectionreferences?$select=connectionreferenceid,connectionid&$filter=connectionreferencelogicalname eq ${q(TEAMS_CONNREF.logicalName)}`)).json.value[0]
+    if (!ref?.connectionid && !o.teamsConnectionId) throw new NeedsTeamsConnection('a Microsoft Teams connection is needed for the alert flow')
+  }
   try {
-    if (!ref) {
+    if (channels.teams && !ref) {
       const r = await client.post('connectionreferences', { connectionreferencelogicalname: TEAMS_CONNREF.logicalName, connectionreferencedisplayname: TEAMS_CONNREF.displayName, connectorid: TEAMS_CONNREF.connectorId, connectionid: o.teamsConnectionId, description: 'Used by the Outage Watch alert flow to post in a Teams channel.' }, SOL)
       ref = { connectionreferenceid: r.entityId, connectionid: o.teamsConnectionId }
       did('created', `connection reference ${TEAMS_CONNREF.logicalName}`)
-    } else if (o.teamsConnectionId && ref.connectionid !== o.teamsConnectionId) {
+    } else if (channels.teams && o.teamsConnectionId && ref.connectionid !== o.teamsConnectionId) {
       await client.patch(`connectionreferences(${ref.connectionreferenceid})`, { connectionid: o.teamsConnectionId })
       did('updated', `connection reference ${TEAMS_CONNREF.logicalName} -> current connection`)
     }
-    const clientdata = buildAlertClientData({ intervalMinutes: o.intervalMinutes, groupId: channel.groupId, channelId: channel.channelId, sets })
-    const description = 'Outage Watch alerts: posts to a Teams channel when a service fails, keeps failing, or recovers. Managed by Deploy-OutageWatchPP; manual edits are overwritten on the next deploy.'
+    const clientdata = buildAlertClientData({ intervalMinutes: o.intervalMinutes, channels, sets })
+    const description = 'Outage Watch alerts: tells the configured channels when a service fails, keeps failing, or recovers; keeps incident records and the CI status. Managed by Deploy-OutageWatchPP; manual edits are overwritten on the next deploy.'
     let flowId = flow?.workflowid ?? null
     let state = flow?.statecode ?? 0
     if (!flow) {
@@ -312,14 +322,15 @@ async function applyAlerts(client, o, sets, did, log) {
     }
     if (state !== 1) { await client.patch(`workflows(${flowId})`, { statecode: 1 }); did('updated', `cloud flow "${ALERT_FLOW_NAME}" turned ON`) }
     await upsertSetting(client, sets, 'alert_configured', 'yes', did)
+    await upsertSetting(client, sets, 'alert_channels', names.join(','), did)                   // channel TYPES only - never a URL
     if (o.teams) await upsertSetting(client, sets, 'alert_channel_name', o.teams.channelName ?? '', did)
-    if (o.sendTestAlert) { await upsertSetting(client, sets, 'alert_test', 'yes', did); log('  TEST message requested: it is posted by the next run of the alert flow (within one interval)') }
-    return { status: 'on', flowId, channelChanged: !!(o.teams && kept && (kept.groupId !== o.teams.groupId || kept.channelId !== o.teams.channelId)) }
+    if (o.sendTestAlert) { await upsertSetting(client, sets, 'alert_test', 'yes', did); log('  TEST message requested: it is sent to every configured channel by the next run of the alert flow (within one interval)') }
+    return { status: 'on', flowId, channels: names }
   } catch (e) {
     // The probe flow, tables and dashboard are fine. Say exactly what happened and carry on.
     try { await upsertSetting(client, sets, 'alert_configured', 'no') } catch { /* the original error is the one to report */ }
     log('  ALERT FLOW NOT ACTIVE: ' + e.message)
-    return { status: 'failed', message: String(e.message).slice(0, 500) }
+    return { status: 'failed', message: String(e.message).slice(0, 500), channels: names }
   }
 }
 

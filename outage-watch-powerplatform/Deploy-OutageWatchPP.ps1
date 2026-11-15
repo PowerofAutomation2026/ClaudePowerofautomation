@@ -38,6 +38,15 @@
 .PARAMETER SetHeartbeat      Prompt (hidden input) for a dead-man's-switch URL the flow pings after every complete round.
                              Alternative for unattended runs: set the environment variable OUTAGEWATCH_HEARTBEAT_URL.
 .PARAMETER ClearHeartbeat    Remove a previously configured heartbeat.
+.PARAMETER TeamsChannelLink  Alerts to a Teams channel: the link from Teams (channel name > ... > Get link to channel). Not a secret.
+                             Interactive runs ask for it (Enter skips). Needs a Microsoft Teams connection (the script opens the page).
+.PARAMETER SetSlackWebhook   Alerts to Slack: prompts (hidden input) for a Slack incoming-webhook URL. The URL is a credential and is
+                             never taken from the command line. Unattended: environment variable OUTAGEWATCH_SLACK_WEBHOOK.
+.PARAMETER SetWebexWebhook   Alerts to Webex: prompts (hidden) for a Webex incoming-webhook URL. Unattended: OUTAGEWATCH_WEBEX_WEBHOOK.
+.PARAMETER SetAlertWebhook   Alerts to any endpoint that accepts POST {"text": "..."}: hidden prompt. Unattended: OUTAGEWATCH_ALERT_WEBHOOK.
+.PARAMETER RemoveChannels    Comma list of channels to remove: teams,slack,webex,webhook. Channels are otherwise kept between runs.
+.PARAMETER NoAlerts          Turn the alert flow off (probing, dashboard and the configuration stay).
+.PARAMETER SendTestAlert     Ask the alert flow to send a clearly labelled TEST message to every configured channel on its next run.
 .PARAMETER EnvironmentUrl    Optional: Dataverse URL (https://org.crm4.dynamics.com). Normally discovered from the environment ID.
 .PARAMETER DisplayName       Dashboard app name (default "Outage Watch").
 .PARAMETER SkipDashboard     Deploy tables + flow only.
@@ -64,6 +73,13 @@ param(
   [string]$TenantName,
   [switch]$SetHeartbeat,
   [switch]$ClearHeartbeat,
+  [string]$TeamsChannelLink,
+  [switch]$SetSlackWebhook,
+  [switch]$SetWebexWebhook,
+  [switch]$SetAlertWebhook,
+  [string]$RemoveChannels,
+  [switch]$NoAlerts,
+  [switch]$SendTestAlert,
   [string]$EnvironmentUrl,
   [string]$DisplayName = 'Outage Watch',
   [switch]$SkipDashboard,
@@ -82,6 +98,9 @@ $OrgUrlPattern = '\Ahttps://[a-z0-9][a-z0-9-]{0,62}\.(?:crm(?:[0-9]{1,2})?\.dyna
 $TenantPattern = '\A[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\z'
 $ConnIdPattern = '\A[A-Za-z0-9][A-Za-z0-9_-]{7,127}\z'
 $DisplayNamePattern = '\A[A-Za-z0-9][A-Za-z0-9 ._-]{0,48}\z'
+$TeamsLinkPattern = '\Ahttps://teams\.(?:microsoft\.com|cloud\.microsoft)/l/channel/[A-Za-z0-9%._~:@!$&()*+,;=/?-]{10,1100}\z'
+$ChannelListPattern = '\A(?:teams|slack|webex|webhook)(?:,(?:teams|slack|webex|webhook)){0,3}\z'
+$DashboardUrlPattern = '\Ahttps://apps\.powerapps\.com/play/[A-Za-z0-9/?=&._%-]{10,300}\z'
 
 $script:Stage = 'starting'
 $script:Changed = $false
@@ -150,6 +169,9 @@ function ConvertTo-PlainText {
 function Clear-Secrets {
   Remove-Item Env:\OWPP_TOKEN -ErrorAction SilentlyContinue
   Remove-Item Env:\OWPP_HEARTBEAT_URL -ErrorAction SilentlyContinue
+  Remove-Item Env:\OWPP_SLACK_WEBHOOK -ErrorAction SilentlyContinue
+  Remove-Item Env:\OWPP_WEBEX_WEBHOOK -ErrorAction SilentlyContinue
+  Remove-Item Env:\OWPP_ALERT_WEBHOOK -ErrorAction SilentlyContinue
 }
 
 function Show-Checklist {
@@ -159,6 +181,7 @@ function Show-Checklist {
   Write-Host 'when one is needed the script opens the exact page and waits, so you never have to re-run:' -ForegroundColor Gray
   Write-Host '  [you] 1. Sign in when a browser window opens (Power Platform CLI; possibly once more for Dataverse).' -ForegroundColor Gray
   Write-Host '  [you] 2. If you have no Microsoft Dataverse connection in this environment yet: click "Create" once.' -ForegroundColor Gray
+  Write-Host '  [you] 3. Optional alerts: paste a Teams channel link when asked (and click "Create" once for the Teams connection).' -ForegroundColor Gray
   Write-Host '  [admin, beforehand] Licences: Power Automate Premium for the flow owner (HTTP is a premium connector),' -ForegroundColor Gray
   Write-Host '        Power Apps Premium for dashboard users, and "Enable code apps" turned on for the environment.' -ForegroundColor Gray
   Write-Host 'SAME-FATE WARNING: this monitor runs inside Microsoft''s cloud and fails together with it.' -ForegroundColor Yellow
@@ -320,10 +343,40 @@ function Get-Connections {
   }
 }
 
-function Find-DataverseConnection {
-  $hit = @(Get-Connections) | Where-Object { $_.Api -eq 'shared_commondataserviceforapps' } | Select-Object -First 1
+function Find-ConnectionFor {
+  param([string]$Api)
+  $hit = @(Get-Connections) | Where-Object { $_.Api -eq $Api } | Select-Object -First 1
   if ($hit -and $hit.Id -cmatch $ConnIdPattern) { return $hit.Id }
   return $null
+}
+
+function Find-DataverseConnection { return (Find-ConnectionFor 'shared_commondataserviceforapps') }
+
+# Same as for Dataverse: opens the "create connection" page once and polls until the Teams connection exists.
+function Wait-TeamsConnection {
+  Step 'Finding the Microsoft Teams connection the alert flow will post with'
+  $id = Find-ConnectionFor 'shared_teams'
+  if ($id) { Ok 'Microsoft Teams connection found'; return $id }
+  Warn 'No Microsoft Teams connection exists in this environment for your account yet.'
+  Warn 'Opening the page now: click "Create" and sign in with an account that is a MEMBER of the team to post in.'
+  Warn 'The script continues by itself as soon as the connection exists.'
+  Start-Process "https://make.powerapps.com/environments/$EnvironmentId/connections/available?apiName=shared_teams"
+  $deadline = (Get-Date).AddMinutes(15)
+  while ((Get-Date) -lt $deadline) {
+    Start-Sleep -Seconds 10
+    $id = Find-ConnectionFor 'shared_teams'
+    if ($id) { Ok 'Microsoft Teams connection found'; return $id }
+    Info ('waiting for the Teams connection... ({0} min left)' -f [int][Math]::Ceiling(($deadline - (Get-Date)).TotalMinutes))
+  }
+  Warn 'No Microsoft Teams connection after 15 minutes: continuing WITHOUT Teams alerts. Re-run the same command later to add them.'
+  return ''
+}
+
+# Hidden prompt for a webhook URL (a credential). Returns plain text for the helper's environment only; never printed.
+function Read-WebhookSecret {
+  param([string]$Label)
+  $sec = Read-Host "$Label incoming-webhook URL (https, input hidden; Enter to skip)" -AsSecureString
+  return (ConvertTo-PlainText $sec)
 }
 
 # Opens the "create connection" page once and polls until the connection exists (no re-run needed).
@@ -385,7 +438,7 @@ function Publish-Dashboard {
   if (Test-Path $cfgPath) { Copy-Item $cfgPath $cfgBackup -Force }
 
   Step 'Adding the Outage Watch tables as data sources of the dashboard'
-  foreach ($tbl in @('owatch_target', 'owatch_result', 'owatch_setting')) {
+  foreach ($tbl in @('owatch_target', 'owatch_result', 'owatch_setting', 'owatch_incident')) {
     $r = Invoke-Native 'pac' @('code', 'add-data-source', '-a', 'dataverse', '-t', $tbl)
     if ($r.Code -eq 0) { Ok "Dataverse table '$tbl' added" }
     elseif ($r.Text -match '(?i)already') { Ok "Dataverse table '$tbl' already added" }
@@ -468,6 +521,14 @@ try {
     Step 'DRY RUN - plan only, nothing is changed'
     if (-not (Have 'node')) { Warn 'Node.js is needed even for the dry run. Install Node.js LTS and re-run -DryRun.'; exit 1 }
     if ($env:OUTAGEWATCH_HEARTBEAT_URL) { $env:OWPP_HEARTBEAT_URL = $env:OUTAGEWATCH_HEARTBEAT_URL }
+    if ($NoAlerts) { $common += '--no-alerts' }
+    elseif ($TeamsChannelLink) {
+      if ($TeamsChannelLink.Trim() -cnotmatch $TeamsLinkPattern) { throw 'That is not a Teams channel link. In Teams: channel name > "..." > "Get link to channel".' }
+      $common += @('--teams-channel-link', $TeamsChannelLink.Trim())
+    }
+    if ($env:OUTAGEWATCH_SLACK_WEBHOOK) { $env:OWPP_SLACK_WEBHOOK = $env:OUTAGEWATCH_SLACK_WEBHOOK }
+    if ($env:OUTAGEWATCH_WEBEX_WEBHOOK) { $env:OWPP_WEBEX_WEBHOOK = $env:OUTAGEWATCH_WEBEX_WEBHOOK }
+    if ($env:OUTAGEWATCH_ALERT_WEBHOOK) { $env:OWPP_ALERT_WEBHOOK = $env:OUTAGEWATCH_ALERT_WEBHOOK }
     $code = Invoke-Helper (@('plan') + $common)
     if ($code -ne 0) { throw 'The plan could not be produced (see the message above).' }
     Info 'Then: pac code init / add-data-source (3 tables) / npm run build / pac code push, and a smoke test that waits for the first result rows.'
@@ -508,6 +569,33 @@ try {
     $env:OWPP_HEARTBEAT_URL = ConvertTo-PlainText $sec
   } elseif ($env:OUTAGEWATCH_HEARTBEAT_URL) { $env:OWPP_HEARTBEAT_URL = $env:OUTAGEWATCH_HEARTBEAT_URL }
 
+  # ----- alert channels (all optional). Webhook URLs are credentials: hidden prompt or environment variable only. -----
+  $teamsConnectionId = ''
+  if ($NoAlerts) { $common += '--no-alerts' }
+  else {
+    if (-not $TeamsChannelLink -and -not $Yes) {
+      Write-Host ''
+      Info 'Optional: alerts to a Teams channel. In Teams: channel name > "..." > "Get link to channel". (Slack / Webex: -SetSlackWebhook / -SetWebexWebhook.)'
+      $TeamsChannelLink = Read-Host 'Paste the Teams channel link, or press Enter to skip (channels configured earlier are kept)'
+    }
+    if ($TeamsChannelLink) {
+      $TeamsChannelLink = $TeamsChannelLink.Trim()
+      if ($TeamsChannelLink -cnotmatch $TeamsLinkPattern) { throw 'That is not a Teams channel link. In Teams: channel name > "..." > "Get link to channel". Nothing has been changed.' }
+      $code = Invoke-Helper @('check-teams-link', '--teams-channel-link', $TeamsChannelLink)
+      if ($code -ne 0) { throw 'The Teams channel link was not accepted (see the message above). Nothing has been changed.' }
+      $common += @('--teams-channel-link', $TeamsChannelLink)
+    }
+    if ($SetSlackWebhook) { $env:OWPP_SLACK_WEBHOOK = Read-WebhookSecret 'Slack' } elseif ($env:OUTAGEWATCH_SLACK_WEBHOOK) { $env:OWPP_SLACK_WEBHOOK = $env:OUTAGEWATCH_SLACK_WEBHOOK }
+    if ($SetWebexWebhook) { $env:OWPP_WEBEX_WEBHOOK = Read-WebhookSecret 'Webex' } elseif ($env:OUTAGEWATCH_WEBEX_WEBHOOK) { $env:OWPP_WEBEX_WEBHOOK = $env:OUTAGEWATCH_WEBEX_WEBHOOK }
+    if ($SetAlertWebhook) { $env:OWPP_ALERT_WEBHOOK = Read-WebhookSecret 'Generic' } elseif ($env:OUTAGEWATCH_ALERT_WEBHOOK) { $env:OWPP_ALERT_WEBHOOK = $env:OUTAGEWATCH_ALERT_WEBHOOK }
+    if ($RemoveChannels) {
+      $RemoveChannels = $RemoveChannels.Trim().ToLowerInvariant()
+      if ($RemoveChannels -cnotmatch $ChannelListPattern) { throw '-RemoveChannels takes a comma list of: teams,slack,webex,webhook' }
+      $common += @('--remove-channels', $RemoveChannels)
+    }
+    if ($SendTestAlert) { $common += '--send-test-alert' }
+  }
+
   Step 'Validating inputs'
   $code = Invoke-Helper (@('validate', '--environment-id', $EnvironmentId, '--org-url', $orgUrl) + $common)
   if ($code -ne 0) { throw 'Input validation failed (see the message above). Nothing has been changed.' }
@@ -537,8 +625,16 @@ try {
   $attempt = 0
   while ($true) {
     $attempt++
-    $code = Invoke-Helper (@('apply', '--org-url', $orgUrl, '--connection-id', $connectionId, '--out', $resultFile) + $common)
+    $applyArgs = @('apply', '--org-url', $orgUrl, '--connection-id', $connectionId, '--out', $resultFile) + $common
+    if ($teamsConnectionId) { $applyArgs += @('--teams-connection-id', $teamsConnectionId) }
+    $code = Invoke-Helper $applyArgs
     if ($code -eq 0) { break }
+    if ($code -eq 6 -and $attempt -le 3) {
+      # Tables, targets and the probe flow are already in place and ON. Only the Teams alert channel is waiting.
+      $teamsConnectionId = @(Wait-TeamsConnection)[-1]
+      if (-not $teamsConnectionId) { $common = @($common | Where-Object { $_ -ne $TeamsChannelLink -and $_ -ne '--teams-channel-link' }) + @('--remove-channels', 'teams') }
+      continue
+    }
     if ($code -eq 3 -and $attempt -le 3) { $connectionId = @(Wait-DataverseConnection)[-1]; continue }
     if ($code -eq 4) {
       $res = Read-JsonFile $resultFile
@@ -561,6 +657,10 @@ try {
   $script:AppUrl = $null
   if ($deployDashboard) { Publish-Dashboard }
   $appUrl = $script:AppUrl
+  if ($appUrl -and $appUrl -cmatch $DashboardUrlPattern) {
+    # so alert messages can link to the dashboard (the URL is not a secret)
+    [void](Invoke-Helper @('set-dashboard-url', '--org-url', $orgUrl, '--url', $appUrl))
+  }
 
   Step "Smoke test (reads the tables through the Web API and waits up to $SmokeWaitSeconds s for the first probe results)"
   $code = Invoke-Helper @('smoke', '--org-url', $orgUrl, '--wait-seconds', "$SmokeWaitSeconds")
@@ -583,6 +683,21 @@ try {
   if ($smokeOk) { Write-Host 'Smoke test  : passed (first results written)' -ForegroundColor Green } else { Write-Host 'Smoke test  : NOT confirmed yet (see above)' -ForegroundColor Yellow }
   if ($result -and $result.heartbeat) { Write-Host "Heartbeat   : configured (dead man's switch; URL not shown)" }
   else { Write-Host "Heartbeat   : NOT configured - re-run with -SetHeartbeat to be told from OUTSIDE when this monitor goes silent" -ForegroundColor Yellow }
+  $alertStatus = ''
+  if ($result -and $result.alerts) { $alertStatus = "$($result.alerts.status)" }
+  if ($alertStatus -eq 'on') {
+    Write-Host ("Alerts      : ON to {0} (flow 'Outage Watch - alert'; webhook URLs are never shown)" -f (@($result.alerts.channels) -join ', ')) -ForegroundColor Green
+    Write-Host '              test  : re-run with -SendTestAlert, or set the setting alert_test to yes (a TEST message is sent within one interval)'
+    Write-Host '              mute  : set the setting alert_snooze_until to a UTC time such as 2026-12-31T18:00:00Z (probing continues)'
+    Write-Host '              change: re-run with -TeamsChannelLink / -SetSlackWebhook / -SetWebexWebhook; remove with -RemoveChannels slack; stop with -NoAlerts'
+    Write-Host '              CI    : pipelines read the setting ci_status (see the ci folder); agents: see the agent folder'
+  } elseif ($alertStatus -eq 'failed') {
+    Write-Host 'Alerts      : NOT ACTIVE - the alert flow could not be created or turned on (message above). Probing and the dashboard are unaffected.' -ForegroundColor Yellow
+  } elseif ($alertStatus -eq 'disabled') {
+    Write-Host 'Alerts      : OFF (-NoAlerts)' -ForegroundColor Yellow
+  } else {
+    Write-Host 'Alerts      : NOT configured - nobody is told when a service fails. Re-run with -TeamsChannelLink, -SetSlackWebhook or -SetWebexWebhook.' -ForegroundColor Yellow
+  }
   if ($result -and $result.estimate) { Write-Host ("Flow usage  : about {0} Power Platform requests/day (~{1}% of a 40,000/day Premium licence), {2} result rows/day" -f $result.estimate.perDay, $result.estimate.pctOf40k, $result.estimate.rowsPerDay) }
   Write-Host ''
   Write-Host 'SAME-FATE WARNING' -ForegroundColor Yellow
@@ -590,6 +705,8 @@ try {
   Write-Host '  and the dashboard may not even open. It is NOT an independent vantage point. The dashboard shows a STALE banner' -ForegroundColor Yellow
   Write-Host '  when results stop arriving, and the optional heartbeat tells an outside service about the silence.' -ForegroundColor Yellow
   Write-Host '  Recommended witness: the host-based Python monitor (outage-watch-package) on a machine outside Microsoft 365.' -ForegroundColor Yellow
+  Write-Host '  The same applies to the alerts: Power Automate (and Teams) run in the cloud being watched, so in a Microsoft outage an alert' -ForegroundColor Yellow
+  Write-Host '  may be late or never arrive. Slack and Webex are outside Microsoft but are still sent BY Power Automate.' -ForegroundColor Yellow
   Write-Host ''
   Write-Host 'Still manual (cannot be scripted):' -ForegroundColor Gray
   Write-Host '  - First launch of the dashboard: approve the connection consent prompt.' -ForegroundColor Gray

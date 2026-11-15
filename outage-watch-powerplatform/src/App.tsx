@@ -4,7 +4,7 @@ import { DEFAULT_THRESHOLDS, buildFrames, dependencyEdges, isStale, stressScore,
 import { ROLE_WORD, SEV, derive, downstream, familySummary, groupFamilies, isProblem, layoutFamilies, list, roleStatus, topo, type Derived, type Family, type FamilySummary, type Kind, type Topology } from './logic/graph'
 import { SCENARIOS, demoSource, demoTargetList, probed, simulateRows, type Scenario } from './data/demo'
 import { hasDataverse, liveSource } from './data/live'
-import type { Snapshot } from './data/types'
+import type { IncidentRow, Snapshot } from './data/types'
 
 // ---------- glyphs: state is always shape + icon + word, never colour alone ----------
 const OCT = (() => { const p: string[] = []; for (let i = 0; i < 8; i++) { const a = ((22.5 + 45 * i) * Math.PI) / 180; p.push((23 * Math.cos(a)).toFixed(1) + ',' + (23 * Math.sin(a)).toFixed(1)) } return 'M' + p.join('L') + 'Z' })()
@@ -184,6 +184,65 @@ function BlastMap({ frame, D, T, families, summaries, dep, cop, sim, selected, o
   )
 }
 
+// ---------- alerts, CI status, incidents ----------
+const CHANNEL_LABEL: Record<string, string> = { teams: 'Teams', slack: 'Slack', webex: 'Webex', webhook: 'Webhook' }
+const utc = (t: string) => { const d = new Date(t); return Number.isNaN(d.getTime()) ? t : d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC' }
+const dur = (m: number) => (m < 90 ? m + ' min' : (m / 60).toFixed(1) + ' h')
+
+/**
+ * Read-only status of the automation around the monitor. Everything here comes from setting rows and the incident
+ * table; none of it is a secret (webhook URLs live only inside the flow definition and are never readable here).
+ */
+function AutomationPanel({ settings, incidents, now, interval }: { settings: Record<string, string>; incidents: IncidentRow[]; now: number; interval: number }) {
+  const configured = settings.alert_configured === 'yes'
+  const off = (settings.alert_channels_off ?? '').toLowerCase().replace(/ /g, '').split(',')
+  const channels = (settings.alert_channels ?? '').split(',').filter((c) => c in CHANNEL_LABEL)
+  const muted = (settings.alert_snooze_until ?? '') > new Date(now).toISOString()
+  const disabled = (settings.alert_enabled ?? 'yes').toLowerCase() === 'no'
+  let ci: { level?: string; since?: string; updated?: string; failing?: number } | null = null
+  try { const o = JSON.parse(settings.ci_status ?? ''); if (o && typeof o === 'object') ci = o } catch { ci = null }
+  const ciAge = ci?.updated ? Math.floor((now - Date.parse(ci.updated)) / 60000) : null
+  const ciStale = ciAge === null || !Number.isFinite(ciAge) || ciAge > 3 * interval + 5
+  const ciKind: Kind = !ci || ciStale ? 'blocked' : ci.level === 'freeze' ? 'down' : ci.level === 'caution' ? 'warning' : 'up'
+  return (
+    <section className="panel" aria-labelledby="hAuto">
+      <h2 id="hAuto">Alerts, CI gate and incidents</h2>
+      {!configured ? (
+        <p className="autoLine k-blocked"><Glyph kind="blocked" /><span><b>Alerts: not configured.</b> Nobody is told when a service fails. Re-run the deploy with <span className="mono">-TeamsChannelLink</span>, <span className="mono">-SetSlackWebhook</span> or <span className="mono">-SetWebexWebhook</span>.</span></p>
+      ) : (
+        <>
+          <p className={'autoLine k-' + (muted || disabled ? 'warning' : 'up')}><Glyph kind={muted || disabled ? 'warning' : 'up'} /><span>
+            <b>Alerts: {disabled ? 'switched off (alert_enabled = no)' : muted ? 'muted until ' + utc(settings.alert_snooze_until) : 'on'}</b>
+            {' '}to {channels.length ? channels.map((c) => CHANNEL_LABEL[c]).join(', ') : 'the configured channels'}{settings.alert_channel_name ? ` (Teams channel "${settings.alert_channel_name}")` : channels.includes('teams') ? ' (a Teams channel)' : ''}.
+            {' '}Last alert: {settings.last_alert_at ? utc(settings.last_alert_at) : 'none yet'}.</span></p>
+          <ul className="deliv">
+            {channels.map((c) => { const v = settings['last_delivery_' + c] ?? ''; const isOff = off.includes(c); const ok = v.startsWith('ok '); const k: Kind = isOff ? 'blocked' : !v ? 'unconfigured' : ok ? 'up' : 'down'; return (
+              <li key={c} className={'k-' + k}><Glyph kind={k} /><span><b>{CHANNEL_LABEL[c]}</b>: {isOff ? 'silenced (alert_channels_off)' : !v ? 'no delivery yet' : ok ? 'delivered ' + utc(v.slice(3)) : 'last delivery FAILED - ' + v.slice(7, 220)}</span></li>
+            ) })}
+          </ul>
+        </>
+      )}
+      <p className={'autoLine k-' + ciKind}><Glyph kind={ciKind} /><span>
+        <b>CI gate: {!ci ? 'no status yet' : ciStale ? 'STALE (unknown)' : String(ci.level)}</b>
+        {ci && !ciStale ? ` since ${utc(String(ci.since ?? ''))}, updated ${ciAge} min ago.` : !ci ? ' The alert flow writes it once it is on.' : ` Last update ${ciAge ?? '?'} min ago: pipelines fail closed by default.`}
+        {' '}Pipelines and agents read the setting row <span className="mono">ci_status</span> (see <span className="mono">ci/</span> and <span className="mono">agent/</span> in the package).</span></p>
+      <h3 className="sub">Incident history</h3>
+      {incidents.length ? (
+        <ul className="incidents">
+          {incidents.slice(0, 8).map((x, i) => (
+            <li key={x.name + x.openedAt + i} className={'k-' + (x.open ? 'down' : 'up')}><Glyph kind={x.open ? 'down' : 'up'} /><div>
+              <b>{x.name}</b> <span className="mono">{x.open ? 'OPEN' : 'closed'}</span> · {x.family}
+              <small>{utc(x.openedAt)} {x.open ? '- still failing' : '-> ' + utc(x.closedAt ?? '')} · {dur(x.minutes)} · {x.rounds} failed rounds{x.reminders ? ` · ${x.reminders} reminder(s)` : ''}</small>
+              <small className="mono err">{x.error.slice(0, 200)}</small>
+            </div></li>
+          ))}
+        </ul>
+      ) : <p className="hint">No incident recorded{configured ? '.' : ' (incidents are recorded by the alert flow once a channel is configured).'}</p>}
+      <p className="hint">Same-fate: alerts, this status and the CI gate all run on Power Platform and fail with it. Mute alerts with the setting <span className="mono">alert_snooze_until</span> (a UTC time); probing continues.</p>
+    </section>
+  )
+}
+
 // ---------- app ----------
 type Theme = 'auto' | 'light' | 'dark'
 const params = new URLSearchParams(typeof location !== 'undefined' ? location.search : '')
@@ -194,11 +253,12 @@ const qTenant = params.get('tenant')
 const qFilter = params.get('filter') ?? ''
 const qOnly = params.get('only') === '1'
 const qCollapse = params.get('collapse')
+const qAlerts = params.get('alerts') === '1' ? 'on' : 'off'
 const DEMO_TARGETS = demoTargetList(qTenant ? 'contoso' : null)
 const SIM_STEP_MS = 2500
 
 export default function App() {
-  const source = useMemo(() => (hasDataverse && !qDemo ? liveSource() : demoSource(qDemo === 'stale' ? 60 : 0, qTenant ? 'contoso' : null)), [])
+  const source = useMemo(() => (hasDataverse && !qDemo ? liveSource() : demoSource(qDemo === 'stale' ? 60 : 0, qTenant ? 'contoso' : null, qAlerts)), [])
   const [snap, setSnap] = useState<Snapshot | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [failedSince, setFailedSince] = useState<number | null>(null)
@@ -401,6 +461,7 @@ export default function App() {
               ) })}
             </ul>
           </section>
+          <AutomationPanel settings={settings} incidents={snap?.incidents ?? []} now={now} interval={interval} />
           <section className="panel" aria-labelledby="hChanges">
             <h2 id="hChanges">Recent level changes</h2>
             {levelChanges.length ? (

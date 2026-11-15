@@ -194,3 +194,18 @@ footer b{color:var(--ink)}
 .empty{padding:1.2rem;border:1px dashed var(--line);border-radius:.45rem;color:var(--muted);text-align:center}
 td.fam{color:var(--muted);text-align:left;white-space:normal}
 thead th:nth-child(3){text-align:left}
+
+/* ---- alerts, CI gate, incidents ---- */
+.autoLine{display:flex;gap:.5rem;align-items:flex-start;margin:.35rem 0;font-size:.9rem;overflow-wrap:anywhere}
+.autoLine .gl,.deliv .gl,.incidents .gl{margin-top:.15rem}
+.autoLine b{color:var(--c)}
+.deliv,.incidents{list-style:none;margin:.2rem 0 .5rem;padding:0;display:grid;gap:.3rem}
+.deliv li{display:flex;gap:.5rem;align-items:flex-start;font-size:.86rem;padding-left:1rem;overflow-wrap:anywhere}
+.deliv li.k-down span{color:var(--c);font-weight:600}
+.sub{margin:.7rem 0 .3rem;font:700 .74rem var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.incidents li{display:flex;gap:.6rem;align-items:flex-start;border:1px solid var(--line);border-left:.35rem solid var(--c);border-radius:.45rem;padding:.4rem .6rem;background:var(--panel2);min-width:0;font-size:.88rem}
+.incidents li div{min-width:0}
+.incidents small{display:block;color:var(--muted);overflow-wrap:anywhere}
+.incidents .err{font-size:.76rem}
+.incidents .mono{font-weight:700;color:var(--c)}
+.incidents .err{color:var(--muted);font-weight:500}

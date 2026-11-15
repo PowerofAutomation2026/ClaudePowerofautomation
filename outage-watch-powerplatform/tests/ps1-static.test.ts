@@ -100,7 +100,7 @@ describe('Deploy-OutageWatchPP.ps1 static checks (NOT an execution test)', () =>
   })
 
   it('validates every value that reaches a command line or a URL', () => {
-    for (const v of ['$GuidPattern', '$OrgUrlPattern', '$TenantPattern', '$ConnIdPattern', '$DisplayNamePattern']) {
+    for (const v of ['$GuidPattern', '$OrgUrlPattern', '$TenantPattern', '$ConnIdPattern', '$DisplayNamePattern', '$TeamsLinkPattern', '$ChannelListPattern', '$DashboardUrlPattern']) {
       const m = new RegExp('\\' + v + " = '([^']+)'").exec(ps)
       expect(m, v).not.toBeNull()
       expect(m![1].startsWith('\\A') && m![1].endsWith('\\z'), `${v} must be anchored with \\A and \\z`).toBe(true)
@@ -122,7 +122,24 @@ describe('Deploy-OutageWatchPP.ps1 static checks (NOT an execution test)', () =>
     }
   })
 
+  it('alert channels: webhook URLs come only from a hidden prompt or the environment, are cleared afterwards, and are never a parameter or an argument', () => {
+    const header = ps.slice(ps.indexOf('param('), ps.indexOf("$ErrorActionPreference = 'Stop'"))
+    for (const p of ['[string]$TeamsChannelLink', '[switch]$SetSlackWebhook', '[switch]$SetWebexWebhook', '[switch]$SetAlertWebhook', '[switch]$NoAlerts', '[switch]$SendTestAlert', '[string]$RemoveChannels']) expect(header).toContain(p)
+    expect(header).not.toMatch(/\[string\]\$\w*(Webhook|Slack|Webex)\w*/)                 // no webhook value on the command line
+    expect(ps).toMatch(/function Read-WebhookSecret[\s\S]{0,200}-AsSecureString/)
+    for (const v of ['OWPP_SLACK_WEBHOOK', 'OWPP_WEBEX_WEBHOOK', 'OWPP_ALERT_WEBHOOK']) {
+      expect(ps).toContain('Remove-Item Env:\\' + v)
+      for (const line of ps.split('\n')) if (/Write-Host|Warn |Info |Ok |throw |Invoke-Helper/.test(line)) expect(line, line).not.toContain('$env:' + v)
+    }
+    expect(ps).not.toMatch(/--(slack|webex|alert)-webhook/)
+    // Teams: connection found or created by polling; a missing connection never fails the deployment
+    expect(ps).toMatch(/connections\/available\?apiName=shared_teams/); expect(ps).toMatch(/\$code -eq 6/); expect(ps).toMatch(/continuing WITHOUT Teams alerts/)
+    expect(ps).toMatch(/'owatch_target', 'owatch_result', 'owatch_setting', 'owatch_incident'/)
+    expect(ps).toMatch(/Alerts      : NOT configured/); expect(ps).toMatch(/alert_snooze_until/); expect(ps).toMatch(/-SendTestAlert/)
+  })
+
   it('states the same-fate warning and the manual steps in the summary', () => {
+    expect(ps).toMatch(/in a Microsoft outage an alert/)
     expect(ps).toMatch(/SAME-FATE WARNING/)
     expect(ps).toMatch(/outage-watch-package/)
     expect(ps).toMatch(/Still manual/)

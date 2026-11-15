@@ -10,7 +10,7 @@ import { apply, setDashboardUrl, smoke, uninstall, NeedsConnection, NeedsTeamsCo
 import { estimateAlertRequests } from './lib/alert-flow.mjs'
 import { catalog } from './lib/schema.mjs'
 import { PROBE_CONCURRENCY, estimateRequests, worstCaseRunSeconds } from './lib/flow.mjs'
-import { InputError, assertConnectionId, assertDashboardUrl, assertGuid, assertHeartbeatUrl, assertInt, assertOrgUrl, assertTenantName, parseTeamsChannelLink } from './lib/validate.mjs'
+import { InputError, assertConnectionId, assertDashboardUrl, assertGuid, assertHeartbeatUrl, assertInt, assertOrgUrl, assertTenantName, assertWebhookUrl, parseTeamsChannelLink } from './lib/validate.mjs'
 
 export const EXIT = { ok: 0, failed: 1, badInput: 2, needsConnection: 3, flowNotOn: 4, smokeTimeout: 5, needsTeamsConnection: 6 }
 
@@ -44,6 +44,10 @@ function options(a) {
   }
   const hb = process.env.OWPP_HEARTBEAT_URL
   if (hb) o.heartbeatUrl = assertHeartbeatUrl(hb)
+  // webhook URLs are credentials: environment only, never an argument
+  o.webhooks = {}
+  for (const [kind, env] of [['slack', 'OWPP_SLACK_WEBHOOK'], ['webex', 'OWPP_WEBEX_WEBHOOK'], ['webhook', 'OWPP_ALERT_WEBHOOK']]) if (process.env[env]) o.webhooks[kind] = assertWebhookUrl(kind, process.env[env])
+  o.removeChannels = a['remove-channels'] ? String(a['remove-channels']).split(',').map((c) => { if (!['teams', 'slack', 'webex', 'webhook'].includes(c)) throw new InputError('--remove-channels takes teams,slack,webex,webhook'); return c }) : []
   return o
 }
 
@@ -64,10 +68,10 @@ function withAlerts(e, alertPerDay) {
 
 function alertsLine(al) {
   if (!al) return ''
-  if (al.status === 'on') return `Teams alerts: ON (flow "Outage Watch - alert")${al.channelChanged ? ' - channel changed' : ''}`
-  if (al.status === 'disabled') return 'Teams alerts: OFF (-NoAlerts)'
-  if (al.status === 'failed') return 'Teams alerts: NOT ACTIVE - the alert flow could not be created or turned on: ' + al.message
-  return 'Teams alerts: not configured (no -TeamsChannelLink given)'
+  if (al.status === 'on') return `Alerts: ON to ${al.channels.join(', ')} (flow "Outage Watch - alert"; webhook URLs are never shown)`
+  if (al.status === 'disabled') return 'Alerts: OFF (-NoAlerts)'
+  if (al.status === 'failed') return 'Alerts: NOT ACTIVE - the alert flow could not be created or turned on: ' + al.message
+  return 'Alerts: not configured (no channel given)'
 }
 
 function printEstimate(e, targets, interval, timeout = catalog.defaults.probeTimeoutSeconds) {
@@ -109,7 +113,7 @@ export async function main(argv) {
         mock.log.forEach((l, i) => say(`  ${String(i + 1).padStart(3)}. ${l.method.padEnd(6)} ${l.path}${l.query ? ' ' + l.query.slice(0, 90) : ''}${l.solution ? '   [solution ' + l.solution + ']' : ''}`))
         say(`  = ${mock.log.length} requests; creates: ${r.created.length} objects (${r.targets} targets, ${r.enabledTargets} enabled). A re-run only reads and patches what changed.`)
         say(`  Heartbeat (dead man's switch): ${r.heartbeat ? 'configured (URL not shown)' : 'not configured'}`)
-        say('  ' + alertsLine(r.alerts) + (r.alerts.status === 'not-configured' ? '. With -TeamsChannelLink the plan also creates the connection reference owatch_teams and the flow "Outage Watch - alert".' : ''))
+        say('  ' + alertsLine(r.alerts) + (r.alerts.status === 'not-configured' ? '. With a channel (-TeamsChannelLink / -SetSlackWebhook / -SetWebexWebhook) the plan also creates the flow "Outage Watch - alert" (and the connection reference owatch_teams for Teams).' : ''))
         if (r.unconfigured.length) say(`  Not set up (seeded disabled, never probed, shown as "unconfigured"): ${r.unconfigured.join(', ')} - pass -TenantName contoso to enable them.`)
         printEstimate(r.estimate, r.enabledTargets, o.intervalMinutes, o.timeoutSeconds)
         return EXIT.ok

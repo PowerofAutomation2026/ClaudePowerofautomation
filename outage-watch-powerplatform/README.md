@@ -16,11 +16,11 @@ Deploy-OutageWatchPP.cmd 00000000-0000-0000-0000-000000000000
 > machine outside Microsoft 365 as the witness. Mitigations built in: a **STALE** banner, an optional external
 > **heartbeat** (dead man's switch), and this warning in the dashboard footer and the deploy summary.
 
-**Status: partly proven on a real tenant, not yet end to end.** Three real runs have been reported: sign-in, tables,
-columns, the 36 targets, the connection reference and the **creation** of the probe flow worked (after two fixes);
-the third run stopped while writing settings (fixed, see Troubleshooting). **Nobody has yet seen** the flow being
-turned on, a flow run, the dashboard publish or the smoke test on a real tenant, and none of the fixes has been
-confirmed by a re-run. No PowerShell or tenant was available where this was written; `DESIGN.md` lists every
+**Status.** The author of this folder had no tenant and no PowerShell: nothing here was run by its author against
+a real environment. The user reports that, after three fixes (see "Troubleshooting: first real-run report"), the
+deployment of tables, 36 targets, probe flow and dashboard now completes on their tenant. **Everything added after
+that - Teams / Slack / Webex alerts, incident records, the CI gate and the agent definition - has never run on a
+real tenant**; it is tested against a mock Dataverse and a workflow interpreter only. `DESIGN.md` lists every
 unconfirmed item.
 
 ## What gets deployed
@@ -31,6 +31,7 @@ unconfirmed item.
 | 36 seeded targets in 9 families | the same services, URLs, alive-code rules, dependencies and families as `outagewatch.py` (checked by a test against the real Python). 34 are probed out of the box. `sharepoint-online` and `onedrive-business` are tenant-specific: with `-TenantName contoso` they are probed; without it they are seeded **disabled, with no URL**, never probed, and shown as the neutral **unconfigured** state - never a failure |
 | Cloud flow `Outage Watch - probe` | every 10 min: unauthenticated `GET` on every enabled target, **all in parallel** (no retries, 10 s timeout, async polling off), **one raw row per probe**, prune rows older than the retention, optional heartbeat ping. The flow never decides whether something is "up" |
 | Connection reference `owatch_dataverse` | binds the flow to your Microsoft Dataverse connection |
+| Cloud flow `Outage Watch - alert` (only when a channel is configured) | tells Teams / Slack / Webex / a webhook when a service fails, keeps failing or recovers; keeps incident records (`owatch_incident`) and the CI status row. Separate from the probe flow on purpose |
 | Code app `Outage Watch` (React + TypeScript) | reads the tables, computes states **in the browser** with a tested port of the Python logic, shows the blast-radius map (family clusters on a sign-in bus and a Copilot bus, filter box, "show only problems", collapsible families), "Can I do my job?" (11 tasks), STALE banner, and a clearly labelled SIMULATION mode |
 
 ## Requirements
@@ -64,6 +65,8 @@ If anything stops the run, re-run the same command: every step reads first and c
 
 ```
 Deploy-OutageWatchPP.cmd <environment-id> [-Yes] [-DryRun] [-SkipTests] [-IntervalMinutes 10] [-RetentionDays 7]
+                         [-TeamsChannelLink <link>] [-SetSlackWebhook] [-SetWebexWebhook] [-SetAlertWebhook]
+                         [-RemoveChannels slack,webex] [-NoAlerts] [-SendTestAlert]
                          [-TenantName contoso] [-SetHeartbeat | -ClearHeartbeat] [-SkipDashboard]
                          [-EnvironmentUrl https://org.crm4.dynamics.com] [-SmokeWaitSeconds 240]
 Uninstall-OutageWatchPP.cmd <environment-id> [-Purge] [-Yes]
@@ -81,6 +84,66 @@ Uninstall-OutageWatchPP.cmd <environment-id> [-Purge] [-Yes]
   make.powerapps.com (no documented CLI command), and your Dataverse connection is never touched.
 - Advanced / CI: `OUTAGEWATCH_DATAVERSE_TOKEN` supplies a ready-made bearer token for the organisation.
 
+## Alerts (Teams, Slack, Webex), incidents, CI gate, agents
+
+**Status of this whole section: built and tested against a mock and an interpreter here; never run on a real
+tenant.** The probe flow and dashboard deploy on a real tenant; the alert flow, its Teams action, the webhook
+posts, the incident table, the CI row and the agent definition have not been tried there yet. If the alert flow is
+rejected the deployment still completes and says exactly why alerts are not active; probing is never affected.
+
+A second flow, **Outage Watch - alert**, runs at the same interval as the probe flow. It needs no open dashboard.
+
+| What | How |
+|---|---|
+| When | A service is *failing* when its newest probe had no HTTP answer, HTTP 5xx, 429, or (if the target lists alive codes) a status outside the list. Disabled / unconfigured targets never alert. An incident is announced after `alert_confirm` failed rounds in a row (default 2). |
+| Messages | **One per round**, grouped by family: NEW FAILURE, STILL FAILING (every `alert_reminder_minutes`, default 60), RECOVERED (with downtime). Per service: name, family, URL, HTTP status or "no HTTP answer", elapsed ms, **the error** (code + text of the failed HTTP action or the start of the error response, max 300 characters), failing since, consecutive failures, last successful round. Header: time, round, counts, services at risk when sign-in fails, the Copilot-underneath note, the dashboard link if known, and the same-fate warning. At most 10 services in detail, then "and N more". |
+| Channels | **Teams** (Teams connector, as Flow bot), **Slack** (incoming webhook), **Webex** (incoming webhook), **any webhook** that accepts `POST {"text": ...}`. Same text everywhere, encoded safely per channel (HTML-escaped for Teams; `&<>` escaped for Slack so no mention or link can be injected; plain text for Webex). Each channel is independent: one failing never blocks another, and its last result is shown on the dashboard. |
+| State | Per target, in new columns of `owatch_target`: no duplicates across runs or restarts; each probe round is judged at most once. |
+| Incidents | Table `owatch_incident`: failing since, recovered at, duration, failed rounds, reminders, first error. Shown on the dashboard; queryable for MTTR. |
+| CI gate | Setting `ci_status`: `ok` / `caution` / `freeze` with since-when and the failing services. See `ci/` (gate script, GitHub Actions, Azure DevOps, PowerShell, curl). |
+| Agents | `agent/openapi.json`: three read-only operations for an AI agent. **Unconfirmed** in Copilot Studio; see `agent/README.md`. |
+
+### Set it up
+
+```
+Deploy-OutageWatchPP.cmd <environment-id> -TeamsChannelLink "<link>" -SetSlackWebhook -SetWebexWebhook -SendTestAlert
+```
+
+- **Teams**: in Teams, hover the channel name > **...** > **Get link to channel** > Copy. Pass it with
+  `-TeamsChannelLink`, or just run the script and paste it when asked (Enter skips). The script checks the link,
+  finds your Microsoft Teams connection (or opens the page to create it and waits), and binds it. Use a
+  **standard channel**; the account of the connection must be a member of the team. Private channels are not
+  supported by this Teams action (Microsoft's documentation); shared channels are unconfirmed.
+- **Slack**: create an *Incoming Webhook* for the channel in Slack and run with `-SetSlackWebhook`: the URL is
+  asked with hidden input. **Webex**: add the *Incoming Webhooks* integration to the space, run with
+  `-SetWebexWebhook`. Any other tool: `-SetAlertWebhook`.
+- Unattended (`-Yes`): `OUTAGEWATCH_SLACK_WEBHOOK`, `OUTAGEWATCH_WEBEX_WEBHOOK`, `OUTAGEWATCH_ALERT_WEBHOOK`
+  environment variables; `-TeamsChannelLink` as a parameter (a channel link is not a secret). With `-Yes` and no
+  channel at all, alerts stay unconfigured and the summary says so.
+- **Test**: `-SendTestAlert`, or set the setting `alert_test` to `yes`: a clearly labelled TEST goes to every
+  channel within one interval and the flag resets. **Mute**: setting `alert_snooze_until` = a UTC time such as
+  `2026-12-31T18:00:00Z` (probing, incidents and the CI status continue). **Silence one channel**: setting
+  `alert_channels_off` = `slack,webex`. **Change channel**: re-run with the new link / flag. **Remove**:
+  `-RemoveChannels slack`. **Stop**: `-NoAlerts`. Channels are kept between runs unless you change them.
+
+**Where the webhook URLs are kept.** A webhook URL is a credential. It is never a command-line value, never
+printed, never written to a table, a setting, the dashboard or the summary. It is stored in one place: the
+definition of the alert flow, on an HTTP action with secure inputs and outputs (so it stays out of the run
+history). Trade-off: flow owners / co-owners and system administrators can read it there. Dataverse "secret"
+environment variables backed by Azure Key Vault would be stronger; they need a Key Vault and could not be
+verified here, so they are not used. For a failed webhook delivery only the HTTP status is recorded, never the
+error text (which could repeat the URL).
+
+**Same-fate, again.** The alert flow is a Power Automate flow; Teams is Microsoft 365. In a Microsoft 365 or Power
+Platform outage an alert may be late or never arrive, and the first line of every message's footer says so. Slack
+and Webex are outside Microsoft but the message is still *sent by* Power Automate. The external heartbeat
+(`-SetHeartbeat`) and the independent Python monitor, which can alert to non-Microsoft channels from outside, are
+the safety nets.
+
+**Not built** (asked for, left out rather than faked): scheduled digest, maintenance windows (use
+`alert_snooze_until`), automatic ticket creation, escalation to a second channel, per-channel severity/family
+filters, a Slack/Webex connector route (webhooks were chosen), an MCP server, Key Vault secrets.
+
 ## Cost: flow runs count against your request quota (read before lowering the interval)
 
 Microsoft counts every trigger and action that runs as one Power Platform request. A Power Automate Premium (or
@@ -95,6 +158,15 @@ enabled target (probe, record) + about 1 delete per target once pruning is in st
 | 36 | 5 min | 114 | 288 | 32,832 | 82% |
 | 34 | 3 min | 108 | 480 | 51,840 | 130% - throttled |
 | 15 (the earlier version) | 5 min | 51 | 288 | 14,688 | 37% |
+
+**With alerts on, add the alert flow:** about 25 requests per run when nothing is failing = **3,600/day** at 10
+minutes. Default total (34 targets, 10 minutes, alerts on): **19,152 requests/day = 48% of 40,000** (36 targets:
+20,016 = 50%). While something fails, each failing service adds about 10 requests per run, and each posted message
+about 10 plus 3 per channel: a day with 5 services down all day and hourly reminders costs roughly 7,500 more
+(about 67% in total) - still inside one licence, and exactly the day you want the monitor to keep running. At 5
+minutes with alerts the quiet-day total is 38,304 (96%): do not combine a 5-minute interval with alerts on one
+Premium licence. Unconfirmed: whether a Teams post or a skipped branch is counted differently; the figures count
+every action that runs once.
 
 **The default interval was raised from 5 to 10 minutes when the catalogue grew from 15 to 36 services**, because
 5 minutes would consume about 78% of one Premium licence - more than the 60% that leaves reasonable room for the
@@ -157,7 +229,7 @@ Run the same command again. The upgrade is additive and tested against a mock of
 
 ## What was verified, and what was not
 
-Verified here (`npm test`, 177 tests; `npm run build`; headless Chromium):
+Verified here (`npm test`, 244 tests; `npm run build`; headless Chromium):
 
 - the TypeScript logic against **golden cases produced by the real Python code** (`tests/golden/gen_golden.py`
   runs the updated 36-service `outage-watch/outagewatch.py`): the catalogue itself (36 services, URLs, alive codes,
@@ -182,6 +254,25 @@ and the fixes made after each run are tested against the mock only. The mock Dat
 documentation and from the three observed errors, not Microsoft's implementation. Every value written to a table is
 also checked against the column limits (the mock enforces them; added after the third run).
 
+### Alerts, incidents, CI gate: how they were verified
+
+- A plain-JavaScript reference of the decision logic (`provision/lib/alert-logic.mjs`: failure rule, confirm,
+  open / reminder / recovered, dedupe, snooze, message text, per-channel encoding, CI status) is unit-tested.
+- The **generated flow definitions are executed** by a small interpreter of the workflow language
+  (`tests/helpers/wdl.mjs`) against the mock Dataverse: probe rounds and alert runs, compared with the reference
+  at every step, including a seeded 60-round fuzz with setting changes and channel outages, hostile names and
+  error texts, 34 services failing at once, missing bookkeeping rows. The interpreter is this project's reading of
+  the documented language (strict where the real engine is known to be strict, e.g. `if()` evaluates both
+  branches); it is **not** Microsoft's engine.
+- Upgrade from the deployed version (commit 24090f5, using that commit's real flow definition): table, columns and
+  settings added, probe flow updated in place, 36 targets and all results untouched, idempotent.
+- Column limits: every value either flow writes is bounded and the mock rejects anything too long.
+- The CI gate script against the mock; the pipeline YAML and the PowerShell gate were **not** run.
+- **Not verified at all:** the Teams action on a real tenant (its operation id and parameter names are not in
+  Microsoft's reference documentation), how the message renders in Teams / Slack / Webex, real webhook delivery,
+  flow activation with a Teams connection reference, real request consumption, the agent definition in any agent
+  platform.
+
 ## Manual steps that remain
 
 1. Have code apps enabled and the licences assigned (admin, once).
@@ -190,6 +281,8 @@ also checked against the column limits (the mock enforces them; added after the 
 4. For other viewers: share the app, and give them a security role with **Read** on the three `owatch_` tables
    (the script does not create a role).
 5. Recommended: `-SetHeartbeat`, and keep the independent Python monitor running elsewhere.
+6. For alerts: paste the Teams channel link when asked (and click "Create" once for the Teams connection), and/or
+   enter the Slack / Webex webhook URLs at the hidden prompts. Then check the TEST message arrived (`-SendTestAlert`).
 
 ## Troubleshooting
 
@@ -201,6 +294,21 @@ also checked against the column limits (the mock enforces them; added after the 
 - *Every target shows the same failure*: the flow's own outbound path or a policy is the likely cause, not Microsoft 365.
 - Manual fallback if flow creation is rejected in your tenant: build a scheduled flow by hand with the actions
   listed in `DESIGN.md` ("The flow"), writing to `owatch_result`; the dashboard only needs the rows.
+
+### Alerts
+
+- *Summary says "Alerts: NOT ACTIVE"*: the service refused the alert flow; its message is printed above the summary.
+  Most likely the Teams action definition (unconfirmed on a real tenant) or a DLP policy. Probing is unaffected.
+  Workaround until fixed: use Slack / Webex / webhook (`-RemoveChannels teams`), or build the Teams post by hand
+  in the flow designer.
+- *No TEST message*: open the dashboard panel "Alerts, CI gate and incidents": each channel shows its last delivery
+  or the error. Then the run history of "Outage Watch - alert" in Power Automate.
+- *Teams: "last delivery FAILED"*: the connection's account is not a member of the team, the channel is private, or
+  the Power Automate app is blocked in Teams. *Slack / Webex: "FAILED HTTP 404/410"*: the webhook was revoked;
+  create a new one and re-run with `-SetSlackWebhook` / `-SetWebexWebhook`.
+- *Alerts stopped but services still fail*: check `alert_snooze_until`, `alert_enabled`, `alert_channels_off`.
+- *CI gate says STALE*: the alert flow is off or failing (the row is rewritten every judged round), or no channel is
+  configured (then the alert flow is not deployed at all).
 
 ## Development
 

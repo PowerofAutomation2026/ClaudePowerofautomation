@@ -1,0 +1,21 @@
+# Outage Watch gate for Azure DevOps Pipelines: stops the stage while Microsoft 365 is failing (level "freeze").
+#
+# Authentication: an Azure Resource Manager service connection (service principal or workload identity). The same
+# app needs an APPLICATION USER in the Power Platform environment with a role that can READ "Outage Watch Setting".
+# AzureCLI@2 and "az account get-access-token --resource" are standard. NOT verified here against a real tenant.
+trigger: none
+variables:
+  OUTAGEWATCH_ORG_URL: 'https://YOURORG.crm4.dynamics.com'
+steps:
+  - task: AzureCLI@2
+    displayName: 'Outage Watch gate (stop on freeze)'
+    inputs:
+      azureSubscription: 'YOUR-SERVICE-CONNECTION'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        export OUTAGEWATCH_TOKEN="$(az account get-access-token --resource "$(OUTAGEWATCH_ORG_URL)" --query accessToken -o tsv)"
+        export OUTAGEWATCH_ORG_URL="$(OUTAGEWATCH_ORG_URL)"
+        node ci/gate.mjs --block-on freeze --stale-minutes 35 --on-stale fail
+  - script: echo "your deployment steps"
+    displayName: Deploy

@@ -42,6 +42,16 @@
 | Default interval 10 min (was 5) | 34 targets at 5 min = 31,104 requests/day = 78% of 40,000. 10 min = 15,552 = 39%. Slower detection is the price; stated in README, `-DryRun`, and a WARNING above 60%. |
 | "For each" concurrency 50 (documented maximum) | All 36 probes start together: worst-case round is about one timeout (10 s), not 36 (6 min). Trigger concurrency 1 prevents overlap. |
 | Family layout: bands on two buses, no per-edge lines | 36 nodes have 30 sign-in edges and 6 Copilot edges; drawn individually they are unreadable. Each family is a band; a left rail carries "needs sign-in", a right rail "Copilot reads". Rows order sign-in dependants first so a rail never crosses a service it does not belong to (tested). |
+| Alerts in a **separate** flow | A Teams / webhook problem can never stop or slow probing; a flow cannot be turned on with an unbound connection, and probing must not depend on Teams; the deployed probe flow changes minimally. Cost: about 25 requests per quiet run. If the service rejects the alert flow the deployment still succeeds and reports it. |
+| One raw failure flag (`owatch_failed`) and the error text (`owatch_errormessage`) written by the probe flow | The alert flow cannot run the dashboard's TypeScript. With the flag it lists only failed rows of a round (one cheap query) instead of re-deriving failure for every target. The flag is the same rule as `isFailure()`; the dashboard still classifies on its own. |
+| Alert state in columns of `owatch_target`; each round judged at most once (`alert_last_round` saved BEFORE judging) | No duplicates across runs or restarts. A run that fails after saving loses that round's judgement (counts lag by one round) rather than double-counting. |
+| Loop only over targets that fail now, are in a streak, or have an open incident | Normally zero iterations: quiet cost is constant, not per target. |
+| Datetime columns always written with a real value (sentinel 2000-01-01), never null | Whether the Dataverse connector accepts null for a datetime/integer parameter is unconfirmed; the logic never depends on clearing a column (the failure count is the source of truth). |
+| One plain-text message, encoded per channel | One template to get right. Teams: whole text HTML-escaped, newlines to `<br>` (so no markup can be injected, at the price of no bold); Slack: `&<>` escaped; Webex / webhook: plain `text`. Caps: 10 detailed services, 300 characters of error, Teams 16,000 escaped characters, Slack 12,000, Webex 3,500 (its limit is 7,439 bytes). |
+| Slack and Webex through **incoming webhooks** (HTTP action), Teams through the **Teams connector** | Incoming webhooks are the simple, documented route for both and need no connector connection. The HTTP action is premium, but the flow owner already needs Premium for the probe flow. The Slack / Webex connectors were not used: their operation ids in a flow definition could not be confirmed. |
+| Webhook URLs only inside the flow definition, secure inputs/outputs; status of a failed webhook = HTTP status only | See README "Where the webhook URLs are kept". Key Vault-backed secret environment variables were not verifiable here. |
+| CI / agent status = one setting row rewritten every judged round, read through the Web API | Documented, no extra flow, no HTTP-trigger URL (which would be a bearer secret) and no premium trigger. Its `updated` time doubles as a liveness signal; the gate fails closed on stale data by default. |
+| Incidents per service, in their own table | Matches the per-target state; open / remind / close are single-row operations found by name + open flag. |
 | Pruning inside the flow | Simple and visible. It costs one request per deleted row; a Dataverse bulk-delete job would cost none but was not implemented (unverifiable here). |
 | Dashboard reads through `getClient().retrieveMultipleRecordsAsync` | Same proven pattern as the repository's existing code app (find the generated data source by primary key, not by its display name). Read-only. |
 | States shown as shape + icon + word | Never colour alone; reduced motion respected; dark/light tokens from the Python dashboard. |
@@ -71,6 +81,12 @@ would matter: a target with an explicit alive list (auth, exchange, graph) that 
 network. The warning rule compares each service with *its own* baseline, so the absolute offset does not matter.
 
 ## Documentation used
+
+Added for alerts (same caveat: read from the MicrosoftDocs sources or via search, learn.microsoft.com itself was not reachable):
+https://learn.microsoft.com/power-automate/teams/send-a-message-in-teams (action name, poster / location options, private
+channels unsupported); https://learn.microsoft.com/connectors/teams/ (Flow bot not in government clouds; via search only).
+Slack incoming webhooks (https://api.slack.com/messaging/webhooks) and Webex incoming webhooks
+(https://apphub.webex.com/applications/incoming-webhooks-cisco-systems-38054-23307-75252) are cited from memory, **not fetched**.
 
 learn.microsoft.com was not reachable from the build sandbox; the pages were read from Microsoft's public source
 repositories for those same pages (github.com/MicrosoftDocs). Canonical URLs:
@@ -163,6 +179,32 @@ Nothing in this folder has been run against a real tenant. Specifically:
 27. **Dashboard after the fix**: with no `roles_json` row the built-in list is used; with an old 7-role row left by a 15-target deployment the
     provisioner deletes it. A dashboard build older than this fix reading a tenant without the row also falls back to its built-in list.
 
+28. **Teams action.** `PostMessageToConversation` with `poster`, `location`, `body/recipient/groupId`, `body/recipient/channelId`,
+    `body/messageBody` is what the designer writes for "Post message in a chat or channel"; it is not in Microsoft's reference
+    documentation and was not run. Microsoft documents: Flow bot or User as poster, Channel as location, **private channels not
+    supported**; Flow bot is not available in government clouds (connector page, via search). Shared channels, required team
+    membership and the "Flow bot cannot be installed" case are unconfirmed.
+29. **Rendering.** How Teams renders `<p>` + `<br>` with emoji in the title, how Slack shows a long `text`, and whether Webex
+    incoming webhooks accept a `text` field (the Messages API does; the webhook integration documents `markdown`/`text`) were not
+    observed. Message size limits used: Teams about 28 KB, Slack 40,000 characters, Webex 7,439 bytes (from memory of the vendor
+    documentation; not re-read here).
+30. **Workflow-language behaviour assumed by the alert flow**: `actions()` / `outputs()` of an action inside the same loop
+    iteration; variables in a sequential "for each"; `Query` (Filter array) and `Select` shapes; `If` with an object expression;
+    `first()` of an empty array = null; string comparison with `greater()`; `decodeUriComponent('%0A')` as newline; `split`, `last`,
+    `isInt`; outputs of a secured HTTP action usable by the next action; a failed action handled by a later run-after leaves the
+    run successful. The test interpreter implements these as documented/understood; none was run on Power Automate.
+31. **Dataverse connector operations** `UpdateRecord` (parameters `recordId`, `item/<column>`) and `ListRecords` with `$orderby`
+    on two columns: designer conventions, not reference documentation.
+32. **Text comparison of round ids** in an OData filter (`owatch_round lt '...'`) relies on Dataverse comparing strings
+    ordinally-enough for fixed-width digits; and `owatch_name eq '...'` with doubled apostrophes.
+33. **Request counting** for the alert flow (25 per quiet run): assumes scopes (`If`, `Foreach`), data operations and variable
+    actions each count once and skipped actions do not.
+34. **CI snippets and agent definition**: `azure/login` + `az account get-access-token --resource <org>` for an application user
+    is the standard pattern but was not run; the PowerShell gate was not executed; `agent/openapi.json` was not imported anywhere.
+35. **Upgrade of the live probe flow definition** (turn off, patch `clientdata`, turn on) is exercised only on the mock; it is
+    needed for the two new columns to be written. If the patch is rejected the probe flow would stay OFF: the script reports the
+    error; turn it back on in Power Automate (the old definition keeps working) and report the message.
+
 ## Test map
 
 | File | Proves |
@@ -172,6 +214,9 @@ Nothing in this folder has been run against a real tenant. Specifically:
 | `tests/provision.test.ts` | request sequence, idempotency, resume, upgrade from the 15-target version, tenant name added later, failures, uninstall/purge, CLI exit codes (mock Dataverse over HTTP) |
 | `tests/flow.test.ts` | clientdata envelope, run-after, no retries, dumb flow, heartbeat, usage estimate, metadata payloads |
 | `tests/validate.test.ts` | GUID (incl. the `.ps1` literal), org-URL allow-list, tenant, heartbeat URL, hostile input |
+| `tests/alert-flow.test.ts` + `tests/helpers/wdl.mjs` | reference alert logic; both generated flows EXECUTED by an interpreter against the mock and compared with the reference (lifecycle, channels, incidents, CI status, hostile input, fuzz); structure of the alert flow |
+| `tests/upgrade-alerts.test.ts` | upgrade from the deployed version 24090f5 (real old flow definition), channels kept / added / removed, secrets only in the flow definition, alert-flow rejection, CLI exit codes, DryRun |
+| `tests/gate.test.ts` | CI gate decisions and end-to-end read from the mock; pipeline snippets and agent definition (structure, existing columns) |
 | `tests/limits.test.ts` | every value the provisioner or the flow can write fits its column; mock enforces limits (0x80044331); re-run on top of the failed third real run |
 | `tests/ps1-static.test.ts` | `.ps1` balanced, PS 5.1-compatible syntax, ASCII, no secrets printed, `.cmd` wrappers |
 

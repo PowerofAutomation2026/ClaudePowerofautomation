@@ -72,6 +72,16 @@ export const TABLES = [
   table('owatch_setting', 'Outage Watch Setting', 'Outage Watch Settings', 'Name/value settings read by the dashboard.', 'Name', 100, [
     str('owatch_value', 'Value', 400, 'Setting value (never a secret).'),
   ]),
+  table('owatch_incident', 'Outage Watch Incident', 'Outage Watch Incidents', 'One row per announced failure of one service: opened by the alert flow, closed when the service answers again.', 'Service', 100, [
+    str('owatch_family', 'Family', 100, 'Service family at the time of the incident.'),
+    datetime('owatch_openedat', 'Failing since', 'First failed probe of the streak that led to this incident.'),
+    datetime('owatch_closedat', 'Recovered at', 'When the service answered again (meaningful only when the incident is closed).'),
+    bool('owatch_isopen', 'Open', true, 'Yes until the recovery was recorded.'),
+    str('owatch_firsterror', 'First error', 500, 'HTTP status and error text of the probe that confirmed the failure, cut to this length.'),
+    int('owatch_reminders', 'Reminders sent', 0, 100000, 'Number of "still failing" messages.'),
+    int('owatch_durationminutes', 'Duration (minutes)', 0, 10000000, 'Minutes from failing-since to the last update / the recovery.'),
+    int('owatch_failedrounds', 'Failed rounds', 0, 1000000, 'Consecutive failed probe rounds.'),
+  ]),
 ]
 
 const codes = (alive) => (alive == null ? '' : alive.join(','))
@@ -108,7 +118,10 @@ export function seedSettings(o) {
     { name: 'alert_snooze_until', value: '' },               // UTC time like 2026-12-31T18:00:00Z: no posts before it; probing continues
     { name: 'alert_test', value: 'no' },                     // 'yes' = post a TEST message on the next run, then reset to 'no'
     // --- written by the alert flow (do not edit): ---
-    { name: 'alert_last_round', value: '' }, { name: 'last_alert_at', value: '' }, { name: 'last_alert_error', value: '' },
+    { name: 'alert_channels_off', value: '' },             // e.g. "slack,webex": configured channels that should stay silent for now
+    { name: 'alert_last_round', value: '' }, { name: 'last_alert_at', value: '' },
+    { name: 'last_delivery_teams', value: '' }, { name: 'last_delivery_slack', value: '' }, { name: 'last_delivery_webex', value: '' }, { name: 'last_delivery_webhook', value: '' },
+    { name: 'ci_status', value: '' },                      // machine-readable ok | caution | freeze for pipelines and agents
   ]
 }
 

@@ -32,7 +32,7 @@ async function env(mockOpts: any = {}) {
 const writes = (mock: any) => mock.log.filter((l: any) => l.method !== 'GET')
 
 describe('apply (first deployment into an empty environment)', () => {
-  it('creates publisher, solution, 3 tables, 36 targets (34 enabled), connection reference, flow, settings, and turns the flow on', async () => {
+  it('creates publisher, solution, 4 tables, 36 targets (34 enabled), connection reference, flow, settings, and turns the flow on', async () => {
     const { mock, client } = await env()
     const r = await apply(client, OPTS)
     expect(mock.problems).toEqual([])
@@ -41,7 +41,7 @@ describe('apply (first deployment into an empty environment)', () => {
     expect(r.unconfigured).toEqual(['onedrive-business', 'sharepoint-online'])
     expect(r.estimate).toMatchObject({ perRun: 108, runsPerDay: 144, perDay: 15552, pctOf40k: 39, high: false })
     expect(r.worstCaseRunSeconds).toBeLessThan(10 * 60 / 4)
-    expect([...mock.entities.keys()].sort()).toEqual(['owatch_result', 'owatch_setting', 'owatch_target'])
+    expect([...mock.entities.keys()].sort()).toEqual(['owatch_incident', 'owatch_result', 'owatch_setting', 'owatch_target'])
     expect(mock.db.owatch_targets).toHaveLength(36)
     expect(mock.db.workflows).toHaveLength(1)
     expect(mock.db.workflows[0].statecode).toBe(1)
@@ -446,7 +446,7 @@ describe('uninstall', () => {
     await apply(client, OPTS)
     const r = await uninstall(client, { purge: false })
     expect(mock.db.workflows).toHaveLength(0)
-    expect(mock.entities.size).toBe(3)
+    expect(mock.entities.size).toBe(4)
     expect(r.kept.length).toBeGreaterThan(0)
     expect(mock.problems).toEqual([])           // includes "flow deleted while still ON"
     expect((await uninstall(client, { purge: false })).removed).toEqual([])   // idempotent
@@ -512,15 +512,15 @@ describe('CLI helper (the process Deploy-OutageWatchPP.ps1 calls)', () => {
     expect(r.out).toContain('POST   workflows')
     expect(r.out).toMatch(/34 enabled targets every 10 min/)
     expect(r.out).toMatch(/15,552 Power Platform requests\/day/)
-    expect(r.out).toContain('Teams alerts: not configured')
+    expect(r.out).toContain('Alerts: not configured')
     expect(r.out).toContain('onedrive-business, sharepoint-online')
     expect(r.out).not.toContain('WARNING')
     const five = await run(['estimate', '--interval', '5'])
-    expect(five.out).toMatch(/WARNING: this uses 94% of the 40,000/)                                  // probe 31,104 + alert flow 6,336
+    expect(five.out).toMatch(/WARNING: this uses 96% of the 40,000/)                                  // probe 31,104 + alert flow 7,200
     expect((await run(['estimate', '--interval', '5', '--no-alerts'])).out).toMatch(/WARNING: this uses 78% of the 40,000/)
     expect((await run(['estimate', '--interval', '3'])).out).toMatch(/WARNING: this needs MORE than the 40,000/)
     const dflt = await run(['estimate'])
-    expect(dflt.out).toMatch(/TOTAL: ~18,720 requests\/day = about 47% of the 40,000/)                 // default interval, alerts on: under 60%, no warning
+    expect(dflt.out).toMatch(/TOTAL: ~19,152 requests\/day = about 48% of the 40,000/)                 // default interval, alerts on: under 60%, no warning
     expect(dflt.out).not.toContain('WARNING')
   }, 30000)
 })

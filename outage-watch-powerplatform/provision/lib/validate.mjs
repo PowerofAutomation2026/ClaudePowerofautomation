@@ -92,3 +92,21 @@ export function assertDashboardUrl(v) {
   if (u.protocol !== 'https:' || u.username || u.password || u.port || !/^(apps|make)(\.[a-z0-9-]+)*\.powerapps\.(com|us|cn)$/.test(u.hostname)) throw bad()
   return u.href
 }
+
+/**
+ * Incoming-webhook URL of an alert channel. The URL is a credential: it is never echoed in an error.
+ *   slack   https://hooks.slack.com/services/...            (Slack "Incoming Webhooks")
+ *   webex   https://webexapis.com/v1/webhooks/incoming/...  (Webex "Incoming Webhooks" integration)
+ *   webhook any https endpoint that accepts POST {"text": "..."}
+ */
+export function assertWebhookUrl(kind, v) {
+  const bad = (why) => new InputError(`${kind} webhook URL not accepted (${why}; value not shown)`)
+  if (typeof v !== 'string' || v.length < 20 || v.length > 600 || /[\s"'<>\\`{}@]/.test(v)) throw bad('not a plain https URL')
+  let u
+  try { u = new URL(v) } catch { throw bad('not a URL') }
+  if (u.protocol !== 'https:' || u.username || u.password || u.port || !u.hostname.includes('.')) throw bad('must be https without credentials or port')
+  if (kind === 'slack' && !(/^hooks\.slack(-gov)?\.com$/.test(u.hostname) && u.pathname.startsWith('/services/'))) throw bad('expected https://hooks.slack.com/services/...')
+  if (kind === 'webex' && !(u.hostname === 'webexapis.com' && u.pathname.startsWith('/v1/webhooks/incoming/'))) throw bad('expected https://webexapis.com/v1/webhooks/incoming/...')
+  if (!['slack', 'webex', 'webhook'].includes(kind)) throw bad('unknown channel type')
+  return u.href
+}

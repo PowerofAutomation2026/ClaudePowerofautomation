@@ -112,6 +112,9 @@ function functions(env, scope) {
     addMinutes: (t, n, f) => fmtTime(TICKS(t) / 10000 + n * 60000, f),
     addDays: (t, n, f) => fmtTime(TICKS(t) / 10000 + n * 86400000, f),
     json: (s) => JSON.parse(s),
+    decodeUriComponent: (s) => decodeURIComponent(s),
+    split: (s, d) => { if (typeof s !== 'string') throw new Error('split(): needs text'); return s.split(d) },
+    last: (v) => { if (typeof v === 'string') return v.slice(-1); if (Array.isArray(v)) return v.length ? v[v.length - 1] : null; throw new Error('last(): needs text or an array') },
     createArray: (...a) => a,
     parameters: (n) => (n === '$authentication' ? { type: 'test' } : {}),
     variables: (n) => { if (!env.vars.has(n)) throw new Error(`variables('${n}'): not initialized`); return env.vars.get(n) },
@@ -203,6 +206,7 @@ async function runAction(name, a, env, scope) {
       }
       case 'Http': {
         const inputs = evaluate(a.inputs, env, scope)
+        if (a.runtimeConfiguration?.secureData) env.secured.push(name)
         const r = await env.http(inputs, a)
         env.advance(r.elapsedMs ?? 100)
         if (r.timedOut) { rec.status = 'TimedOut'; rec.code = 'ActionTimedOut'; rec.error = { code: 'ActionTimedOut', message: r.message ?? 'The execution of template action timed out.' } }
@@ -263,9 +267,9 @@ async function runActions(actions, env, scope, container = '(root)') {
  * Returns { status, statuses (per action name, last value), count (actions executed), expressionErrors, trace }.
  */
 export async function runFlow(clientdata, env) {
-  const e = { ...env, vars: new Map(), statuses: new Map(), count: 1, trace: [], expressionErrors: [] }    // count starts at 1: the trigger
+  const e = { ...env, vars: new Map(), statuses: new Map(), count: 1, trace: [], expressionErrors: [], secured: [] }    // count starts at 1: the trigger
   const status = await runActions(clientdata.properties.definition.actions, e, { parent: null, results: new Map() })
-  return { status, statuses: e.statuses, count: e.count, expressionErrors: e.expressionErrors, trace: e.trace, vars: e.vars }
+  return { status, statuses: e.statuses, count: e.count, expressionErrors: e.expressionErrors, trace: e.trace, vars: e.vars, secured: e.secured }
 }
 
 /** Connector that maps the Dataverse operations of the flows onto the mock Dataverse, and captures Teams posts. */
@@ -276,8 +280,8 @@ export function mockConnector(mock, { teams = [], teamsFails = null } = {}) {
   return async (api, op, p) => {
     if (api === 'shared_teams') {
       if (op !== 'PostMessageToConversation') return { error: 'unknown Teams operation ' + op }
+      if (typeof teamsFails === 'function' ? teamsFails() : teamsFails) return { error: typeof teamsFails === 'function' ? teamsFails() : teamsFails, code: 'Forbidden', statusCode: 403 }
       for (const k of ['poster', 'location', 'body/recipient/groupId', 'body/recipient/channelId', 'body/messageBody']) if (typeof p[k] !== 'string' || !p[k]) return { error: `Teams post without ${k}` }
-      if (teamsFails) return { error: teamsFails, code: 'Forbidden', statusCode: 403 }
       if (p['body/messageBody'].length > 28000) return { error: 'message too large', code: 'RequestEntityTooLarge', statusCode: 413 }
       teams.push({ groupId: p['body/recipient/groupId'], channelId: p['body/recipient/channelId'], poster: p.poster, location: p.location, html: p['body/messageBody'] })
       return { body: { id: String(teams.length) }, statusCode: 201 }

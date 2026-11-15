@@ -1,0 +1,32 @@
+# Outage Watch gate for GitHub Actions: stops the job while Microsoft 365 is failing (level "freeze").
+#
+# Authentication (nothing here is specific to Outage Watch):
+#   1. an Entra app registration with a federated credential for this repository (or a client secret);
+#   2. in the Power Platform environment, an APPLICATION USER for that app with a security role that can READ the
+#      table "Outage Watch Setting" (owatch_setting). Read-only is enough.
+#   3. repository variables AZURE_CLIENT_ID / AZURE_TENANT_ID and OUTAGEWATCH_ORG_URL (https://<org>.crm<N>.dynamics.com).
+# azure/login and "az account get-access-token --resource" are standard Azure CLI features. NOT verified here
+# against a real tenant: the gate script itself is unit-tested (tests/gate.test.ts).
+name: deploy
+on: workflow_dispatch
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - name: Outage Watch gate (stop on freeze; add "--block-on caution" to stop on the first failed probe too)
+        env:
+          OUTAGEWATCH_ORG_URL: ${{ vars.OUTAGEWATCH_ORG_URL }}
+        run: |
+          export OUTAGEWATCH_TOKEN="$(az account get-access-token --resource "$OUTAGEWATCH_ORG_URL" --query accessToken -o tsv)"
+          node ci/gate.mjs --block-on freeze --stale-minutes 35 --on-stale fail
+      - name: Deploy
+        run: echo "your deployment steps"
