@@ -23,7 +23,7 @@ and sends a detailed alert to Teams, Slack or Webex when something fails. It dep
 
 **Created by Kirolos · Power of Automation**
 
-[![Connect on LinkedIn](https://img.shields.io/badge/Connect_on_LinkedIn-0a66c2?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/search/results/people/?keywords=Kirolos%20Power%20of%20Automation)
+[![Connect on LinkedIn](https://img.shields.io/badge/Connect_on_LinkedIn-0a66c2?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/kirolos-erian-39014349/)
 
 <br>
 
@@ -508,7 +508,7 @@ If you run Microsoft 365 or Power Platform and an outage has ever reached you th
 
 **Kirolos · Power of Automation**
 
-[![Connect on LinkedIn](https://img.shields.io/badge/Connect_on_LinkedIn-0a66c2?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/search/results/people/?keywords=Kirolos%20Power%20of%20Automation)
+[![Connect on LinkedIn](https://img.shields.io/badge/Connect_on_LinkedIn-0a66c2?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/kirolos-erian-39014349/)
 
 <sub>The button opens LinkedIn. You send the connection request from there.</sub>
 
