@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 150" width="1200" height="150" role="img" aria-label="37 services monitored, 2 editions, 445 automated tests, 1 command to deploy">
+  <rect x="0" y="0" width="1200" height="3" fill="#e6edf2"/>
+  <rect x="0" y="148" width="1200" height="1" fill="#263746"/>
+  <text x="24" y="74" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="58" font-weight="800" letter-spacing="-2" fill="#e6edf2">37</text>
+  <text x="24" y="104" font-family="Consolas, SFMono-Regular, Menlo, Courier New, monospace" font-size="13" letter-spacing="0.5" fill="#4cc2e0">SERVICES MONITORED</text>
+  <text x="24" y="126" font-family="Consolas, SFMono-Regular, Menlo, Courier New, monospace" font-size="12" fill="#9db0c0">in 9 families</text>
+  <text x="316" y="74" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="58" font-weight="800" letter-spacing="-2" fill="#e6edf2">2</text>
+  <text x="316" y="104" font-family="Consolas, SFMono-Regular, Menlo, Courier New, monospace" font-size="13" letter-spacing="0.5" fill="#4cc2e0">EDITIONS</text>
+  <text x="316" y="126" font-family="Consolas, SFMono-Regular, Menlo, Courier New, monospace" font-size="12" fill="#9db0c0">host monitor + Power Platform app</text>
+  <line x1="298" y1="22" x2="298" y2="128" stroke="#263746"/>
+  <text x="608" y="74" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="58" font-weight="800" letter-spacing="-2" fill="#e6edf2">445</text>
+  <text x="608" y="104" font-family="Consolas, SFMono-Regular, Menlo, Courier New, monospace" font-size="13" letter-spacing="0.5" fill="#4cc2e0">AUTOMATED TESTS</text>
+  <text x="608" y="126" font-family="Consolas, SFMono-Regular, Menlo, Courier New, monospace" font-size="12" fill="#9db0c0">126 monitor · 319 Power Platform</text>
+  <line x1="590" y1="22" x2="590" y2="128" stroke="#263746"/>
+  <text x="900" y="74" font-family="Segoe UI, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="58" font-weight="800" letter-spacing="-2" fill="#e6edf2">1</text>
+  <text x="900" y="104" font-family="Consolas, SFMono-Regular, Menlo, Courier New, monospace" font-size="13" letter-spacing="0.5" fill="#4cc2e0">COMMAND TO DEPLOY</text>
+  <text x="900" y="126" font-family="Consolas, SFMono-Regular, Menlo, Courier New, monospace" font-size="12" fill="#9db0c0">from an environment ID</text>
+  <line x1="882" y1="22" x2="882" y2="128" stroke="#263746"/>
+</svg>
