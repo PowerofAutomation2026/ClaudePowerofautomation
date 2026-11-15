@@ -163,3 +163,6 @@ Nothing in this folder has been run against a real tenant. Specifically:
 - Adding the first column to a just-created table returned `HTTP 400 An unexpected error occurred.` (likely a transient metadata collision;
   the payload follows the documented IntegerAttributeMetadata shape). Added wait-for-table + checked retry. UNCONFIRMED whether this is the real cause:
   if it persists, the request id printed by the script is the next diagnostic.
+- Second real run: `GET owatch_settings` failed with 0x80060888 'Could not find a property named owatch_value' although the column creation had succeeded
+  (the Web API schema cache lags behind metadata changes). Added wait-for-columns before seeding and a retry on that exact error. UNCONFIRMED against a real tenant.
+- Everything after step 6 (flow creation and activation, code app push, smoke test) has still never run for real: expect further first-run findings there.

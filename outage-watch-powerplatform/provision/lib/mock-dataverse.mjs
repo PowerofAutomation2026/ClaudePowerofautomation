@@ -13,7 +13,7 @@ export function createMockDataverse({ token = 'test-token', failActivation = nul
   const entities = new Map()        // logical -> { MetadataId, LogicalName, EntitySetName, PrimaryId, attributes:Set, solution }
   const log = []                    // every request: { method, path, solution }
   const problems = []               // payload-shape violations the mock noticed
-  const state = { failActivation, autoRun, transientAttrFails: 0, attrFailsAfterCreate: 0, attrAlwaysFails: false }
+  const state = { failActivation, autoRun, transientAttrFails: 0, attrFailsAfterCreate: 0, attrAlwaysFails: false, staleSchemaReads: 0 }
 
   const reply = (status, json, headers = {}) => ({ status, headers: { 'content-type': 'application/json', ...headers }, body: json === undefined ? '' : JSON.stringify(json) })
   const err = (status, message, code = '0x0') => reply(status, { error: { code, message } })
@@ -157,6 +157,10 @@ export function createMockDataverse({ token = 'test-token', failActivation = nul
 
     m = /^([a-z0-9_]+)(?:\(([0-9a-f-]{36})\))?$/.exec(path)
     if (!m) return err(404, 'Resource not found for the segment ' + path)
+    if (method === 'GET' && m[1] === 'owatch_settings' && state.staleSchemaReads > 0) {      // Web API schema cache not refreshed yet
+      state.staleSchemaReads--
+      return err(400, "Could not find a property named 'owatch_value' on type 'Microsoft.Dynamics.CRM.owatch_setting'.", '0x80060888')
+    }
     const set = setFor(m[1])
     if (!set) return err(404, `Resource not found for the segment '${m[1]}'`)
     const id = m[2]

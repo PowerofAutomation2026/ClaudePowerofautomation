@@ -30,6 +30,38 @@ async function postMetadata(client, path, body, what, exists, log) {
   }
 }
 
+/**
+ * Dataverse's Web API keeps its own cached copy of the schema. Right after a table or column is created it can
+ * answer "Could not find a property named 'owatch_value' ..." (code 0x80060888) for a while, although the metadata call
+ * succeeded. That is a wait-and-retry condition, not a failure.
+ */
+export const isStaleSchema = (e) => e instanceof DataverseError &&
+  (e.code === '0x80060888' || (e.status === 400 && /Could not find a property named/i.test(e.message)))
+const SCHEMA_WAITS_S = [5, 10, 15, 20, 30, 30, 30, 30, 30, 30]   // about 4 minutes in total
+
+async function retrySchema(client, what, fn, log) {
+  for (let i = 0; ; i++) {
+    try { return await fn() }
+    catch (e) {
+      if (!isStaleSchema(e)) throw e
+      if (i >= SCHEMA_WAITS_S.length) {
+        throw new DataverseError(`${e.message} [${what}: Dataverse still did not list the new columns after ${SCHEMA_WAITS_S.reduce((a, b) => a + b, 0)} s. ` +
+          'This is a delay on the Dataverse side: wait a few minutes and re-run the same command]', e.status, e.code, e.requestId)
+      }
+      log(`    ~ ${what}: Dataverse has not refreshed its schema yet; waiting ${SCHEMA_WAITS_S[i]} s (${i + 1}/${SCHEMA_WAITS_S.length})`)
+      await client.sleep(SCHEMA_WAITS_S[i] * 1000)
+    }
+  }
+}
+
+/** Do not seed anything until the Web API can read every column we are about to use. */
+async function waitForColumns(client, entitySets, log) {
+  for (const t of TABLES) {
+    const cols = [t.primaryId, 'owatch_name', ...t.columns.map((c) => c.SchemaName.toLowerCase())]
+    await retrySchema(client, `table ${t.logical}`, () => client.get(`${entitySets[t.logical]}?$select=${cols.join(',')}&$top=1`), log)
+  }
+}
+
 /** A table that was just created is not always ready for column changes: wait until its primary column can be read. */
 async function waitForTable(client, path, log) {
   for (let i = 0; i < 30; i++) {
@@ -99,6 +131,8 @@ export async function apply(client, o, log = () => {}) {
     await client.post('PublishXml', { ParameterXml: xml })
     log('  published table customizations')
   }
+  log('  checking that the Web API can read the new columns')
+  await waitForColumns(client, res.entitySets, log)
   const sets = { target: res.entitySets.owatch_target, result: res.entitySets.owatch_result, setting: res.entitySets.owatch_setting }
 
   log('[4/8] Seeding targets (existing rows are never overwritten)')
@@ -153,7 +187,7 @@ export async function apply(client, o, log = () => {}) {
   }
 
   log('[6/8] Probe flow')
-  const flow = await findFlow(client, sets)
+  const flow = await findFlow(client, sets, log)
   let heartbeatUrl = o.clearHeartbeat ? null : (o.heartbeatUrl ?? null)
   if (!heartbeatUrl && !o.clearHeartbeat && flow) heartbeatUrl = existingHeartbeatUrl(flow.clientdata)   // keep it across upgrades
   res.heartbeat = !!heartbeatUrl
@@ -164,7 +198,7 @@ export async function apply(client, o, log = () => {}) {
   if (!flow) {
     const r = await client.post('workflows', { category: 5, name: FLOW_NAME, type: 1, description, primaryentity: 'none', clientdata: JSON.stringify(clientdata) }, SOL)
     flowId = r.entityId
-    if (!flowId) flowId = (await findFlow(client, sets))?.workflowid ?? null
+    if (!flowId) flowId = (await findFlow(client, sets, log))?.workflowid ?? null
     if (!flowId) throw new DataverseError('the flow was created but its id could not be read back', 0, 'FlowId')
     did('created', `cloud flow "${FLOW_NAME}"`)
   } else if (!sameDefinition(flow.clientdata, clientdata)) {
@@ -175,7 +209,7 @@ export async function apply(client, o, log = () => {}) {
   res.flowId = flowId
 
   log('[7/8] Settings (flow id, interval, retention, thresholds)')
-  const haveS = new Map((await client.get(`${sets.setting}?$select=owatch_name,owatch_value,owatch_settingid`)).json.value.map((r) => [r.owatch_name, r]))
+  const haveS = new Map((await retrySchema(client, 'settings', () => client.get(`${sets.setting}?$select=owatch_name,owatch_value,owatch_settingid`), log)).json.value.map((r) => [r.owatch_name, r]))
   const settings = [...seedSettings({ ...o, heartbeat: res.heartbeat }), { name: 'flow_workflowid', value: flowId, force: true }]
   for (const s of settings) {
     const cur = haveS.get(s.name)
@@ -206,10 +240,10 @@ function sameDefinition(existingText, wanted) {
   } catch { return false }
 }
 
-async function findFlow(client, sets) {
+async function findFlow(client, sets, log = () => {}) {
   const sel = '$select=workflowid,name,statecode,clientdata'
   if (sets?.setting) {
-    const s = (await client.get(`${sets.setting}?$select=owatch_value&$filter=owatch_name eq 'flow_workflowid'`)).json.value[0]
+    const s = (await retrySchema(client, 'settings', () => client.get(`${sets.setting}?$select=owatch_value&$filter=owatch_name eq 'flow_workflowid'`), log)).json.value[0]
     if (s && /^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$/.test(s.owatch_value ?? '')) {
       const f = await client.find(`workflows(${s.owatch_value})?${sel}`)
       if (f) return f

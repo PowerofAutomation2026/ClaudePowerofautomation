@@ -15,7 +15,7 @@ import { createClient } from '../provision/lib/client.mjs'
 import { DataverseError } from '../provision/lib/client.mjs'
 import { createMockDataverse } from '../provision/lib/mock-dataverse.mjs'
 // @ts-expect-error plain .mjs helpers without type declarations
-import { apply, smoke, uninstall, NeedsConnection, FlowNotOn, isTransientMetadata } from '../provision/lib/provision.mjs'
+import { apply, smoke, uninstall, NeedsConnection, FlowNotOn, isTransientMetadata, isStaleSchema } from '../provision/lib/provision.mjs'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const OPTS = { intervalMinutes: 10, retentionDays: 7, timeoutSeconds: 10, tenant: null, connectionId: 'aaaaaaaabbbbccccddddeeeeeeeeeeee', heartbeatUrl: null as string | null }
@@ -322,6 +322,50 @@ describe('transient Dataverse metadata errors (real first-run failure: HTTP 400 
     expect(isTransientMetadata(E(401, 'Unauthorized'))).toBe(false)
     expect(isTransientMetadata(E(404, 'Could not find an entity'))).toBe(false)
     expect(isTransientMetadata(new Error('boom'))).toBe(false)
+  })
+})
+
+describe('stale Web API schema (real second-run failure: HTTP 400 0x80060888 Could not find a property named owatch_value)', () => {
+  it('waits and retries until the Web API sees the new columns, then completes', async () => {
+    const { mock, client } = await env()
+    mock.state.staleSchemaReads = 4
+    const lines: string[] = []
+    const r = await apply(client, OPTS, (x: string) => lines.push(x))
+    expect(r.flowOn).toBe(true)
+    expect(lines.filter((l) => l.includes('has not refreshed its schema yet')).length).toBe(4)
+    expect(mock.db.owatch_settings.length).toBeGreaterThan(0)
+    // seeding must not start before the columns are readable
+    const firstSeed = lines.findIndex((l) => l.startsWith('[4/8]')); const lastWait = lines.map((l, i) => (l.includes('schema yet') ? i : -1)).filter((i) => i >= 0).pop()!
+    expect(lastWait).toBeLessThan(firstSeed)
+  })
+
+  it('a schema that never refreshes stops with a clear wait-and-re-run message, no token', async () => {
+    const { mock, client } = await env()
+    mock.state.staleSchemaReads = 1000
+    const e: any = await apply(client, OPTS).catch((x: unknown) => x)
+    expect(e.message).toContain('0x80060888')
+    expect(e.message).toContain('re-run the same command')
+    expect(e.message).not.toContain(mock.token)
+  })
+
+  it('a re-run after the failure completes without duplicates', async () => {
+    const { mock, client } = await env()
+    mock.state.staleSchemaReads = 1000
+    await apply(client, OPTS).catch(() => {})
+    mock.state.staleSchemaReads = 0
+    const r = await apply(client, OPTS)
+    expect(r.flowOn).toBe(true)
+    expect(mock.db.owatch_targets).toHaveLength(36)
+    expect(mock.db.workflows).toHaveLength(1)
+  })
+
+  it('only that error is treated as a cache delay', () => {
+    const E = (s: number, m: string, c?: string) => new DataverseError(`GET x: HTTP ${s} ${m}`, s, c)
+    expect(isStaleSchema(E(400, "Could not find a property named 'owatch_value' on type 'X'", '0x80060888'))).toBe(true)
+    expect(isStaleSchema(E(400, "Could not find a property named 'a' on type 'X'"))).toBe(true)
+    expect(isStaleSchema(E(403, 'forbidden'))).toBe(false)
+    expect(isStaleSchema(E(404, 'Resource not found for the segment'))).toBe(false)
+    expect(isStaleSchema(E(400, 'Invalid filter'))).toBe(false)
   })
 })
 

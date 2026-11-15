@@ -216,3 +216,10 @@ retried (permission, validation and not-found errors are not). If it still fails
 names the column, the Dataverse error code and the **request id** (send that id to Microsoft support / include it
 when reporting). **Re-running the same command is always safe** and continues from where it stopped.
 This fix is tested against the mock only; whether it resolves the real error is not confirmed until you re-run it.
+
+**`GET owatch_settings: HTTP 400 [0x80060888] Could not find a property named 'owatch_value' on type 'Microsoft.Dynamics.CRM.owatch_setting'`**
+Seen on the second real run (tables, 36 targets and the connection reference had already been created). The Web API keeps a
+cached copy of the schema; right after a table or column is created it can say a column does not exist although it was
+created. The script now (a) checks that the Web API can read every new column before it seeds anything and (b) retries the
+settings reads while this specific error appears (waits 5-30 s, about 4 minutes in total). If it still shows after that, wait
+a few minutes and re-run the same command. Tested against the mock only; not yet confirmed on a real tenant.
