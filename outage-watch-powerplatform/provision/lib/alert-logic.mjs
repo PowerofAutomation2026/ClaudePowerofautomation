@@ -132,7 +132,7 @@ export function evaluateRun({ targets, failingRows, settings, nowMs, round }) {
       out.updates.push({ name: t.owatch_name, owatch_failcount: d.count, owatch_failingsince: d.since, owatch_lastok: d.lastok, owatch_alertopen: d.open, owatch_lastalertat: d.lastAlert })
       if (d.event !== 'none') { out.events.push({ e: d.event, n: t.owatch_name, html: itemHtml(t, failRow, d, lastFamily, ctx) }); lastFamily = t.owatch_family ?? '' }
     }
-    if (out.events.length) notes = notesHtml(targets, failNames)
+    if (out.events.length) notes = notesHtml(ordered, failNames)       // names appear in family, then name order
   }
   if (ctx.test || out.events.length) { out.message = messageHtml(ctx, out.events, notes, settings.dashboard_url); out.clearTest = ctx.test }
   return out

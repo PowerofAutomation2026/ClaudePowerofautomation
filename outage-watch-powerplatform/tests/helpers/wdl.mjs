@@ -132,6 +132,11 @@ function evalNode(n, env, scope) {
     if (o === null || o === undefined) { if (n.safe) return null; throw new Error(`cannot read [${JSON.stringify(k)}] of null`) }
     if (Array.isArray(o)) { if (typeof k !== 'number') throw new Error('array index must be a number'); return o[k] ?? null }
     if (!isObj(o)) throw new Error(`cannot select property ${JSON.stringify(k)} of a ${typeof o} value`)       // strict on purpose
+    if (typeof k === 'string' && k.includes('/') && !(k in o)) {       // Power Automate path shorthand: outputs('X')?['body/value']
+      let cur = o
+      for (const part of k.split('/')) { if (cur === null || cur === undefined) return null; if (!isObj(cur)) throw new Error(`cannot select ${JSON.stringify(part)} of a ${typeof cur} value`); cur = cur[part] ?? null }
+      return cur
+    }
     return o[k] ?? null
   }
   const f = functions(env, scope)[n.f]

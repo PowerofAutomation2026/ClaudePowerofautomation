@@ -54,7 +54,8 @@ describe('apply (first deployment into an empty environment)', () => {
     expect(idx('POST solutions')).toBeLessThan(idx('POST EntityDefinitions'))
     expect(idx('POST PublishXml')).toBeLessThan(idx('POST owatch_targets'))
     expect(idx('POST connectionreferences')).toBeLessThan(idx('POST workflows'))
-    expect(paths[paths.length - 1]).toMatch(/^PATCH workflows\(/)
+    expect(paths.filter((p: string) => !p.includes('owatch_settings')).pop()).toMatch(/^(PATCH workflows\(|GET (workflows|connectionreferences))/)   // turning the probe flow on is the last change before the (unconfigured) alert step
+    expect(r.alerts.status).toBe('not-configured')
     // every metadata / flow / connection-reference create is solution-aware
     for (const l of mock.log.filter((x: any) => x.method === 'POST' && /^(EntityDefinitions|workflows|connectionreferences)/.test(x.path))) expect(l.solution).toBe('OutageWatch')
   })
@@ -235,7 +236,7 @@ describe('upgrade from the 15-target version (v1)', () => {
     expect(mock.db.workflows).toHaveLength(1)
     expect(JSON.parse(mock.db.workflows[0].clientdata).properties.definition.triggers.Recurrence.recurrence.interval).toBe(10)
     expect(mock.db.owatch_settings.find((s: any) => s.owatch_name === 'interval_minutes').owatch_value).toBe('10')
-    expect(mock.db.owatch_settings.find((s: any) => s.owatch_name === 'schema_version').owatch_value).toBe('2')
+    expect(mock.db.owatch_settings.find((s: any) => s.owatch_name === 'schema_version').owatch_value).toBe('3')
   })
 
   it('both an old and a new row exist: the old one is disabled, not deleted, and a note is returned', async () => {
@@ -511,10 +512,15 @@ describe('CLI helper (the process Deploy-OutageWatchPP.ps1 calls)', () => {
     expect(r.out).toContain('POST   workflows')
     expect(r.out).toMatch(/34 enabled targets every 10 min/)
     expect(r.out).toMatch(/15,552 Power Platform requests\/day/)
+    expect(r.out).toContain('Teams alerts: not configured')
     expect(r.out).toContain('onedrive-business, sharepoint-online')
     expect(r.out).not.toContain('WARNING')
     const five = await run(['estimate', '--interval', '5'])
-    expect(five.out).toMatch(/WARNING: this uses 78% of the 40,000/)
+    expect(five.out).toMatch(/WARNING: this uses 94% of the 40,000/)                                  // probe 31,104 + alert flow 6,336
+    expect((await run(['estimate', '--interval', '5', '--no-alerts'])).out).toMatch(/WARNING: this uses 78% of the 40,000/)
     expect((await run(['estimate', '--interval', '3'])).out).toMatch(/WARNING: this needs MORE than the 40,000/)
+    const dflt = await run(['estimate'])
+    expect(dflt.out).toMatch(/TOTAL: ~18,720 requests\/day = about 47% of the 40,000/)                 // default interval, alerts on: under 60%, no warning
+    expect(dflt.out).not.toContain('WARNING')
   }, 30000)
 })

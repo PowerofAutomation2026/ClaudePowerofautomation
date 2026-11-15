@@ -98,7 +98,7 @@ describe('EVERY value the provisioner can write fits its column', () => {
       expect(r.flowOn).toBe(true)
       await apply(client, { ...OPTS, tenant })
       expect(mock.problems).toEqual([])                      // includes: every row the simulated flow run wrote fits its columns
-      expect(mock.db.owatch_settings.every((s: any) => s.owatch_value.length <= 400)).toBe(true)
+      expect(mock.db.owatch_settings.every((s: any) => (s.owatch_value ?? '').length <= 400)).toBe(true)
     }
   })
 })
@@ -118,12 +118,13 @@ describe('re-running on top of the failed run (the user\'s environment)', () => 
 
     const r = await apply(client, OPTS)
     const writes = mock.log.filter((l: any) => l.method !== 'GET').map((l: any) => `${l.method} ${l.path.replace(/\(.*/, '')}`)
-    expect(writes).toEqual(['POST owatch_settings', 'PATCH workflows'])                 // flow id stored, flow turned on. Nothing else.
+    expect([...new Set(writes)].sort()).toEqual(['PATCH workflows', 'POST owatch_settings'])   // settings completed (flow id + the newer alert_* rows), flow turned on. No table, target or flow is created.
+    expect(writes.filter((w: string) => w === 'PATCH workflows')).toHaveLength(1)
     expect(mock.db.workflows).toHaveLength(1); expect(mock.db.workflows[0].workflowid).toBe(flowId); expect(mock.db.workflows[0].statecode).toBe(1)
     expect(mock.db.owatch_targets).toHaveLength(36); expect(mock.entities.size).toBe(3)
     expect(mock.db.owatch_settings.find((s: any) => s.owatch_name === 'flow_workflowid').owatch_value).toBe(flowId)
     expect(mock.db.owatch_settings.find((s: any) => s.owatch_name === 'roles_json')).toBeUndefined()
-    expect(r.flowOn).toBe(true); expect(r.created).toEqual(['setting flow_workflowid'])
+    expect(r.flowOn).toBe(true); expect(r.created.every((c: string) => c.startsWith('setting '))).toBe(true); expect(r.created).toContain('setting flow_workflowid')
     expect(mock.db.owatch_results).toHaveLength(34)                                     // the (simulated) first run wrote one row per enabled target
     expect(mock.problems).toEqual([])
   })
@@ -137,10 +138,10 @@ describe('the FLOW can never write a value that does not fit (checked on the gen
 
   it('writes only columns that exist in the result table, and every column it writes is accounted for below', () => {
     for (const c of cols) expect(lim[c], c).toBeDefined()
-    expect(cols.sort()).toEqual(['owatch_elapsedms', 'owatch_errorkind', 'owatch_httpstatus', 'owatch_name', 'owatch_probedat', 'owatch_round'])
+    expect(cols.sort()).toEqual(['owatch_elapsedms', 'owatch_errorkind', 'owatch_errormessage', 'owatch_failed', 'owatch_httpstatus', 'owatch_name', 'owatch_probedat', 'owatch_round'])
   })
   it('unbounded text (target name, error code of a failed HTTP action) is cut with take(string(..), N), N = the column length', () => {
-    for (const c of ['owatch_name', 'owatch_errorkind']) {
+    for (const c of ['owatch_name', 'owatch_errorkind', 'owatch_errormessage']) {
       const m = /^@take\(string\((.+)\),(\d+)\)$/.exec(rec['item/' + c])
       expect(m, `${c}: ${rec['item/' + c]}`).not.toBeNull()
       expect(Number(m![2])).toBe(lim[c].maxLength)

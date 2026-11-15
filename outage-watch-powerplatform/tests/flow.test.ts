@@ -41,10 +41,10 @@ describe('flow definition (clientdata) structure', () => {
     expect(A.For_each_target.operationOptions).toBeUndefined()                            // never 'Sequential'
     expect([...A.Prune_list.runAfter.For_each_target].sort()).toEqual(['Failed', 'Skipped', 'Succeeded', 'TimedOut'])
   })
-  it('the flow is dumb: it writes raw facts only, to columns that exist, and no state/judgement column exists', () => {
+  it('the probe flow stays dumb: raw facts plus ONE raw failure flag for the alert flow; no state, level or verdict is stored in results', () => {
     const p = A.For_each_target.actions.Record.inputs.parameters
     const cols = Object.keys(p).filter((k) => k.startsWith('item/')).map((k) => k.slice(5)).sort()
-    expect(cols).toEqual(['owatch_elapsedms', 'owatch_errorkind', 'owatch_httpstatus', 'owatch_name', 'owatch_probedat', 'owatch_round'])
+    expect(cols).toEqual(['owatch_elapsedms', 'owatch_errorkind', 'owatch_errormessage', 'owatch_failed', 'owatch_httpstatus', 'owatch_name', 'owatch_probedat', 'owatch_round'])
     const result = TABLES.find((t: any) => t.logical === 'owatch_result')
     const have = new Set(['owatch_name', ...result.columns.map((c: any) => c.SchemaName)])
     for (const c of cols) expect(have.has(c), c).toBe(true)
