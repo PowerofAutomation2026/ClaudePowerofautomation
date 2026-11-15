@@ -16,6 +16,8 @@ import { assertTenantName } from '../provision/lib/validate.mjs'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const G = golden as any
+/** Tenant targets shared with the Python monitor. The Power Platform edition adds its own (ppOnly) on top. */
+const SHARED_TENANT = catalog.tenantTargets.filter((t) => !(t as any).ppOnly)
 const DEP = new Set<string>(G.catalog.depends_on_auth)
 const COP = new Set<string>(G.catalog.copilot_needs)
 
@@ -24,14 +26,15 @@ describe('catalog matches the Python defaults', () => {
     const py = G.catalog.targets as Record<string, [string, number[] | null]>
     expect(catalog.targets.map((t) => t.name).sort()).toEqual(Object.keys(py).sort())
     expect(catalog.targets).toHaveLength(34)
-    expect(catalog.targets.length + catalog.tenantTargets.length).toBe(36)
+    expect(catalog.targets.length + SHARED_TENANT.length).toBe(36)
+    expect(catalog.tenantTargets.filter((t) => (t as any).ppOnly).map((t) => t.name)).toEqual(['sharepoint-admin'])   // Power Platform edition only; not in the Python catalog
     for (const t of catalog.targets) {
       expect(t.url).toBe(py[t.name][0])
       expect(t.alive === null ? null : [...t.alive].sort()).toEqual(py[t.name][1])
     }
   })
   it('has the same dependency flags (incl. tenant targets) and edges', () => {
-    const all = [...catalog.targets, ...catalog.tenantTargets]
+    const all = [...catalog.targets, ...SHARED_TENANT]
     expect(all.filter((t) => t.dependsOnAuth).map((t) => t.name).sort()).toEqual(G.catalog.depends_on_auth)
     expect(all.filter((t) => t.copilotNeeds).map((t) => t.name).sort()).toEqual(G.catalog.copilot_needs)
     const spec = all.map((t) => ({ name: t.name, alive: t.alive, dependsOnAuth: t.dependsOnAuth, copilotNeeds: t.copilotNeeds }))
@@ -39,16 +42,16 @@ describe('catalog matches the Python defaults', () => {
     expect(dependencyEdges(spec)).toEqual(G.catalog.edges)
   })
   it('has the same tenant URL templates and roles', () => {
-    for (const t of catalog.tenantTargets) expect(t.urlTemplate.replace('{tenant}', 'contoso')).toBe(G.catalog.tenant[t.name])
+    for (const t of SHARED_TENANT) expect(t.urlTemplate.replace('{tenant}', 'contoso')).toBe(G.catalog.tenant[t.name])
     expect(catalog.roles).toEqual(G.catalog.roles)
     expect(Object.keys(catalog.roles)).toEqual(expect.arrayContaining(['Dashboards & reporting', 'Forms & tasks', 'Security & compliance admin', 'Teams admin']))
     expect(catalog.roles['Files & sharing']).toEqual(['auth', 'sharepoint-online', 'onedrive-business', 'onedrive-sync'])
-    expect(catalog.tenantTargets.map((t) => t.name)).toEqual(G.catalog.tenant_services)
+    expect(SHARED_TENANT.map((t) => t.name)).toEqual(G.catalog.tenant_services)
     expect([...NEUTRAL].sort()).toEqual([...G.catalog.neutral].sort())
   })
   it('has the same families, every service in exactly one, and the same family per target', () => {
     expect(catalog.families).toEqual(G.catalog.families)
-    const all = [...catalog.targets, ...catalog.tenantTargets]
+    const all = [...catalog.targets, ...SHARED_TENANT]
     const inFam = catalog.families.flatMap((f) => f[1] as string[])
     expect([...inFam].sort()).toEqual(all.map((t) => t.name).sort())
     for (const t of all) expect((catalog.families.find((f) => (f[1] as string[]).includes(t.name)) ?? [])[0], t.name).toBe(t.family)

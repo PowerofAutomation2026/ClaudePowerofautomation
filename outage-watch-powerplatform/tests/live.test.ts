@@ -26,9 +26,9 @@ describe('target rows -> dashboard targets', () => {
 describe('demo data', () => {
   it('36 services; without a tenant name two are unconfigured and never get sample rows', () => {
     const t = demoTargetList(null)
-    expect(t).toHaveLength(36)
-    expect(t.filter((x) => x.unconfigured).map((x) => x.name)).toEqual(['sharepoint-online', 'onedrive-business'])
+    expect(t).toHaveLength(37)
+    expect(t.filter((x) => x.unconfigured).map((x) => x.name)).toEqual(['sharepoint-online', 'onedrive-business', 'sharepoint-admin'])
     expect(probed(t)).toHaveLength(34)
-    expect(probed(demoTargetList('contoso'))).toHaveLength(36)
+    expect(probed(demoTargetList('contoso'))).toHaveLength(37)
   })
 })

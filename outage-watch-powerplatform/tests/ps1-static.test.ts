@@ -79,7 +79,7 @@ describe('Deploy-OutageWatchPP.ps1 static checks (NOT an execution test)', () =>
     const defined = [...code.matchAll(/^\s*function\s+([A-Za-z][A-Za-z-]*)/gm)].map((m) => m[1])
     expect(new Set(defined).size).toBe(defined.length)
     const known = new Set(['Set-Location', 'Split-Path', 'Join-Path', 'New-Object', 'Write-Host', 'Get-Command', 'ForEach-Object', 'Read-Host', 'Test-Path', 'ConvertFrom-Json', 'Remove-Item',
-      'Get-Module', 'Get-PackageProvider', 'Install-PackageProvider', 'Install-Module', 'Import-Module', 'Get-AzContext', 'Connect-AzAccount', 'Get-AzAccessToken', 'Where-Object', 'Select-Object',
+      'Get-Module', 'Get-PackageProvider', 'Install-PackageProvider', 'Install-Module', 'Import-Module', 'Get-AzContext', 'Connect-AzAccount', 'Get-AzAccessToken', 'Get-AzTenant', 'Where-Object', 'Select-Object',
       'Start-Process', 'Get-Date', 'Start-Sleep', 'New-Item', 'Copy-Item', 'Out-Host', 'Out-Null'])
     const called = new Set([...code.matchAll(/(?<![\w$.:-])([A-Z][a-z]+-[A-Z][A-Za-z]+)\b/g)].map((m) => m[1]))
     for (const c of called) expect(defined.includes(c) || known.has(c), `unknown command ${c}`).toBe(true)
@@ -136,6 +136,23 @@ describe('Deploy-OutageWatchPP.ps1 static checks (NOT an execution test)', () =>
     expect(ps).toMatch(/connections\/available\?apiName=shared_teams/); expect(ps).toMatch(/\$code -eq 6/); expect(ps).toMatch(/continuing WITHOUT Teams alerts/)
     expect(ps).toMatch(/'owatch_target', 'owatch_result', 'owatch_setting', 'owatch_incident'/)
     expect(ps).toMatch(/ALERTS ARE OFF: no channel is configured/); expect(ps).toMatch(/Deploy-OutageWatchPP\.cmd \{0\} -SetSlackWebhook -SendTestAlert/); expect(ps).toMatch(/incoming WEBHOOKS \(HTTP action\), not connectors/); expect(ps).toMatch(/Alert channels: who should be told/); expect(ps).toMatch(/connection reference 'Outage Watch - Teams' \(owatch_teams\)/); expect(ps).toMatch(/alert_snooze_until/); expect(ps).toMatch(/-SendTestAlert/)
+  })
+
+  it('SharePoint tenant auto-detect: no prompt with -Yes, never fatal, token cleared, override and off-switch exist', () => {
+    const header = ps.slice(ps.indexOf('param('), ps.indexOf("$ErrorActionPreference = 'Stop'"))
+    expect(header).toContain('[string]$TenantName'); expect(header).toContain('[switch]$NoSharePointAutoDetect')
+    const fn = ps.slice(ps.indexOf('function Resolve-SharePointTenant'), ps.indexOf('# Hidden prompt for a webhook URL'))
+    expect(fn).toMatch(/Get-AzTenant -TenantId \$tid/); expect(fn).toMatch(/-ResourceTypeName MSGraph/)
+    expect(fn).not.toMatch(/\bthrow\b/)                                             // detection can never stop the deployment
+    expect(fn.indexOf('if ($Yes) { return }')).toBeGreaterThan(0)
+    expect(fn.indexOf('if ($Yes) { return }')).toBeLessThan(fn.indexOf('Read-Host'))  // unattended runs are never asked
+    expect((fn.match(/Read-Host/g) ?? []).length).toBe(1)                            // at most ONE optional question, only when detection failed
+    expect(fn).toMatch(/-cmatch \$OnMicrosoftPattern/); expect(fn).toMatch(/-cmatch \$TenantPattern/); expect(fn).toMatch(/-cnotmatch \$TenantPattern/)
+    expect(ps).toContain('Remove-Item Env:\\OWPP_GRAPH_TOKEN')
+    for (const line of ps.split('\n')) if (/Write-Host|Warn |Info |Ok |throw /.test(line)) expect(line).not.toContain('$env:OWPP_GRAPH_TOKEN')
+    expect(ps).toMatch(/elseif \(-not \$NoSharePointAutoDetect\)/)
+    expect(ps).toMatch(/SharePoint  : NOT covered yet/); expect(ps).toMatch(/-TenantName contoso/)
+    expect(/\$OnMicrosoftPattern = '\\A[^']+\\z'/.test(ps)).toBe(true)
   })
 
   it('states the same-fate warning and the manual steps in the summary', () => {

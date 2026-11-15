@@ -55,6 +55,9 @@
 | Insights computed in the browser, on the already loaded window | No flow runs, no quota, no tenant risk; rules can be read and tested as plain TypeScript (`src/logic/insights.ts`). Price: they only see what the dashboard loaded (12 hours of results, 200 incidents). Anything needing weeks of rows (time-of-week baselines, 30-day uptime) was not built instead of being approximated. |
 | "Probable common cause" is a fixed ordered rule list, never a cause label from elsewhere | Early vendor root causes get revised; the monitor only states what its probes saw and always prints the evidence and the limits. The alert flow uses the same wording for the sign-in case (reference and flow compared in tests). |
 | Alerts are opt-in, and the script, summary and dashboard now say so loudly | The first real deployment had no channel and nothing made that visible. |
+| SharePoint tenant name is detected and VERIFIED, never guessed | Zero-touch coverage of SharePoint / OneDrive. Candidates come from PowerShell (Az domains, Graph); the decision is in `provision/lib/tenant.mjs` so it is testable. A candidate is used only if its host answers like an existing tenant; two answering candidates = no choice; 404 is rejected on purpose. Detection can never fail the deployment and never prompts with `-Yes`. |
+| `sharepoint-admin` is a Power Platform-only target (`ppOnly` in the catalog) | The Python catalogue has two tenant targets; the golden cross-check still compares the shared ones exactly and names the extra one explicitly. No other SharePoint / OneDrive endpoint was added: nothing else could be justified from documentation or observed here. |
+| Tenant rows are filled only in their untouched seed state (no URL and not enabled) | An upgrade must never overwrite an admin's edit. |
 | Pruning inside the flow | Simple and visible. It costs one request per deleted row; a Dataverse bulk-delete job would cost none but was not implemented (unverifiable here). |
 | Dashboard reads through `getClient().retrieveMultipleRecordsAsync` | Same proven pattern as the repository's existing code app (find the generated data source by primary key, not by its display name). Read-only. |
 | States shown as shape + icon + word | Never colour alone; reduced motion respected; dark/light tokens from the Python dashboard. |
@@ -217,6 +220,23 @@ Nothing in this folder has been run against a real tenant. Specifically:
     rules) are reasoned defaults, not calibrated on real data.
 39. **Guided channel prompts in the script** (four `Read-Host` questions, three hidden) are statically checked only.
 
+40. **`Get-AzTenant -TenantId <id>` `.Domains`** contains the `<name>.onmicrosoft.com` domain: shown in the cmdlet's help example;
+    not run. Tenants with several onmicrosoft.com domains are handled by probing each and refusing ambiguity.
+41. **Graph `/organization` with the Az PowerShell sign-in** (`Get-AzAccessToken -ResourceTypeName MSGraph`): whether that token
+    carries a permission that can read `/organization` for an ordinary admin is NOT confirmed; the step is wrapped so a 401/403 just
+    falls through. `/sites/root` (needs a Sites permission) was not used.
+42. **What a non-existing `<name>.sharepoint.com` answers** (DNS failure or a generic 404) is unconfirmed: the sandbox proxy blocked
+    the test host. Only 200 / 3xx / 401 / 403 are accepted as "tenant exists".
+43. **Observed live from the build sandbox (anonymous GET, no redirects followed):** `microsoft.sharepoint.com` 401 in 0.73 s;
+    `microsoft-my.sharepoint.com` 302 to `/_layouts/15/authenticate.aspx` in 1.04 s; `microsoft-admin.sharepoint.com` 401 in 0.73 s;
+    `oneclient.sfx.ms` 200 in 0.45 s; `admin.onedrive.com` 302 to admin.microsoft.com in 0.41 s. Whether the Power Automate HTTP
+    action records the 302 or follows it is still item 4; both classify as alive (no alive list).
+44. **Sovereign clouds**: recognised only from the Dataverse host suffix; GCC (crm9.dynamics.com) is treated as commercial
+    SharePoint (`.sharepoint.com`), GCC High / DoD / China as unsupported. Not verified against such tenants.
+45. **Signed-in synthetic checks** (SharePoint "Send an HTTP request to SharePoint", OneDrive for Business read) were not built:
+    operation ids / parameter names in a flow definition could not be confirmed, and the false-failure cases (no OneDrive
+    provisioned, conditional access, throttling) could not be distinguished reliably without running them.
+
 ## Test map
 
 | File | Proves |
@@ -230,6 +250,7 @@ Nothing in this folder has been run against a real tenant. Specifically:
 | `tests/upgrade-alerts.test.ts` | upgrade from the deployed version 24090f5 (real old flow definition), channels kept / added / removed, secrets only in the flow definition, alert-flow rejection, CLI exit codes, DryRun |
 | `tests/gate.test.ts` | CI gate decisions and end-to-end read from the mock; pipeline snippets and agent definition (structure, existing columns) |
 | `tests/insights.test.ts` | every insight rule with its evidence, boundaries, hostile and degenerate input, deterministic report |
+| `tests/tenant.test.ts` | SharePoint tenant name: extraction, validation, reachability probe (local server), CLI, upgrade from bcadc4c incl. admin edits |
 | `tests/limits.test.ts` | every value the provisioner or the flow can write fits its column; mock enforces limits (0x80044331); re-run on top of the failed third real run |
 | `tests/ps1-static.test.ts` | `.ps1` balanced, PS 5.1-compatible syntax, ASCII, no secrets printed, `.cmd` wrappers |
 

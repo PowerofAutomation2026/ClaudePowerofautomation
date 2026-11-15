@@ -8,6 +8,7 @@ import { createClient, DataverseError } from './lib/client.mjs'
 import { createMockDataverse } from './lib/mock-dataverse.mjs'
 import { apply, setDashboardUrl, smoke, uninstall, NeedsConnection, NeedsTeamsConnection, FlowNotOn } from './lib/provision.mjs'
 import { estimateAlertRequests } from './lib/alert-flow.mjs'
+import { assertTenantLabel, detectTenant, initialDomainLabels, initialFromGraphOrganization, probeTenant, sharePointCloudSupported } from './lib/tenant.mjs'
 import { catalog } from './lib/schema.mjs'
 import { PROBE_CONCURRENCY, estimateRequests, worstCaseRunSeconds } from './lib/flow.mjs'
 import { InputError, assertConnectionId, assertDashboardUrl, assertGuid, assertHeartbeatUrl, assertInt, assertOrgUrl, assertTenantName, assertWebhookUrl, parseTeamsChannelLink } from './lib/validate.mjs'
@@ -114,7 +115,7 @@ export async function main(argv) {
         say(`  = ${mock.log.length} requests; creates: ${r.created.length} objects (${r.targets} targets, ${r.enabledTargets} enabled). A re-run only reads and patches what changed.`)
         say(`  Heartbeat (dead man's switch): ${r.heartbeat ? 'configured (URL not shown)' : 'not configured'}`)
         say('  ' + alertsLine(r.alerts) + (r.alerts.status === 'not-configured' ? '. With a channel (-TeamsChannelLink / -SetSlackWebhook / -SetWebexWebhook) the plan also creates the flow "Outage Watch - alert" (and the connection reference owatch_teams for Teams).' : ''))
-        if (r.unconfigured.length) say(`  Not set up (seeded disabled, never probed, shown as "unconfigured"): ${r.unconfigured.join(', ')} - pass -TenantName contoso to enable them.`)
+        if (r.unconfigured.length) say(`  SharePoint / OneDrive (${r.unconfigured.join(', ')}): in this offline plan they are shown as not set up. A real run AUTO-DETECTS the SharePoint tenant name (Get-AzTenant, then Microsoft Graph), verifies that https://<name>.sharepoint.com answers, and enables them; -TenantName contoso overrides.`)
         printEstimate(r.estimate, r.enabledTargets, o.intervalMinutes, o.timeoutSeconds)
         return EXIT.ok
       }
@@ -145,6 +146,47 @@ export async function main(argv) {
         const t = parseTeamsChannelLink(a['teams-channel-link'])
         say(`ok: channel "${t.channelName || '(no name in the link)'}"`); out(a, { ok: true, channelName: t.channelName }); return EXIT.ok
       }
+      case 'detect-tenant': {
+        // Finds and VERIFIES the SharePoint tenant name. Never fails the deployment: exit 0 with tenant = null means "not found".
+        const orgUrl = assertOrgUrl(a['org-url'], { allowLoopback: process.env.OWPP_TEST_MODE === '1' })
+        const test = process.env.OWPP_TEST_MODE === '1' && /^http:\/\/127\.0\.0\.1:[0-9]+$/.test(process.env.OWPP_TEST_SPO_BASE ?? '')
+        const probeOptions = test ? { urlFor: (l) => `${process.env.OWPP_TEST_SPO_BASE}/${l}/` } : {}
+        const res = { tenant: null, via: null, already: false, unsupported: false, reachable: null, tried: [] }
+        if (!sharePointCloudSupported(orgUrl)) {
+          res.unsupported = true
+          say('  SharePoint / OneDrive: this environment is in a US Government (GCC High / DoD) or China cloud, whose SharePoint host names differ. Not supported yet: nothing is seeded.')
+          out(a, res); return EXIT.ok
+        }
+        if (process.env.OWPP_TOKEN) {           // already set up on an earlier run? then there is nothing to detect and nothing to ask
+          try {
+            const c = client(a)
+            const set = (await c.find(`EntityDefinitions(LogicalName='owatch_target')?$select=EntitySetName`))?.EntitySetName
+            const row = set ? (await c.get(`${set}?$select=owatch_url&$filter=owatch_name eq 'sharepoint-online'`)).json.value[0] : null
+            if (row?.owatch_url) { res.already = true; say('  SharePoint / OneDrive targets are already configured.'); out(a, res); return EXIT.ok }
+          } catch { /* first deployment: the table does not exist yet */ }
+        }
+        if (a.candidate !== undefined) {          // -TenantName or the interactive answer: validate, probe, report
+          const label = assertTenantLabel(String(a.candidate).toLowerCase())
+          const r = await probeTenant(label, probeOptions)
+          res.tenant = label; res.via = 'given'; res.reachable = r.ok
+          say(r.ok ? `  SharePoint tenant "${label}": https://${label}.sharepoint.com answers (HTTP ${r.status}).` : `  WARNING: https://${label}.sharepoint.com did not answer like an existing tenant (${r.reason}). It is used because you gave it; check the spelling.`)
+          out(a, res); return EXIT.ok
+        }
+        const sources = []
+        const fromAz = initialDomainLabels(String(a.domains ?? '').split(',').slice(0, 200))
+        if (fromAz.length) sources.push({ via: 'Get-AzTenant', labels: fromAz })
+        if (process.env.OWPP_GRAPH_TOKEN) {
+          try {
+            const g = await fetch('https://graph.microsoft.com/v1.0/organization?$select=verifiedDomains', { headers: { Authorization: 'Bearer ' + process.env.OWPP_GRAPH_TOKEN, Accept: 'application/json' }, redirect: 'error' })
+            if (g.ok) { const labels = initialFromGraphOrganization(await g.json()); if (labels.length) sources.push({ via: 'Microsoft Graph /organization', labels }) }
+          } catch { /* Graph not reachable or not permitted: fall through quietly */ }
+        }
+        const d = await detectTenant(sources, probeOptions)
+        res.tenant = d.tenant; res.via = d.via; res.tried = d.tried; res.reachable = d.tenant ? true : null
+        if (d.tenant) say(`  SharePoint tenant detected via ${d.via}: ${d.tenant}  (https://${d.tenant}.sharepoint.com answers)`)
+        else say('  SharePoint tenant name could not be detected and verified' + (d.tried.length ? ': ' + d.tried.map((t) => `${t.label} - ${t.detail}`).join('; ').slice(0, 300) : ' (no candidate domain was available).'))
+        out(a, res); return EXIT.ok
+      }
       case 'smoke': {
         const c = client(a)
         const r = await smoke(c, { waitSeconds: a['no-wait'] ? 0 : assertInt(a['wait-seconds'] ?? 240, 0, 1800, 'wait seconds') }, say)
@@ -161,7 +203,7 @@ export async function main(argv) {
         return EXIT.ok
       }
       default:
-        say('usage: owpp.mjs <validate|estimate|plan|apply|smoke|uninstall|set-dashboard-url|check-teams-link> [--org-url URL] [--environment-id GUID] [--connection-id ID] [--interval MIN] [--retention DAYS] [--timeout SEC] [--tenant NAME] [--out FILE] [--purge] [--clear-heartbeat] [--wait-seconds N]')
+        say('usage: owpp.mjs <validate|estimate|plan|apply|smoke|uninstall|set-dashboard-url|check-teams-link|detect-tenant> [--org-url URL] [--environment-id GUID] [--connection-id ID] [--interval MIN] [--retention DAYS] [--timeout SEC] [--tenant NAME] [--out FILE] [--purge] [--clear-heartbeat] [--wait-seconds N]')
         return EXIT.badInput
     }
   } catch (e) {

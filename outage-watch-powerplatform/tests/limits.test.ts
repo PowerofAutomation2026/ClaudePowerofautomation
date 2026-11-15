@@ -67,7 +67,7 @@ describe('EVERY value the provisioner can write fits its column', () => {
   it('all 36 target rows, for no tenant, a normal tenant and the longest valid tenant name', () => {
     for (const tenant of [null, 'contoso', LONGEST_TENANT]) {
       const rows = seedTargets(tenant)
-      expect(rows).toHaveLength(36)
+      expect(rows).toHaveLength(37)
       for (const r of rows) expect(rowViolations('owatch_target', r), `${r.owatch_name} (${tenant})`).toEqual([])
     }
     const longestUrl = Math.max(...seedTargets(LONGEST_TENANT).map((r: any) => r.owatch_url.length))
@@ -121,7 +121,7 @@ describe('re-running on top of the failed run (the user\'s environment)', () => 
     expect([...new Set(writes)].sort()).toEqual(['PATCH workflows', 'POST owatch_settings'])   // settings completed (flow id + the newer alert_* rows), flow turned on. No table, target or flow is created.
     expect(writes.filter((w: string) => w === 'PATCH workflows')).toHaveLength(1)
     expect(mock.db.workflows).toHaveLength(1); expect(mock.db.workflows[0].workflowid).toBe(flowId); expect(mock.db.workflows[0].statecode).toBe(1)
-    expect(mock.db.owatch_targets).toHaveLength(36); expect(mock.entities.size).toBe(4)
+    expect(mock.db.owatch_targets).toHaveLength(37); expect(mock.entities.size).toBe(4)
     expect(mock.db.owatch_settings.find((s: any) => s.owatch_name === 'flow_workflowid').owatch_value).toBe(flowId)
     expect(mock.db.owatch_settings.find((s: any) => s.owatch_name === 'roles_json')).toBeUndefined()
     expect(r.flowOn).toBe(true); expect(r.created.every((c: string) => c.startsWith('setting '))).toBe(true); expect(r.created).toContain('setting flow_workflowid')

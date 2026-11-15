@@ -165,8 +165,9 @@ export async function apply(client, o, log = () => {}) {
     if (!cur) {
       await client.post(sets.target, row)
       did('created', `target ${row.owatch_name}${row.owatch_url ? '' : ' (disabled: needs tenant name)'}`); haveT.set(row.owatch_name, row)
-    } else if (TENANT_TARGET_NAMES.includes(row.owatch_name) && !cur.owatch_url && row.owatch_url) {
-      // tenant name supplied now: fill in the row that was waiting for it (a row that already has a URL is the admin's)
+    } else if (TENANT_TARGET_NAMES.includes(row.owatch_name) && !cur.owatch_url && cur.owatch_enabled !== true && row.owatch_url) {
+      // tenant name known now (given or auto-detected): fill in the row ONLY while it is still the untouched seed -
+      // no URL and not enabled. A row with a URL, or one an admin enabled by hand, is the admin's and is left alone.
       await client.patch(`${sets.target}(${cur.owatch_targetid})`, assertRowFits('owatch_target', { owatch_url: row.owatch_url, owatch_enabled: true }, { partial: true }))
       cur.owatch_url = row.owatch_url; cur.owatch_enabled = true
       did('updated', `target ${row.owatch_name} configured for the tenant`)

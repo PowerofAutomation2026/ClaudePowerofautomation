@@ -28,7 +28,7 @@ unconfirmed item.
 | Piece | What it is |
 |---|---|
 | Dataverse solution `OutageWatch` (publisher prefix `owatch_`) | tables `owatch_target` (name, URL, alive codes, depends-on-sign-in, Copilot-needs-it, enabled, family), `owatch_result` (target, HTTP status, elapsed ms, error kind, time, round) and `owatch_setting` (name/value, no secrets) |
-| 36 seeded targets in 9 families | the same services, URLs, alive-code rules, dependencies and families as `outagewatch.py` (checked by a test against the real Python). 34 are probed out of the box. `sharepoint-online` and `onedrive-business` are tenant-specific: with `-TenantName contoso` they are probed; without it they are seeded **disabled, with no URL**, never probed, and shown as the neutral **unconfigured** state - never a failure |
+| 37 seeded targets in 9 families | 36 are the same services, URLs, alive-code rules, dependencies and families as `outagewatch.py` (checked by a test against the real Python), plus `sharepoint-admin` (this edition only). 34 are global. Three are tenant-specific (`sharepoint-online`, `onedrive-business`, `sharepoint-admin`): the script detects and verifies the SharePoint tenant name and enables them (see "SharePoint and OneDrive coverage"); if it cannot, they are seeded **disabled, with no URL**, never probed, and shown as the neutral **unconfigured** state - never a failure |
 | Cloud flow `Outage Watch - probe` | every 10 min: unauthenticated `GET` on every enabled target, **all in parallel** (no retries, 10 s timeout, async polling off), **one raw row per probe**, prune rows older than the retention, optional heartbeat ping. The flow never decides whether something is "up" |
 | Connection reference `owatch_dataverse` | binds the flow to your Microsoft Dataverse connection |
 | Cloud flow `Outage Watch - alert` (only when a channel is configured) | tells Teams / Slack / Webex / a webhook when a service fails, keeps failing or recovers; keeps incident records (`owatch_incident`) and the CI status row. Separate from the probe flow on purpose |
@@ -83,6 +83,48 @@ Uninstall-OutageWatchPP.cmd <environment-id> [-Purge] [-Yes]
   the connection reference, the solution and the publisher. The dashboard app must be deleted by hand in
   make.powerapps.com (no documented CLI command), and your Dataverse connection is never touched.
 - Advanced / CI: `OUTAGEWATCH_DATAVERSE_TOKEN` supplies a ready-made bearer token for the organisation.
+
+## SharePoint and OneDrive coverage (no input needed)
+
+Five services cover SharePoint and OneDrive. Two are global and always probed: `onedrive-sync`
+(oneclient.sfx.ms) and `onedrive-admin` (admin.onedrive.com). Three are **tenant-specific** and need the SharePoint
+tenant name (the `contoso` in `contoso.sharepoint.com`): `sharepoint-online`, `onedrive-business`
+(`contoso-my.sharepoint.com`) and `sharepoint-admin` (`contoso-admin.sharepoint.com`, new, Power Platform edition
+only). **The script now finds that name by itself** - no flag, no question on the normal path:
+
+1. the domains of your tenant from the Az sign-in the script already uses (`Get-AzTenant`): the
+   `<name>.onmicrosoft.com` domain (never `<name>.mail.onmicrosoft.com`);
+2. if that gives nothing or is ambiguous: Microsoft Graph `/organization` (the domain marked `isInitial`), if the
+   same sign-in may read it (**unconfirmed**; when it may not, this step is skipped silently);
+3. every candidate is **verified**: strict pattern, then `https://<name>.sharepoint.com/` must answer like an
+   existing tenant (HTTP 200, 3xx, 401 or 403) from the machine running the script. If two candidates answer, none
+   is chosen. A renamed tenant therefore resolves to the name that is live, and a wrong host is never seeded;
+4. only if all that fails, and only in an interactive run: one optional question (Enter skips). With `-Yes`
+   nothing is asked;
+5. otherwise the three targets stay **unconfigured** (neutral, never a failure) and the summary prints the one
+   command that fixes it: `Deploy-OutageWatchPP.cmd <environment-id> -TenantName contoso`.
+
+`-TenantName` remains as an explicit override; `-NoSharePointAutoDetect` switches detection off. GCC High, DoD and
+China clouds use other SharePoint host names: they are recognised from the environment URL and **not supported
+yet** (nothing is seeded). The summary line `SharePoint  :` says whether the three are probed.
+
+**Upgrade:** an existing deployment has the two tenant rows disabled with no URL. On the next run they are filled
+in and enabled **only while still in that untouched state**; a URL you typed or a row you enabled by hand is never
+overwritten. `sharepoint-admin` is added. Nothing is duplicated; result history is untouched.
+
+What the probes prove: the tenant's SharePoint front door answers (anonymous request; observed 401 for a tenant
+root and admin host, 302 to the sign-in page for the `-my` host). They do **not** sign in, open a site or read a
+file. Optional signed-in checks through the SharePoint and OneDrive connectors were considered and **not built**:
+the connector operation shapes could not be confirmed, and a false "OneDrive is down" for an owner without a
+provisioned OneDrive was judged worse than no check.
+
+**Zero-touch count is unchanged.** With auto-detect working the happy path still needs the same interactions as
+before (best case zero with `-Yes`; on a new machine up to two sign-ins and one "Create" click for the Dataverse
+connection, plus the optional alert-channel answers). Auto-detect adds none. If it fails, an interactive run asks
+one optional question; an unattended run asks nothing.
+
+Quota with the three extra probes (37 targets, 10 minutes): probe flow 16,848 requests/day (42% of 40,000); with
+alerts on 20,448 (**51%**). Still under 60%, so the defaults are unchanged.
 
 ## Alerts (Teams, Slack, Webex), incidents, CI gate, agents
 
@@ -275,7 +317,7 @@ Run the same command again. The upgrade is additive and tested against a mock of
 
 ## What was verified, and what was not
 
-Verified here (`npm test`, 267 tests; `npm run build`; headless Chromium):
+Verified here (`npm test`, 283 tests; `npm run build`; headless Chromium):
 
 - the TypeScript logic against **golden cases produced by the real Python code** (`tests/golden/gen_golden.py`
   runs the updated 36-service `outage-watch/outagewatch.py`): the catalogue itself (36 services, URLs, alive codes,
@@ -329,6 +371,17 @@ to the clipboard was exercised in headless Chromium. **Not verified:** clipboard
 real Power Apps player (embedded frames may block either; the text is always also shown in a box to copy by
 hand), rendering on real iOS Safari / Android Chrome (only Chromium at phone widths), and whether the default
 drift and flap thresholds suit real Microsoft 365 latency patterns (they are settings for that reason).
+
+### SharePoint / OneDrive detection: how it was verified
+
+`tests/tenant.test.ts`: the name extraction against hostile input (look-alike Unicode letters, trailing dots,
+`.mail.onmicrosoft.com`, upper case, paths and URLs, over-long, sovereign suffixes), the reachability probe against
+a local HTTP server (200/302/401/403 accepted; 404, 5xx, a dropped connection and a timeout rejected; redirects not
+followed), ambiguity, the CLI the script calls, and the upgrade from the deployed state on the mock including
+"admin edited the URL: untouched". Live from the build sandbox: `microsoft.sharepoint.com` 401,
+`microsoft-my.sharepoint.com` 302, `microsoft-admin.sharepoint.com` 401. **Not verified:** `Get-AzTenant` and the
+Graph call themselves (PowerShell was not run), whether the Az sign-in may read Graph `/organization`, what a
+non-existing tenant name answers (which is why 404 is rejected), and anything on a real tenant.
 
 ## Manual steps that remain
 

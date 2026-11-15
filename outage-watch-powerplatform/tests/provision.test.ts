@@ -37,12 +37,12 @@ describe('apply (first deployment into an empty environment)', () => {
     const r = await apply(client, OPTS)
     expect(mock.problems).toEqual([])
     expect(r.flowOn).toBe(true)
-    expect(r.targets).toBe(36); expect(r.enabledTargets).toBe(34)
-    expect(r.unconfigured).toEqual(['onedrive-business', 'sharepoint-online'])
+    expect(r.targets).toBe(37); expect(r.enabledTargets).toBe(34)
+    expect(r.unconfigured).toEqual(['onedrive-business', 'sharepoint-admin', 'sharepoint-online'])
     expect(r.estimate).toMatchObject({ perRun: 108, runsPerDay: 144, perDay: 15552, pctOf40k: 39, high: false })
     expect(r.worstCaseRunSeconds).toBeLessThan(10 * 60 / 4)
     expect([...mock.entities.keys()].sort()).toEqual(['owatch_incident', 'owatch_result', 'owatch_setting', 'owatch_target'])
-    expect(mock.db.owatch_targets).toHaveLength(36)
+    expect(mock.db.owatch_targets).toHaveLength(37)
     expect(mock.db.workflows).toHaveLength(1)
     expect(mock.db.workflows[0].statecode).toBe(1)
     expect(mock.db.connectionreferences[0].connectionid).toBe(OPTS.connectionId)
@@ -72,13 +72,13 @@ describe('apply (first deployment into an empty environment)', () => {
     expect(by.teams.owatch_dependsonauth).toBe(true)
     expect(by['copilot-web'].owatch_dependsonauth).toBe(false)
     expect(by['copilot-substrate'].owatch_copilotneeds).toBe(true)
-    const tenant = mock.db.owatch_targets.filter((t: any) => ['sharepoint-online', 'onedrive-business'].includes(t.owatch_name))
+    const tenant = mock.db.owatch_targets.filter((t: any) => ['sharepoint-online', 'onedrive-business', 'sharepoint-admin'].includes(t.owatch_name))
     const fixed = mock.db.owatch_targets.filter((t: any) => !tenant.includes(t))
     expect(fixed).toHaveLength(34)
     expect(fixed.every((t: any) => t.owatch_enabled === true && /^https:\/\//.test(t.owatch_url) && t.owatch_family)).toBe(true)
     // without a tenant name: seeded DISABLED with no URL = "needs tenant name"; the flow's filter can never pick them up
-    expect(tenant).toHaveLength(2)
-    expect(tenant.every((t: any) => t.owatch_enabled === false && t.owatch_url === null && t.owatch_dependsonauth === true && t.owatch_copilotneeds === true)).toBe(true)
+    expect(tenant).toHaveLength(3)
+    expect(tenant.every((t: any) => t.owatch_enabled === false && t.owatch_url === null && t.owatch_dependsonauth === true)).toBe(true)
     expect(by['power-bi'].owatch_family).toBe('Power Platform & dashboards')
     expect(by['teams-cdn'].owatch_dependsonauth).toBe(false); expect(by['onedrive-sync'].owatch_dependsonauth).toBe(false)
     const filter = JSON.parse(mock.db.workflows[0].clientdata).properties.definition.actions.List_targets.inputs.parameters.$filter
@@ -88,7 +88,7 @@ describe('apply (first deployment into an empty environment)', () => {
   it('enables the two tenant targets when a tenant name is given - on a first deploy or later', async () => {
     const { mock, client } = await env()
     const r = await apply(client, { ...OPTS, tenant: 'contoso' })
-    expect(r.targets).toBe(36); expect(r.enabledTargets).toBe(36); expect(r.unconfigured).toEqual([])
+    expect(r.targets).toBe(37); expect(r.enabledTargets).toBe(37); expect(r.unconfigured).toEqual([])
     const od = mock.db.owatch_targets.find((t: any) => t.owatch_name === 'onedrive-business')
     expect(od.owatch_url).toBe('https://contoso-my.sharepoint.com/'); expect(od.owatch_enabled).toBe(true)
 
@@ -96,7 +96,7 @@ describe('apply (first deployment into an empty environment)', () => {
     await apply(b.client, OPTS)                                   // first without a tenant name
     const r2 = await apply(b.client, { ...OPTS, tenant: 'fabrikam' })
     expect(r2.updated).toEqual(expect.arrayContaining(['target sharepoint-online configured for the tenant', 'target onedrive-business configured for the tenant']))
-    expect(b.mock.db.owatch_targets).toHaveLength(36)
+    expect(b.mock.db.owatch_targets).toHaveLength(37)
     const sp = b.mock.db.owatch_targets.find((t: any) => t.owatch_name === 'sharepoint-online')
     expect(sp.owatch_url).toBe('https://fabrikam.sharepoint.com/'); expect(sp.owatch_enabled).toBe(true)
     // a later run with another (or no) tenant name never overwrites a URL that is already there
@@ -114,7 +114,7 @@ describe('idempotency (re-run = upgrade, never a duplicate)', () => {
     const r = await apply(client, OPTS)
     expect(writes(mock)).toEqual([])
     expect(r.created).toEqual([]); expect(r.updated).toEqual([])
-    expect(mock.db.workflows).toHaveLength(1); expect(mock.db.owatch_targets).toHaveLength(36)
+    expect(mock.db.workflows).toHaveLength(1); expect(mock.db.owatch_targets).toHaveLength(37)
     expect(mock.problems).toEqual([])
   })
 
@@ -141,10 +141,10 @@ describe('idempotency (re-run = upgrade, never a duplicate)', () => {
     const { mock, client } = await env()
     await expect(apply(client, { ...OPTS, connectionId: null })).rejects.toBeInstanceOf(NeedsConnection)
     expect(mock.db.workflows).toHaveLength(0)
-    expect(mock.db.owatch_targets).toHaveLength(36)
+    expect(mock.db.owatch_targets).toHaveLength(37)
     const r = await apply(client, OPTS)
     expect(r.flowOn).toBe(true)
-    expect(mock.db.owatch_targets).toHaveLength(36)
+    expect(mock.db.owatch_targets).toHaveLength(37)
     expect(mock.db.publishers).toHaveLength(1); expect(mock.db.solutions).toHaveLength(1)
     expect(r.created.some((c: string) => c.startsWith('table'))).toBe(false)
     expect(mock.problems).toEqual([])
@@ -186,20 +186,20 @@ describe('upgrade from the 15-target version (v1)', () => {
     return e
   }
 
-  it('v1 with tenant targets: renames the two rows in place (same id, URL, enabled), adds 19 new ones, no duplicates, history untouched', async () => {
+  it('v1 with tenant targets: renames the two rows in place (same id, URL, enabled), adds 19 new ones + the sharepoint-admin placeholder, no duplicates, history untouched', async () => {
     const { mock, client } = await v1(true)
     expect(mock.db.owatch_targets).toHaveLength(17)
     const spId = mock.db.owatch_targets.find((t: any) => t.owatch_name === 'sharepoint').owatch_targetid
     const r = await apply(client, OPTS)                                    // note: no -TenantName on the upgrade run
     const names = mock.db.owatch_targets.map((t: any) => t.owatch_name)
-    expect(names).toHaveLength(36); expect(new Set(names).size).toBe(36)
+    expect(names).toHaveLength(37); expect(new Set(names).size).toBe(37)
     expect(names).not.toContain('sharepoint'); expect(names).not.toContain('onedrive')
     const sp = mock.db.owatch_targets.find((t: any) => t.owatch_name === 'sharepoint-online')
     expect(sp.owatch_targetid).toBe(spId); expect(sp.owatch_url).toBe('https://contoso.sharepoint.com/'); expect(sp.owatch_enabled).toBe(true)
     expect(r.updated).toEqual(expect.arrayContaining(['target sharepoint renamed to sharepoint-online', 'target onedrive renamed to onedrive-business']))
-    expect(r.created.filter((c: string) => c.startsWith('target '))).toHaveLength(19)
+    expect(r.created.filter((c: string) => c.startsWith('target '))).toHaveLength(20)
     expect(r.created).toContain('column owatch_target.owatch_family')
-    expect(r.enabledTargets).toBe(36); expect(r.unconfigured).toEqual([])
+    expect(r.enabledTargets).toBe(36); expect(r.unconfigured).toEqual(['sharepoint-admin'])   // new in this version: waits for a tenant name (the upgrade run had none)
     expect(mock.db.owatch_results.find((x: any) => x.owatch_round === 'old')).toMatchObject({ owatch_name: 'sharepoint', owatch_httpstatus: 200 })   // history is not rewritten or deleted
     expect(mock.log.some((l: any) => l.method !== 'GET' && l.path.startsWith('owatch_results'))).toBe(false)
     expect(mock.problems).toEqual([])
@@ -213,8 +213,8 @@ describe('upgrade from the 15-target version (v1)', () => {
     expect(mock.db.owatch_targets).toHaveLength(15)
     mock.db.owatch_targets.find((t: any) => t.owatch_name === 'teams').owatch_url = 'https://teams.example.test/custom'
     const r = await apply(client, OPTS)
-    expect(mock.db.owatch_targets).toHaveLength(36)
-    expect(r.enabledTargets).toBe(34); expect(r.unconfigured).toEqual(['onedrive-business', 'sharepoint-online'])
+    expect(mock.db.owatch_targets).toHaveLength(37)
+    expect(r.enabledTargets).toBe(34); expect(r.unconfigured).toEqual(['onedrive-business', 'sharepoint-admin', 'sharepoint-online'])
     expect(mock.db.owatch_targets.find((t: any) => t.owatch_name === 'teams').owatch_url).toBe('https://teams.example.test/custom')
     expect(mock.problems).toEqual([])
   })
@@ -247,7 +247,7 @@ describe('upgrade from the 15-target version (v1)', () => {
     const r = await apply(client, OPTS)
     expect(set.find((t: any) => t.owatch_name === 'sharepoint').owatch_enabled).toBe(false)
     expect(r.warnings.join(' ')).toContain('sharepoint')
-    expect(r.enabledTargets).toBe(36)
+    expect(r.enabledTargets).toBe(37)
   })
 })
 
@@ -356,7 +356,7 @@ describe('stale Web API schema (real second-run failure: HTTP 400 0x80060888 Cou
     mock.state.staleSchemaReads = 0
     const r = await apply(client, OPTS)
     expect(r.flowOn).toBe(true)
-    expect(mock.db.owatch_targets).toHaveLength(36)
+    expect(mock.db.owatch_targets).toHaveLength(37)
     expect(mock.db.workflows).toHaveLength(1)
   })
 
@@ -513,7 +513,7 @@ describe('CLI helper (the process Deploy-OutageWatchPP.ps1 calls)', () => {
     expect(r.out).toMatch(/34 enabled targets every 10 min/)
     expect(r.out).toMatch(/15,552 Power Platform requests\/day/)
     expect(r.out).toContain('Alerts: not configured')
-    expect(r.out).toContain('onedrive-business, sharepoint-online')
+    expect(r.out).toContain('onedrive-business, sharepoint-admin, sharepoint-online')
     expect(r.out).not.toContain('WARNING')
     const five = await run(['estimate', '--interval', '5'])
     expect(five.out).toMatch(/WARNING: this uses 96% of the 40,000/)                                  // probe 31,104 + alert flow 7,200

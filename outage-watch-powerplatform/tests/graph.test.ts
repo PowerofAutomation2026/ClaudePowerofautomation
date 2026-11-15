@@ -74,13 +74,14 @@ describe('"Can I do my job?"', () => {
 
 const DEP = new Set(targets.filter((t) => t.dependsOnAuth).map((t) => t.name))
 const COP = new Set(targets.filter((t) => t.copilotNeeds).map((t) => t.name))
-const FAMS = groupFamilies(names, catalog.families as [string, string[]][])
+const FAMILY_OF = new Map([...catalog.targets, ...catalog.tenantTargets].map((t) => [t.name, t.family]))
+const FAMS = groupFamilies(names, catalog.families as [string, string[]][], (n) => FAMILY_OF.get(n))
 
 describe('families', () => {
-  it('36 services in the 9 Python families, in order; unknown services land in Independent', () => {
-    expect(names).toHaveLength(36)
+  it('37 services (36 shared with Python + sharepoint-admin) in the 9 Python families, in order; unknown services land in Independent', () => {
+    expect(names).toHaveLength(37)
     expect(FAMS.map((f) => f.name)).toEqual(catalog.families.map((f) => f[0]))
-    expect(FAMS.reduce((n, f) => n + f.nodes.length, 0)).toBe(36)
+    expect(FAMS.reduce((n, f) => n + f.nodes.length, 0)).toBe(37)
     const g = groupFamilies([...names, 'my-custom-app'], catalog.families as [string, string[]][])
     expect(g.find((f) => f.name === 'Independent')!.nodes).toContain('my-custom-app')
     expect(groupFamilies(['x'], catalog.families as [string, string[]][], () => 'Line of business')[0]).toEqual({ name: 'Line of business', nodes: ['x'] })
@@ -96,11 +97,11 @@ describe('families', () => {
   })
 })
 
-describe('layout: family bands on two buses, 36 services', () => {
+describe('layout: family bands on two buses, 37 services', () => {
   for (const narrow of [false, true]) {
     it(`${narrow ? '360 px' : 'wide'}: every node placed, inside the canvas, no overlap, labels have room`, () => {
       const L = layoutFamilies(FAMS, DEP, COP, { narrow })
-      expect(L.pos.size).toBe(36)
+      expect(L.pos.size).toBe(37)
       expect(L.width).toBe(narrow ? 360 : 1000)
       const pts = [...L.pos.entries()]
       for (const [n, p] of pts) {

@@ -32,9 +32,11 @@
 .PARAMETER IntervalMinutes   Probe interval, 1-60 (default 10). With 36 services, 5 minutes uses about 78% of a Premium licence's
                              40,000 requests/day; 10 minutes about 39%. Shorter = faster detection, more quota.
 .PARAMETER RetentionDays     Result rows older than this are pruned by the flow, 1-90 (default 7).
-.PARAMETER TenantName        Optional: tenant short name (contoso) to also probe sharepoint-online (contoso.sharepoint.com) and
-                             onedrive-business (contoso-my.sharepoint.com). Without it those two are seeded disabled and the
-                             dashboard shows them as 'unconfigured' (neutral, never a failure). Can be added on a later run.
+.PARAMETER TenantName        Optional override: the SharePoint tenant name (the contoso in contoso.sharepoint.com). Normally NOT needed:
+                             the script detects it (Get-AzTenant, then Microsoft Graph), checks that https://<name>.sharepoint.com
+                             answers, and then probes sharepoint-online, onedrive-business (<name>-my) and sharepoint-admin (<name>-admin).
+                             If nothing can be verified those three stay 'unconfigured' (neutral, never a failure).
+.PARAMETER NoSharePointAutoDetect  Do not try to detect the SharePoint tenant name.
 .PARAMETER SetHeartbeat      Prompt (hidden input) for a dead-man's-switch URL the flow pings after every complete round.
                              Alternative for unattended runs: set the environment variable OUTAGEWATCH_HEARTBEAT_URL.
 .PARAMETER ClearHeartbeat    Remove a previously configured heartbeat.
@@ -71,6 +73,7 @@ param(
   [int]$IntervalMinutes = 10,
   [int]$RetentionDays = 7,
   [string]$TenantName,
+  [switch]$NoSharePointAutoDetect,
   [switch]$SetHeartbeat,
   [switch]$ClearHeartbeat,
   [string]$TeamsChannelLink,
@@ -98,6 +101,7 @@ $OrgUrlPattern = '\Ahttps://[a-z0-9][a-z0-9-]{0,62}\.(?:crm(?:[0-9]{1,2})?\.dyna
 $TenantPattern = '\A[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\z'
 $ConnIdPattern = '\A[A-Za-z0-9][A-Za-z0-9_-]{7,127}\z'
 $DisplayNamePattern = '\A[A-Za-z0-9][A-Za-z0-9 ._-]{0,48}\z'
+$OnMicrosoftPattern = '\A[A-Za-z0-9][A-Za-z0-9-]{0,62}\.onmicrosoft\.com\z'
 $TeamsLinkPattern = '\Ahttps://teams\.(?:microsoft\.com|cloud\.microsoft)/l/channel/[A-Za-z0-9%._~:@!$&()*+,;=/?-]{10,1100}\z'
 $ChannelListPattern = '\A(?:teams|slack|webex|webhook)(?:,(?:teams|slack|webex|webhook)){0,3}\z'
 $DashboardUrlPattern = '\Ahttps://apps\.powerapps\.com/play/[A-Za-z0-9/?=&._%-]{10,300}\z'
@@ -169,6 +173,7 @@ function ConvertTo-PlainText {
 function Clear-Secrets {
   Remove-Item Env:\OWPP_TOKEN -ErrorAction SilentlyContinue
   Remove-Item Env:\OWPP_HEARTBEAT_URL -ErrorAction SilentlyContinue
+  Remove-Item Env:\OWPP_GRAPH_TOKEN -ErrorAction SilentlyContinue
   Remove-Item Env:\OWPP_SLACK_WEBHOOK -ErrorAction SilentlyContinue
   Remove-Item Env:\OWPP_WEBEX_WEBHOOK -ErrorAction SilentlyContinue
   Remove-Item Env:\OWPP_ALERT_WEBHOOK -ErrorAction SilentlyContinue
@@ -372,6 +377,50 @@ function Wait-TeamsConnection {
   return ''
 }
 
+# ---------- SharePoint / OneDrive tenant name: detected, verified, never guessed ----------
+# Order: (1) the domains of this tenant from the Az session that is already signed in (Get-AzTenant .Domains);
+# (2) Microsoft Graph /organization with a token from the same session, if that token is allowed to read it;
+# (3) interactive runs only: one optional question. Every candidate is checked by the helper: strict pattern, then
+# https://<name>.sharepoint.com must answer like an existing tenant. Nothing here can stop the deployment.
+function Resolve-SharePointTenant {
+  param([string]$OrgUrl, [string]$StateDir)
+  $script:SpoTenant = ''
+  $script:SpoHow = ''
+  $outFile = Join-Path $StateDir 'tenant-detect.json'
+  $domains = @()
+  try {
+    $tid = Get-TenantId
+    if ($tid -and (Get-Module -ListAvailable -Name Az.Accounts)) {
+      $t = Get-AzTenant -TenantId $tid -ErrorAction Stop
+      $domains = @($t.Domains | Where-Object { $_ -is [string] -and $_.Length -le 90 -and $_ -cmatch $OnMicrosoftPattern })
+    }
+  } catch { $domains = @() }
+  try {
+    if (Get-Module -ListAvailable -Name Az.Accounts) {
+      $g = $null
+      try { $g = (Get-AzAccessToken -ResourceTypeName MSGraph -AsSecureString -ErrorAction Stop).Token } catch { $g = (Get-AzAccessToken -ResourceTypeName MSGraph -ErrorAction Stop).Token }
+      $env:OWPP_GRAPH_TOKEN = ConvertTo-PlainText $g
+    }
+  } catch { Remove-Item Env:\OWPP_GRAPH_TOKEN -ErrorAction SilentlyContinue }
+  $detectArgs = @('detect-tenant', '--org-url', $OrgUrl, '--out', $outFile)
+  if ($domains.Count -gt 0) { $detectArgs += @('--domains', (($domains | Select-Object -First 50) -join ',')) }
+  [void](Invoke-Helper $detectArgs)
+  Remove-Item Env:\OWPP_GRAPH_TOKEN -ErrorAction SilentlyContinue
+  $d = Read-JsonFile $outFile
+  if (-not $d) { return }
+  if ($d.already) { $script:SpoHow = 'already'; return }
+  if ($d.unsupported) { $script:SpoHow = 'unsupported'; return }
+  if ($d.tenant -and ("$($d.tenant)" -cmatch $TenantPattern)) { $script:SpoTenant = "$($d.tenant)"; $script:SpoHow = "detected via $($d.via)"; return }
+  if ($Yes) { return }
+  $answer = Read-Host 'SharePoint tenant name (the contoso in contoso.sharepoint.com) - could not be detected; press Enter to skip'
+  if (-not $answer) { return }
+  $answer = $answer.Trim().ToLowerInvariant()
+  if ($answer -cnotmatch $TenantPattern) { Warn 'That is not a tenant name (lowercase letters, digits, dashes). SharePoint / OneDrive stay unconfigured; add -TenantName later.'; return }
+  [void](Invoke-Helper @('detect-tenant', '--org-url', $OrgUrl, '--candidate', $answer, '--out', $outFile))
+  $script:SpoTenant = $answer
+  $script:SpoHow = 'typed in'
+}
+
 # Hidden prompt for a webhook URL (a credential). Returns plain text for the helper's environment only; never printed.
 function Read-WebhookSecret {
   param([string]$Label)
@@ -531,6 +580,7 @@ try {
     if ($env:OUTAGEWATCH_ALERT_WEBHOOK) { $env:OWPP_ALERT_WEBHOOK = $env:OUTAGEWATCH_ALERT_WEBHOOK }
     $code = Invoke-Helper (@('plan') + $common)
     if ($code -ne 0) { throw 'The plan could not be produced (see the message above).' }
+    Info 'A real run also detects the SharePoint tenant name (Get-AzTenant, then Microsoft Graph), checks that https://<name>.sharepoint.com answers, and enables the three SharePoint / OneDrive targets. No input needed; -TenantName overrides; -NoSharePointAutoDetect skips.'
     Info 'Then: pac code init / add-data-source (3 tables) / npm run build / pac code push, and a smoke test that waits for the first result rows.'
     Info 'Run the same command without -DryRun to deploy.'
     exit 0
@@ -614,7 +664,6 @@ try {
   $code = Invoke-Helper (@('validate', '--environment-id', $EnvironmentId, '--org-url', $orgUrl) + $common)
   if ($code -ne 0) { throw 'Input validation failed (see the message above). Nothing has been changed.' }
   [void](Invoke-Helper (@('estimate') + $common))
-  if (-not $TenantName) { Info 'No -TenantName: sharepoint-online and onedrive-business stay "unconfigured" (not probed, not a failure). Add -TenantName contoso any time.' }
   Warn 'The flow uses the premium HTTP connector: its owner (you) needs a Power Automate Premium licence (or a Process licence on the flow).'
 
   if (-not (Confirm-Step "Deploy Outage Watch to $orgUrl ?")) { throw 'Cancelled. Nothing has been changed.' }
@@ -633,6 +682,19 @@ try {
   $stateDir = Join-Path (Join-Path $root '.deploy-state') $EnvironmentId
   New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
   $resultFile = Join-Path $stateDir 'provision-result.json'
+
+  # SharePoint / OneDrive coverage without asking: detect the tenant name unless it was given or detection is switched off
+  $script:SpoTenant = ''
+  $script:SpoHow = ''
+  if ($TenantName) { $script:SpoHow = 'given with -TenantName' }
+  elseif (-not $NoSharePointAutoDetect) {
+    Step 'Detecting the SharePoint / OneDrive tenant name (no input needed)'
+    Resolve-SharePointTenant $orgUrl $stateDir
+    if ($script:SpoTenant) { $common += @('--tenant', $script:SpoTenant); Ok "SharePoint tenant: $($script:SpoTenant) ($($script:SpoHow))" }
+    elseif ($script:SpoHow -eq 'already') { Ok 'SharePoint / OneDrive targets were configured on an earlier run' }
+    elseif ($script:SpoHow -eq 'unsupported') { Warn 'SharePoint / OneDrive: this cloud is not supported yet; the three targets stay unconfigured.' }
+    else { Warn 'SharePoint tenant name not detected: sharepoint-online, onedrive-business and sharepoint-admin stay unconfigured (not a failure).' }
+  }
 
   Step 'Creating / upgrading tables, targets, connection reference and the probe flow'
   $script:Changed = $true
@@ -695,6 +757,10 @@ try {
   elseif ($SkipDashboard) { Write-Host 'Dashboard   : skipped (-SkipDashboard)' }
   else { Write-Host 'Dashboard   : NOT deployed (code apps disabled) - enable code apps and re-run the same command' -ForegroundColor Yellow }
   if ($smokeOk) { Write-Host 'Smoke test  : passed (first results written)' -ForegroundColor Green } else { Write-Host 'Smoke test  : NOT confirmed yet (see above)' -ForegroundColor Yellow }
+  $spoMissing = @()
+  if ($result -and $result.unconfigured) { $spoMissing = @($result.unconfigured) }
+  if ($spoMissing.Count -eq 0) { Write-Host 'SharePoint  : sharepoint-online, onedrive-business and sharepoint-admin are probed' -ForegroundColor Green }
+  else { Write-Host ("SharePoint  : NOT covered yet ({0} unconfigured). Add the tenant name: Deploy-OutageWatchPP.cmd {1} -TenantName contoso   (the contoso in contoso.sharepoint.com)" -f ($spoMissing -join ', '), $EnvironmentId) -ForegroundColor Yellow }
   if ($result -and $result.heartbeat) { Write-Host "Heartbeat   : configured (dead man's switch; URL not shown)" }
   else { Write-Host "Heartbeat   : NOT configured - re-run with -SetHeartbeat to be told from OUTSIDE when this monitor goes silent" -ForegroundColor Yellow }
   $alertStatus = ''

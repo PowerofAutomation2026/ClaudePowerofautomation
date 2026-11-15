@@ -114,7 +114,7 @@ describe('table metadata payloads', () => {
     for (const c of t.columns) if (c.MaxLength) max[c.SchemaName] = c.MaxLength
     const cols = new Set(['owatch_name', ...t.columns.map((c: any) => c.SchemaName)])
     for (const r of seedTargets('contoso')) for (const [k, v] of Object.entries(r)) { expect(cols.has(k)).toBe(true); if (typeof v === 'string') expect(v.length).toBeLessThanOrEqual(max[k]) }
-    expect(seedTargets(null)).toHaveLength(36); expect(seedTargets('contoso')).toHaveLength(36)
+    expect(seedTargets(null)).toHaveLength(37); expect(seedTargets('contoso')).toHaveLength(37)
     expect(seedTargets(null).filter((r: any) => r.owatch_enabled)).toHaveLength(catalog.targets.length)
   })
 })

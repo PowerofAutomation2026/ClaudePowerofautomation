@@ -38,7 +38,8 @@
   ],
   "tenantTargets": [
     { "name": "sharepoint-online", "urlTemplate": "https://{tenant}.sharepoint.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": true, "family": "SharePoint / OneDrive" },
-    { "name": "onedrive-business", "urlTemplate": "https://{tenant}-my.sharepoint.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": true, "family": "SharePoint / OneDrive" }
+    { "name": "onedrive-business", "urlTemplate": "https://{tenant}-my.sharepoint.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": true, "family": "SharePoint / OneDrive" },
+    { "name": "sharepoint-admin", "urlTemplate": "https://{tenant}-admin.sharepoint.com/", "alive": null, "dependsOnAuth": true, "copilotNeeds": false, "family": "SharePoint / OneDrive", "ppOnly": true }
   ],
   "families": [
     [
