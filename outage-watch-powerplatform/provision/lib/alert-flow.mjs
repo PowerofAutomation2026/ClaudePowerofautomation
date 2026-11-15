@@ -37,12 +37,16 @@ import { CONNREF, TEAMS_CONNREF, columnSpec } from './schema.mjs'
 export const CHANNELS = ['teams', 'slack', 'webex', 'webhook']
 /** Limits that keep every message far below the channel size limits even with hostile input. */
 export const CAPS = { detailed: 10, name: 100, family: 100, url: 200, kind: 100, error: 300, atRisk: 12, firstError: 500, delivery: 300, ciServices: 200,
-  teamsEscaped: 16000, slackEscaped: 12000, webexText: 3500, webhookText: 12000 }
+  // Channel size limits are in BYTES (Teams about 28 KB, Webex 7,439 bytes). take() counts UTF-16 units and one unit is at most
+  // 3 bytes in UTF-8, so a cap of N units can never exceed 3 x N bytes whatever the text contains (emoji, CJK, RTL...).
+  teamsEscaped: 8000, slackEscaped: 12000, webexText: 2400, webhookText: 12000 }
 export const SENTINEL = '2000-01-01T00:00:00Z'      // "never": datetime columns are always written with a real value, never null
 export const ROUND_SETTLE_MINUTES = 2               // a round younger than this may still be writing rows
 export const SAME_FATE = 'Same-fate warning: this alert is produced by Power Automate, which runs in the same Microsoft cloud that is being watched (and Teams does too). In a Microsoft 365 or Power Platform outage it may be late or never arrive. Rely on the external heartbeat and the independent monitor for that case.'
 export const TITLES = { failure: '\u{1F534} SERVICE FAILURE - Outage Watch', recovered: '✅ RECOVERED - Outage Watch', test: '\u{1F9EA} TEST - Outage Watch alert test. No outage is implied; no action needed.' }
-export const TAGS = { open: 'NEW FAILURE', reminder: 'STILL FAILING', recovered: 'RECOVERED' }
+export const TAGS = { open: 'NEW FAILURE', reminder: 'STILL FAILING', recovered: 'RECOVERED', closed: 'CLOSED' }
+export const SHORTENED = '... (message shortened to fit this channel; see the dashboard for everything)'
+export const STALE_TITLE = '\u26A0\uFE0F PROBING STOPPED - Outage Watch has no new probe round'
 /** Common-cause wording (no apostrophes: these sit inside workflow-language string literals). */
 export const COMMON = {
   authLead: 'PROBABLE COMMON CAUSE: sign-in (auth) is failing its probe. Services that need sign-in will fail for signed-in users even if their own probe still answers.',
@@ -74,7 +78,37 @@ const setting = (q) => `first(body('${q}'))?['owatch_value']`
 const settingId = (q) => `first(body('${q}'))?['owatch_settingid']`
 const settingQuery = (key, runAfter) => query("@body('List_settings')?['value']", `@equals(item()?['owatch_name'],'${key}')`, runAfter)
 const safeInt = (v, dflt, lo, hi) => `max(${lo},min(${hi},int(if(isInt(coalesce(${v},'')),coalesce(${v},''),'${dflt}'))))`
+/** Cuts a message to `n` UTF-16 units and SAYS so, instead of silently dropping the end. */
+export const shorten = (x, n) => `if(greater(length(${x}),${n}),concat(take(${x},${n - 100}),${NL},'${SHORTENED}'),${x})`
 const odataText = (x) => `replace(string(coalesce(${x},'')),'''','''''')`       // apostrophes doubled for an OData string literal
+
+/**
+ * The post action of every configured channel for the plain-text message in `text` (a workflow expression).
+ * Shared by the alert flow and the test-notification flow, so a test uses exactly the encodings of a real alert.
+ */
+export function buildPosts(ch, text) {
+  const hook = (uri, body) => ({
+    metadata: {}, type: 'Http', inputs: { method: 'POST', uri, headers: { 'Content-Type': 'application/json' }, body, retryPolicy: { type: 'none' } },
+    limit: { timeout: 'PT20S' }, operationOptions: 'DisableAsyncPattern',
+    runtimeConfiguration: { secureData: { properties: ['inputs', 'outputs'] } },          // the URL is the credential: keep it out of the run history
+  })
+  return {
+    teams: ch.teams && {
+      metadata: {}, type: 'OpenApiConnection',
+      inputs: {
+        host: { apiId: TEAMS_CONNREF.connectorId, connectionName: TEAMS_CONNREF.api, operationId: 'PostMessageToConversation' },
+        parameters: { poster: 'Flow bot', location: 'Channel', 'body/recipient/groupId': ch.teams.groupId, 'body/recipient/channelId': ch.teams.channelId,
+          'body/messageBody': `@concat('<p>',replace(${shorten(esc(text), CAPS.teamsEscaped)},${NL},'<br>'),'</p>')` },
+        authentication: AUTH,
+      },
+    },
+    slack: ch.slack && hook(ch.slack, { text: `@${shorten(slackEsc(text), CAPS.slackEscaped)}` }),
+    webex: ch.webex && hook(ch.webex, { text: `@${shorten(text, CAPS.webexText)}` }),          // "text", not "markdown": nothing in it is interpreted
+    webhook: ch.webhook && hook(ch.webhook, { text: `@${shorten(text, CAPS.webhookText)}` }),
+  }
+}
+/** Building blocks reused by provision/lib/test-flow.mjs. */
+export const kit = { NL, FMT, ALWAYS, DONE, AUTH, dv, query, select, compose, ok, cap, setting, settingId, settingQuery }
 
 /**
  * @param {{intervalMinutes:number, sets:{target:string,result:string,setting:string,incident:string},
@@ -92,21 +126,24 @@ export function buildAlertClientData(o) {
 
   const settingsQueries = {}
   let prev = 'List_settings'
-  for (const [name, key] of [['S_enabled', 'alert_enabled'], ['S_confirm', 'alert_confirm'], ['S_reminder', 'alert_reminder_minutes'], ['S_snooze', 'alert_snooze_until'], ['S_test', 'alert_test'], ['S_lastround', 'alert_last_round']]) {
+  for (const [name, key] of [['S_enabled', 'alert_enabled'], ['S_confirm', 'alert_confirm'], ['S_reminder', 'alert_reminder_minutes'], ['S_snooze', 'alert_snooze_until'], ['S_test', 'alert_test'], ['S_lastround', 'alert_last_round'], ['S_stale', 'alert_stale_notified']]) {
     settingsQueries[name] = settingQuery(key, ok(prev)); prev = name
   }
 
   const reaches = `greaterOrEquals(add(${c1('prev')},1),${ctx('confirm')})`
   const isOpen = `and(${reaches},not(${c1('wasOpen')}))`
   const isReminder = `and(${c1('wasOpen')},greaterOrEquals(${c1('sinceLast')},${ctx('reminder')}))`
+  const hold = `and(${c1('active')},not(${c1('probed')}))`
   const newStreak = `and(${c1('failNow')},equals(${c1('prev')},0))`
 
   // ---- the message is built ONCE as plain text; each channel gets it in its own safe encoding ----
-  const tag = `if(equals(${c2('event')},'open'),'${TAGS.open}',if(equals(${c2('event')},'reminder'),'${TAGS.reminder}','${TAGS.recovered}'))`
+  const tag = `if(equals(${c2('event')},'open'),'${TAGS.open}',if(equals(${c2('event')},'reminder'),'${TAGS.reminder}',if(${c1('active')},'${TAGS.recovered}','${TAGS.closed}')))`
   const errText = `concat(${cap(row('owatch_errorkind'), CAPS.kind)},' ',${cap(row('owatch_errormessage'), CAPS.error)})`
   const errShown = `if(equals(length(${errText}),1),'none reported (see the HTTP status)',${errText})`
   const failingDetails = `concat('Result: ',if(equals(coalesce(${row('owatch_httpstatus')},0),0),'no HTTP answer',concat('HTTP ',string(coalesce(${row('owatch_httpstatus')},0)))),' after ',string(coalesce(${row('owatch_elapsedms')},0)),' ms',${NL},'  Error: ',${errShown},${NL},'  Failing since: ',${cap(c2('since'), 40)},' UTC | consecutive failures: ',string(${c2('count')}),' | last success (probe round): ',${cap(c2('lastok'), 40)})`
-  const recoveredDetails = `concat('Answering again. Was failing since ',${cap(`coalesce(${T('owatch_failingsince')},'unknown')`, 40)},' UTC (about ',string(${c1('downMinutes')}),' min, ',string(${c1('prev')}),' failed round(s)).')`
+  const closedDetails = `'No longer monitored (the target was disabled or its URL removed). The incident is closed WITHOUT a recovery having been observed.'`
+  const recoveredDetails0 = `concat('Answering again. Was failing since ',${cap(`coalesce(${T('owatch_failingsince')},'unknown')`, 40)},' UTC (about ',string(${c1('downMinutes')}),' min, ',string(${c1('prev')}),' failed round(s)).')`
+  const recoveredDetails = `if(${c1('active')},${recoveredDetails0},${closedDetails})`
   const famName = `if(empty(coalesce(${T('owatch_family')},'')),'Other',${T('owatch_family')})`
   const heading = `if(equals(variables('LastFamily'),coalesce(${T('owatch_family')},'')),'',concat('== ',${cap(famName, CAPS.family)},' ==',${NL}))`
   const itemText = `concat(${heading},'[',${tag},'] ',${cap(T('owatch_name'), CAPS.name)},${NL},'  URL: ',${cap(T('owatch_url'), CAPS.url)},${NL},'  ',if(${c1('failNow')},${failingDetails},${recoveredDetails}),${NL})`
@@ -120,10 +157,11 @@ export function buildAlertClientData(o) {
     `if(and(contains(${failNames},'m365-copilot'),greater(length(body('CopNames')),0)),concat('${COMMON.copilot}',join(take(body('CopNames'),${CAPS.atRisk}),', '),${NL}),''))`
 
   const nOpen = "length(body('Ev_open'))"; const nStill = "length(body('Ev_still'))"; const nRec = "length(body('Ev_recovered'))"
-  const title = `if(equals(length(variables('Events')),0),'${TITLES.test}',if(greater(add(${nOpen},${nStill}),0),'${TITLES.failure}','${TITLES.recovered}'))`
+  const title = `if(greater(length(variables('Events')),0),if(greater(add(${nOpen},${nStill}),0),'${TITLES.failure}','${TITLES.recovered}'),if(${ctx('staleNow')},'${STALE_TITLE}','${TITLES.test}'))`
+  const staleLine = `if(${ctx('staleNow')},concat('No new probe round for ',string(${ctx('staleMinutes')}),' minutes (last round: ',${cap(`coalesce(${ctx('round')},'-')`, 40)},', expected every ${o.intervalMinutes} minutes). The probe flow may be off, throttled or failing. Service status is UNKNOWN until probing resumes.',${NL}),'')`
   const dash = `coalesce(${setting('S_dashboard')},'')`
   const messageText = `@concat(${title},${NL},'Time: ',${ctx('now')},' UTC | probe round: ',${cap(`coalesce(${ctx('round')},'-')`, 40)},${NL},'New failures: ',string(${nOpen}),' | still failing (reminder): ',string(${nStill}),' | recovered: ',string(${nRec}),${NL},` +
-    `if(${ctx('test')},concat('(TEST requested with the setting alert_test)',${NL}),''),variables('Notes'),${NL},join(take(body('Items'),${CAPS.detailed}),${NL}),` +
+    `if(${ctx('test')},concat('(TEST requested with the setting alert_test)',${NL}),''),${staleLine},variables('Notes'),${NL},join(take(body('Items'),${CAPS.detailed}),${NL}),` +
     `if(greater(length(body('Items')),${CAPS.detailed}),concat(${NL},'... and ',string(sub(length(body('Items')),${CAPS.detailed})),' more (see the dashboard).',${NL}),''),` +
     `if(startsWith(${dash},'https://'),concat(${NL},'Dashboard: ',${cap(dash, 400)},${NL}),''),${NL},'${SAME_FATE}')`
   const text = "outputs('Message')"
@@ -136,25 +174,8 @@ export function buildAlertClientData(o) {
   const ciValue = `@concat('{"level":"',${level},'","since":"',${since},'","updated":"',${ctx('now')},'","round":"',${ctx('round')},'","failing":',string(length(${failNames})),',"confirmed":',string(length(body('Confirmed'))),',"services":"',${services},'"}')`
 
   // ---- delivery: one independent branch per configured channel ----
-  const hook = (uri, body) => ({
-    metadata: {}, type: 'Http', inputs: { method: 'POST', uri, headers: { 'Content-Type': 'application/json' }, body, retryPolicy: { type: 'none' } },
-    limit: { timeout: 'PT20S' }, operationOptions: 'DisableAsyncPattern',
-    runtimeConfiguration: { secureData: { properties: ['inputs', 'outputs'] } },          // the URL is the credential: keep it out of the run history
-  })
-  const posts = {
-    teams: ch.teams && {
-      metadata: {}, type: 'OpenApiConnection',
-      inputs: {
-        host: { apiId: TEAMS_CONNREF.connectorId, connectionName: TEAMS_CONNREF.api, operationId: 'PostMessageToConversation' },
-        parameters: { poster: 'Flow bot', location: 'Channel', 'body/recipient/groupId': ch.teams.groupId, 'body/recipient/channelId': ch.teams.channelId,
-          'body/messageBody': `@concat('<p>',replace(take(${esc(text)},${CAPS.teamsEscaped}),${NL},'<br>'),'</p>')` },
-        authentication: AUTH,
-      },
-    },
-    slack: ch.slack && hook(ch.slack, { text: `@take(${slackEsc(text)},${CAPS.slackEscaped})` }),
-    webex: ch.webex && hook(ch.webex, { text: `@take(${text},${CAPS.webexText})` }),
-    webhook: ch.webhook && hook(ch.webhook, { text: `@take(${text},${CAPS.webhookText})` }),
-  }
+  const posts = buildPosts(ch, text)
+  const configured = CHANNELS.filter((c) => posts[c])
   const deliver = {}
   let after = 'S_off'
   const branches = []
@@ -201,6 +222,9 @@ export function buildAlertClientData(o) {
       // muted while the snooze text is "later than now"; both are fixed-width UTC times, so text comparison is enough and cannot fail on bad input
       muted: `@greater(coalesce(${setting('S_snooze')},''),utcNow('${FMT}'))`,
       test: `@equals(toLower(coalesce(${setting('S_test')},'')),'yes')`,
+      // probing stopped? (the newest complete round is older than 3 intervals + 5 minutes). Announced ONCE per stale round.
+      staleMinutes: `@div(sub(ticks(utcNow('${FMT}')),ticks(coalesce(first(body('Latest_round')?['value'])?['owatch_round'],utcNow('${FMT}')))),600000000)`,
+      staleNow: `@and(not(equals(toLower(coalesce(${setting('S_enabled')},'yes')),'no')),not(greater(coalesce(${setting('S_snooze')},''),utcNow('${FMT}'))),greater(div(sub(ticks(utcNow('${FMT}')),ticks(coalesce(first(body('Latest_round')?['value'])?['owatch_round'],utcNow('${FMT}')))),600000000),${3 * o.intervalMinutes + 5}),not(equals(coalesce(${setting('S_stale')},''),coalesce(first(body('Latest_round')?['value'])?['owatch_round'],'-'))))`,
     }, ok('Latest_round')),
     If_new_round: {
       runAfter: ok('Ctx'), type: 'If',
@@ -208,15 +232,19 @@ export function buildAlertClientData(o) {
       actions: {
         // FIRST remember the round: a run that fails later must not make the next run count the same round twice
         Save_round: dv('UpdateRecord', { entityName: o.sets.setting, recordId: `@${settingId('S_lastround')}`, 'item/owatch_value': `@${ctx('round')}` }, {}),
-        List_failing: dv('ListRecords', {
-          entityName: o.sets.result, $select: 'owatch_name,owatch_httpstatus,owatch_elapsedms,owatch_errorkind,owatch_errormessage,owatch_probedat',
-          $filter: `owatch_round eq '@{${ctx('round')}}' and owatch_failed eq true`, $top: 500,
+        // ALL rows of the round, not only the failed ones: a target WITHOUT a row was not probed (its write failed, or it
+        // is new) and must be treated as "unknown", never as "answered" - otherwise a lost row would announce a recovery.
+        List_round: dv('ListRecords', {
+          entityName: o.sets.result, $select: 'owatch_name,owatch_httpstatus,owatch_elapsedms,owatch_errorkind,owatch_errormessage,owatch_probedat,owatch_failed',
+          $filter: `owatch_round eq '@{${ctx('round')}}'`, $top: 1000,
         }, ok('Save_round')),
-        FailNames: select("@body('List_failing')?['value']", "@item()?['owatch_name']", ok('List_failing')),
+        FailRows: query("@body('List_round')?['value']", "@equals(item()?['owatch_failed'],true)", ok('List_round')),
+        FailNames: select("@body('FailRows')", "@item()?['owatch_name']", ok('FailRows')),
+        RoundNames: select("@body('List_round')?['value']", "@item()?['owatch_name']", ok('FailNames')),
         List_targets: dv('ListRecords', {
           entityName: o.sets.target, $filter: 'statecode eq 0', $orderby: 'owatch_family asc,owatch_name asc', $top: 500,
           $select: 'owatch_targetid,owatch_name,owatch_url,owatch_family,owatch_enabled,owatch_dependsonauth,owatch_copilotneeds,owatch_failcount,owatch_failingsince,owatch_lastok,owatch_alertopen,owatch_lastalertat',
-        }, ok('FailNames')),
+        }, ok('RoundNames')),
         // normally EMPTY: only targets that fail now, are in a failure streak, or have an open incident are processed
         Interesting: query("@body('List_targets')?['value']", `@or(contains(${failNames},item()?['owatch_name']),greater(coalesce(item()?['owatch_failcount'],0),0),equals(item()?['owatch_alertopen'],true))`, ok('List_targets')),
         // CI / agent status (uses the state BEFORE this round's updates: "would be confirmed by this round")
@@ -227,22 +255,25 @@ export function buildAlertClientData(o) {
           runAfter: { Save_ci: DONE }, type: 'Foreach', foreach: "@body('Interesting')",        // a missing status row must not stop alerting
           runtimeConfiguration: { concurrency: { repetitions: 1 } },        // in order: the message is grouped by family, and variables are shared
           actions: {
-            Row: query("@body('List_failing')?['value']", `@equals(item()?['owatch_name'],${T('owatch_name')})`, {}),
+            Row: query("@body('FailRows')", `@equals(item()?['owatch_name'],${T('owatch_name')})`, {}),
             C1: compose({
               failNow: "@greater(length(body('Row')),0)",
               prev: `@coalesce(${T('owatch_failcount')},0)`,
               wasOpen: `@equals(${T('owatch_alertopen')},true)`,
               can: `@and(${ctx('enabled')},not(${ctx('muted')}))`,
+              probed: `@contains(body('RoundNames'),${T('owatch_name')})`,
+              active: `@and(equals(${T('owatch_enabled')},true),not(empty(coalesce(${T('owatch_url')},''))))`,
               sinceLast: `@div(sub(ticks(${ctx('now')}),ticks(coalesce(${T('owatch_lastalertat')},'${SENTINEL}'))),600000000)`,
               downMinutes: `@max(0,min(${inc.owatch_durationminutes.max},div(sub(ticks(${ctx('now')}),ticks(coalesce(${T('owatch_failingsince')},${ctx('now')}))),600000000)))`,
             }, ok('Row')),
             C2: compose({
-              count: `@if(${c1('failNow')},min(add(${c1('prev')},1),${lim.owatch_failcount.max}),0)`,
-              event: `@if(${c1('can')},if(${c1('failNow')},if(${isOpen},'open',if(${isReminder},'reminder','none')),if(${c1('wasOpen')},'recovered','none')),'none')`,
-              open: `@if(${c1('failNow')},or(${c1('wasOpen')},and(${c1('can')},${reaches})),false)`,
+              // hold = still monitored but NOT in this round: nothing is concluded, nothing changes
+              count: `@if(${hold},${c1('prev')},if(${c1('failNow')},min(add(${c1('prev')},1),${lim.owatch_failcount.max}),0))`,
+              event: `@if(or(${hold},not(${c1('can')})),'none',if(${c1('failNow')},if(${isOpen},'open',if(${isReminder},'reminder','none')),if(${c1('wasOpen')},'recovered','none')))`,
+              open: `@if(${hold},${c1('wasOpen')},if(${c1('failNow')},or(${c1('wasOpen')},and(${c1('can')},${reaches})),false))`,
               since: `@if(${newStreak},coalesce(${row('owatch_probedat')},${ctx('now')}),coalesce(${T('owatch_failingsince')},${ctx('now')}))`,
               lastok: `@take(string(if(${newStreak},if(empty(${ctx('prevRound')}),'unknown',${ctx('prevRound')}),coalesce(${T('owatch_lastok')},'unknown'))),${lim.owatch_lastok.maxLength})`,
-              lastAlert: `@if(and(${c1('can')},${c1('failNow')},or(${isOpen},${isReminder})),${ctx('now')},coalesce(${T('owatch_lastalertat')},'${SENTINEL}'))`,
+              lastAlert: `@if(and(not(${hold}),${c1('can')},${c1('failNow')},or(${isOpen},${isReminder})),${ctx('now')},coalesce(${T('owatch_lastalertat')},'${SENTINEL}'))`,
             }, ok('C1')),
             Update_target: dv('UpdateRecord', {
               entityName: o.sets.target, recordId: `@${T('owatch_targetid')}`,
@@ -252,25 +283,34 @@ export function buildAlertClientData(o) {
             If_event: {
               runAfter: ok('Update_target'), type: 'If', expression: { not: { equals: [`@${c2('event')}`, 'none'] } },
               actions: {
-                Append_event: { runAfter: {}, type: 'AppendToArrayVariable', inputs: { name: 'Events', value: { e: `@${c2('event')}`, n: `@${T('owatch_name')}`, text: `@${itemText}` } } },
+                Append_event: { runAfter: {}, type: 'AppendToArrayVariable', inputs: { name: 'Events', value: { e: `@${c2('event')}`, n: `@${T('owatch_name')}`, text: `@${itemText}`,
+                  // kept so the state can be put back if NO channel accepts the message (then the next round tries again)
+                  id: `@${T('owatch_targetid')}`, wasOpen: `@${c1('wasOpen')}`, prevAlert: `@coalesce(${T('owatch_lastalertat')},'${SENTINEL}')` } } },
                 Set_family: { runAfter: ok('Append_event'), type: 'SetVariable', inputs: { name: 'LastFamily', value: `@coalesce(${T('owatch_family')},'')` } },
-                // incident record: opened with the first announcement, updated by reminders, closed by the recovery
+                // incident record: opened with the first announcement, updated by reminders, closed by the recovery.
+                // Find first: a repeated "open" (after a delivery that failed everywhere) must not create a second record.
+                Find_incident: dv('ListRecords', { entityName: o.sets.incident, $select: 'owatch_incidentid,owatch_reminders', $filter: `owatch_name eq '@{${odataText(T('owatch_name'))}}' and owatch_isopen eq true`, $orderby: 'owatch_openedat desc', $top: 1 }, ok('Set_family')),
                 If_opened: {
-                  runAfter: ok('Set_family'), type: 'If', expression: { equals: [`@${c2('event')}`, 'open'] },
+                  runAfter: ok('Find_incident'), type: 'If', expression: { equals: [`@${c2('event')}`, 'open'] },
                   actions: {
-                    Create_incident: dv('CreateRecord', {
-                      entityName: o.sets.incident,
-                      'item/owatch_name': `@${cap(T('owatch_name'), inc.owatch_name.maxLength)}`, 'item/owatch_family': `@${cap(famName, inc.owatch_family.maxLength)}`,
-                      'item/owatch_openedat': `@${c2('since')}`, 'item/owatch_closedat': SENTINEL, 'item/owatch_isopen': true,
-                      'item/owatch_firsterror': `@take(concat(if(equals(coalesce(${row('owatch_httpstatus')},0),0),'no HTTP answer',concat('HTTP ',string(coalesce(${row('owatch_httpstatus')},0)))),' - ',${errShown}),${CAPS.firstError})`,
-                      'item/owatch_reminders': 0, 'item/owatch_durationminutes': 0, 'item/owatch_failedrounds': `@min(${c2('count')},${inc.owatch_failedrounds.max})`,
-                    }, {}),
+                    If_none: {
+                      runAfter: {}, type: 'If', expression: { equals: ["@length(body('Find_incident')?['value'])", 0] },
+                      actions: {
+                        Create_incident: dv('CreateRecord', {
+                          entityName: o.sets.incident,
+                          'item/owatch_name': `@${cap(T('owatch_name'), inc.owatch_name.maxLength)}`, 'item/owatch_family': `@${cap(famName, inc.owatch_family.maxLength)}`,
+                          'item/owatch_openedat': `@${c2('since')}`, 'item/owatch_closedat': SENTINEL, 'item/owatch_isopen': true,
+                          'item/owatch_firsterror': `@take(concat(if(equals(coalesce(${row('owatch_httpstatus')},0),0),'no HTTP answer',concat('HTTP ',string(coalesce(${row('owatch_httpstatus')},0)))),' - ',${errShown}),${CAPS.firstError})`,
+                          'item/owatch_reminders': 0, 'item/owatch_durationminutes': 0, 'item/owatch_failedrounds': `@min(${c2('count')},${inc.owatch_failedrounds.max})`,
+                        }, {}),
+                      },
+                      else: { actions: {} },
+                    },
                   },
                   else: {
                     actions: {
-                      Find_incident: dv('ListRecords', { entityName: o.sets.incident, $select: 'owatch_incidentid,owatch_reminders', $filter: `owatch_name eq '@{${odataText(T('owatch_name'))}}' and owatch_isopen eq true`, $orderby: 'owatch_openedat desc', $top: 1 }, {}),
                       If_found: {
-                        runAfter: ok('Find_incident'), type: 'If', expression: { greater: ["@length(body('Find_incident')?['value'])", 0] },
+                        runAfter: {}, type: 'If', expression: { greater: ["@length(body('Find_incident')?['value'])", 0] },
                         actions: {
                           Update_incident: dv('UpdateRecord', {
                             entityName: o.sets.incident, recordId: "@first(body('Find_incident')?['value'])?['owatch_incidentid']",
@@ -308,7 +348,7 @@ export function buildAlertClientData(o) {
     },
     If_should_post: {
       runAfter: { If_new_round: ALWAYS }, type: 'If',     // also runs when the evaluation was skipped or failed: a TEST must still go out
-      expression: { or: [{ equals: [`@${ctx('test')}`, true] }, { greater: ["@length(variables('Events'))", 0] }] },
+      expression: { or: [{ equals: [`@${ctx('test')}`, true] }, { greater: ["@length(variables('Events'))", 0] }, { equals: [`@${ctx('staleNow')}`, true] }] },
       actions: {
         S_lastat: settingQuery('last_alert_at', {}),
         S_dashboard: settingQuery('dashboard_url', ok('S_lastat')),
@@ -319,11 +359,35 @@ export function buildAlertClientData(o) {
         Message: compose(messageText, ok('Items')),
         S_off: settingQuery('alert_channels_off', ok('Message')),
         ...deliver,
-        Mark_sent: dv('UpdateRecord', { entityName: o.sets.setting, recordId: `@${settingId('S_lastat')}`, 'item/owatch_value': `@${ctx('now')}` }, { [after]: after === 'S_off' ? ['Succeeded'] : ALWAYS }),
-        If_test: {
-          runAfter: { Mark_sent: DONE }, type: 'If', expression: { equals: [`@${ctx('test')}`, true] },
-          actions: { Clear_test: dv('UpdateRecord', { entityName: o.sets.setting, recordId: `@${settingId('S_test')}`, 'item/owatch_value': 'no' }, {}) },
-          else: { actions: {} },
+        // Did ANY channel accept the message? Only then is it "sent". (actions() of a branch that did not run is null -> false.)
+        AnyOk: compose(configured.length ? `@or(${configured.map((c) => `equals(actions('Post_${c}')?['status'],'Succeeded')`).join(',')}${configured.length === 1 ? ',false' : ''})` : false, { [after]: after === 'S_off' ? ['Succeeded'] : ALWAYS }),
+        If_delivered: {
+          runAfter: ok('AnyOk'), type: 'If', expression: { equals: ["@outputs('AnyOk')", true] },
+          actions: {
+            Mark_sent: dv('UpdateRecord', { entityName: o.sets.setting, recordId: `@${settingId('S_lastat')}`, 'item/owatch_value': `@${ctx('now')}` }, {}),
+            If_test: {
+              runAfter: { Mark_sent: DONE }, type: 'If', expression: { equals: [`@${ctx('test')}`, true] },
+              actions: { Clear_test: dv('UpdateRecord', { entityName: o.sets.setting, recordId: `@${settingId('S_test')}`, 'item/owatch_value': 'no' }, {}) },
+              else: { actions: {} },
+            },
+            If_stale: {
+              runAfter: { If_test: DONE }, type: 'If', expression: { equals: [`@${ctx('staleNow')}`, true] },
+              actions: { Save_stale: dv('UpdateRecord', { entityName: o.sets.setting, recordId: `@${settingId('S_stale')}`, 'item/owatch_value': `@coalesce(${ctx('round')},'-')` }, {}) },
+              else: { actions: {} },
+            },
+          },
+          // NOTHING was delivered: put the alert state of this round's events back, so the next round announces them again.
+          // Never dropped silently (each channel's failure is in its last_delivery_* setting), never repeated once delivered.
+          else: {
+            actions: {
+              Roll_back: {
+                runAfter: {}, type: 'Foreach', foreach: "@variables('Events')", runtimeConfiguration: { concurrency: { repetitions: 1 } },
+                actions: {
+                  Undo_alert_state: dv('UpdateRecord', { entityName: o.sets.target, recordId: "@items('Roll_back')?['id']", 'item/owatch_alertopen': "@items('Roll_back')?['wasOpen']", 'item/owatch_lastalertat': "@items('Roll_back')?['prevAlert']" }, {}),
+                },
+              },
+            },
+          },
         },
       },
       else: { actions: {} },
@@ -362,11 +426,11 @@ export function existingChannels(clientdataText) {
 /**
  * Requests per run of the alert flow. Quiet run: trigger + 3 variables + list settings + 6 setting lookups + latest
  * round + context + new-round check + (save round, failing rows, names, targets, interesting, confirmed, status row
- * lookup, status write, loop, notes check) + post check = 25. Each target that fails / recovers adds about 7-10
+ * lookup, status write, loop, notes check) + post check = 28 (incl. the stale-notice lookup and the round's name lists). Each target that fails / recovers adds about 7-10
  * (incl. its incident record); a posted message adds about 10 plus 3 per channel.
  */
 export function estimateAlertRequests(intervalMinutes, failingTargets = 0, posts = 0, channels = 1) {
-  const perQuietRun = 25
+  const perQuietRun = 28
   const runsPerDay = Math.floor(1440 / intervalMinutes)
   return { perQuietRun, runsPerDay, perDay: perQuietRun * runsPerDay + failingTargets * 10 * runsPerDay + posts * (10 + 3 * channels) }
 }

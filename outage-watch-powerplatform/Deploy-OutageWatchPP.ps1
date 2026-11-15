@@ -48,7 +48,7 @@
 .PARAMETER SetAlertWebhook   Alerts to any endpoint that accepts POST {"text": "..."}: hidden prompt. Unattended: OUTAGEWATCH_ALERT_WEBHOOK.
 .PARAMETER RemoveChannels    Comma list of channels to remove: teams,slack,webex,webhook. Channels are otherwise kept between runs.
 .PARAMETER NoAlerts          Turn the alert flow off (probing, dashboard and the configuration stay).
-.PARAMETER SendTestAlert     Ask the alert flow to send a clearly labelled TEST message to every configured channel on its next run.
+.PARAMETER SendTestAlert     After deploying, send a live, clearly labelled TEST message with the current status to every configured channel (same mechanism as the dashboard button) and wait for each channel's result.
 .PARAMETER EnvironmentUrl    Optional: Dataverse URL (https://org.crm4.dynamics.com). Normally discovered from the environment ID.
 .PARAMETER DisplayName       Dashboard app name (default "Outage Watch").
 .PARAMETER SkipDashboard     Deploy tables + flow only.
@@ -487,7 +487,7 @@ function Publish-Dashboard {
   if (Test-Path $cfgPath) { Copy-Item $cfgPath $cfgBackup -Force }
 
   Step 'Adding the Outage Watch tables as data sources of the dashboard'
-  foreach ($tbl in @('owatch_target', 'owatch_result', 'owatch_setting', 'owatch_incident')) {
+  foreach ($tbl in @('owatch_target', 'owatch_result', 'owatch_setting', 'owatch_incident', 'owatch_command')) {
     $r = Invoke-Native 'pac' @('code', 'add-data-source', '-a', 'dataverse', '-t', $tbl)
     if ($r.Code -eq 0) { Ok "Dataverse table '$tbl' added" }
     elseif ($r.Text -match '(?i)already') { Ok "Dataverse table '$tbl' already added" }
@@ -581,7 +581,7 @@ try {
     $code = Invoke-Helper (@('plan') + $common)
     if ($code -ne 0) { throw 'The plan could not be produced (see the message above).' }
     Info 'A real run also detects the SharePoint tenant name (Get-AzTenant, then Microsoft Graph), checks that https://<name>.sharepoint.com answers, and enables the three SharePoint / OneDrive targets. No input needed; -TenantName overrides; -NoSharePointAutoDetect skips.'
-    Info 'Then: pac code init / add-data-source (3 tables) / npm run build / pac code push, and a smoke test that waits for the first result rows.'
+    Info 'Then: pac code init / add-data-source (5 tables) / npm run build / pac code push, and a smoke test that waits for the first result rows.'
     Info 'Run the same command without -DryRun to deploy.'
     exit 0
   }
@@ -657,7 +657,6 @@ try {
       if ($RemoveChannels -cnotmatch $ChannelListPattern) { throw '-RemoveChannels takes a comma list of: teams,slack,webex,webhook' }
       $common += @('--remove-channels', $RemoveChannels)
     }
-    if ($SendTestAlert) { $common += '--send-test-alert' }
   }
 
   Step 'Validating inputs'
@@ -748,10 +747,23 @@ try {
   } elseif ($code -ne 0) { Warn 'The smoke test could not read the tables (message above).' }
   else { Ok 'First probe results are in Dataverse' }
 
+  # ----- live test notification (same command row the dashboard button writes) -----
+  $testState = ''
+  if ($SendTestAlert) {
+    if ($result -and $result.alerts -and "$($result.alerts.status)" -eq 'on') {
+      Step 'Sending a live TEST notification to every configured channel (waits up to 180 s for the flow)'
+      $code = Invoke-Helper @('test-notification', '--org-url', $orgUrl, '--channels', 'all', '--requested-by', 'Deploy-OutageWatchPP', '--wait-seconds', '180')
+      if ($code -eq 0) { $testState = 'delivered'; Ok 'Every configured channel accepted the TEST message. Check that it is visible there.' }
+      elseif ($code -eq 8) { $testState = 'timeout'; Warn "No answer within 180 s. The message may still arrive. Check the run history of the flow 'Outage Watch - test notification'." }
+      elseif ($code -eq 7) { $testState = 'failed'; Warn 'The TEST message was NOT delivered to every channel (see the per-channel line above). A wrong or revoked webhook URL answers 404 / 403: set it again with -SetSlackWebhook / -SetWebexWebhook.' }
+      else { $testState = 'failed'; Warn 'The TEST notification could not be requested (message above).' }
+    } else { Warn '-SendTestAlert: no channel is configured (or alerts are off), so nothing was sent.' }
+  }
+
   # ----- summary -----
   Write-Host "`n================ Outage Watch deployed ================" -ForegroundColor Green
   Write-Host "Environment : $EnvironmentId"
-  Write-Host "Dataverse   : $orgUrl  (solution 'OutageWatch': tables owatch_target / owatch_result / owatch_setting)"
+  Write-Host "Dataverse   : $orgUrl  (solution 'OutageWatch': tables owatch_target / owatch_result / owatch_setting / owatch_incident / owatch_command)"
   Write-Host "Probe flow  : 'Outage Watch - probe', every $IntervalMinutes min, results kept $RetentionDays days  ->  https://make.powerautomate.com/environments/$EnvironmentId/flows"
   if ($appUrl) { Write-Host "Dashboard   : $appUrl" -ForegroundColor Green }
   elseif ($SkipDashboard) { Write-Host 'Dashboard   : skipped (-SkipDashboard)' }
@@ -770,8 +782,14 @@ try {
     Write-Host "              created: cloud flow 'Outage Watch - alert' (Power Automate > Solutions > Outage Watch > Cloud flows), table 'Outage Watch Incident'"
     if (@($result.alerts.channels) -contains 'teams') { Write-Host "                       connection reference 'Outage Watch - Teams' (owatch_teams), bound to your Microsoft Teams connection" }
     Write-Host '              Slack / Webex / generic are incoming WEBHOOKS (HTTP action), not connectors: there is no Slack or Webex connection to look for. URLs are never shown.'
-    Write-Host '              see it : re-run with -SendTestAlert; a message titled "TEST - Outage Watch alert test" arrives in every channel within one interval.'
-    Write-Host '              test  : re-run with -SendTestAlert, or set the setting alert_test to yes (a TEST message is sent within one interval)'
+    if ($result.alerts.test -and "$($result.alerts.test.status)" -eq 'on') {
+      Write-Host "              test   : dashboard > 'Send test notification now', or re-run with -SendTestAlert (flow 'Outage Watch - test notification', table 'Outage Watch Command')"
+      Write-Host "                       only people with Create on the table 'Outage Watch Command' can send tests; at most one test every 5 minutes"
+    } else {
+      Write-Host "              test   : NOT AVAILABLE - the flow 'Outage Watch - test notification' could not be created or turned on (message above). Alerts themselves are on." -ForegroundColor Yellow
+    }
+    if ($testState -eq 'delivered') { Write-Host '              TEST   : delivered to every configured channel just now' -ForegroundColor Green }
+    elseif ($testState) { Write-Host '              TEST   : NOT confirmed (see above)' -ForegroundColor Yellow }
     Write-Host '              mute  : set the setting alert_snooze_until to a UTC time such as 2026-12-31T18:00:00Z (probing continues)'
     Write-Host '              change: re-run with -TeamsChannelLink / -SetSlackWebhook / -SetWebexWebhook; remove with -RemoveChannels slack; stop with -NoAlerts'
     Write-Host '              CI    : pipelines read the setting ci_status (see the ci folder); agents: see the agent folder'

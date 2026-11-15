@@ -9,6 +9,7 @@ export const SOLUTION = { uniquename: 'OutageWatch', friendlyname: 'Outage Watch
 export const CONNREF = { logicalName: 'owatch_dataverse', displayName: 'Outage Watch - Dataverse', connectorId: '/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps', api: 'shared_commondataserviceforapps' }
 export const FLOW_NAME = 'Outage Watch - probe'
 export const ALERT_FLOW_NAME = 'Outage Watch - alert'
+export const TEST_FLOW_NAME = 'Outage Watch - test notification'
 export const TEAMS_CONNREF = { logicalName: 'owatch_teams', displayName: 'Outage Watch - Teams', connectorId: '/providers/Microsoft.PowerApps/apis/shared_teams', api: 'shared_teams' }
 export const SCHEMA_VERSION = '3'
 /** Targets renamed since the 15-target version: old name -> new name. */
@@ -72,6 +73,14 @@ export const TABLES = [
   table('owatch_setting', 'Outage Watch Setting', 'Outage Watch Settings', 'Name/value settings read by the dashboard.', 'Name', 100, [
     str('owatch_value', 'Value', 400, 'Setting value (never a secret).'),
   ]),
+  table('owatch_command', 'Outage Watch Command', 'Outage Watch Commands', 'Requests from the dashboard to the flows. Creating a row named test_notification makes the test-notification flow send a live status message. Give CREATE on this table to admins only.', 'Command', 100, [
+    str('owatch_channels', 'Channels', 100, 'all, or a comma list of teams,slack,webex,webhook.'),
+    str('owatch_note', 'Note', 200, 'Optional short note shown in the test message (plain text, escaped per channel).'),
+    str('owatch_requestedby', 'Requested by', 100, 'Name of the person who pressed the button, as stated by the dashboard.'),
+    str('owatch_status', 'Status', 40, 'queued, sending, done, partial, failed or rejected. Written by the flow.'),
+    str('owatch_result', 'Result', 400, 'Per-channel outcome, e.g. teams=delivered; slack=FAILED HTTP 404. Never contains a URL.'),
+    datetime('owatch_completedat', 'Completed at', 'When the flow finished the command.'),
+  ]),
   table('owatch_incident', 'Outage Watch Incident', 'Outage Watch Incidents', 'One row per announced failure of one service: opened by the alert flow, closed when the service answers again.', 'Service', 100, [
     str('owatch_family', 'Family', 100, 'Service family at the time of the incident.'),
     datetime('owatch_openedat', 'Failing since', 'First failed probe of the streak that led to this incident.'),
@@ -123,7 +132,9 @@ export function seedSettings(o) {
     { name: 'alert_test', value: 'no' },                     // 'yes' = post a TEST message on the next run, then reset to 'no'
     // --- written by the alert flow (do not edit): ---
     { name: 'alert_channels_off', value: '' },             // e.g. "slack,webex": configured channels that should stay silent for now
-    { name: 'alert_last_round', value: '' }, { name: 'last_alert_at', value: '' },
+    { name: 'alert_last_round', value: '' }, { name: 'last_alert_at', value: '' }, { name: 'alert_stale_notified', value: '' },
+    { name: 'test_button', value: 'no' },                   // yes while the test-notification flow is on (the dashboard shows the button as usable)
+    { name: 'last_test_at', value: '' },                   // rate limit of the test-notification button
     { name: 'last_delivery_teams', value: '' }, { name: 'last_delivery_slack', value: '' }, { name: 'last_delivery_webex', value: '' }, { name: 'last_delivery_webhook', value: '' },
     { name: 'ci_status', value: '' },                      // machine-readable ok | caution | freeze for pipelines and agents
   ]

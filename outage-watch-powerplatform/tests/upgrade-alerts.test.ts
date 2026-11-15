@@ -37,6 +37,7 @@ async function deployed24090f5() {
   const db = mock.db
   // no incident table, no alert columns
   db.owatch_incidents = undefined; mock.entities.delete('owatch_incident')
+  delete db.owatch_commands; mock.entities.delete('owatch_command')
   for (const c of NEW_TARGET_COLS) { mock.entities.get('owatch_target').attributes.delete(c); for (const r of db.owatch_targets) delete r[c] }
   for (const c of NEW_RESULT_COLS) mock.entities.get('owatch_result').attributes.delete(c)
   // settings exactly as that version wrote them
@@ -62,7 +63,7 @@ describe('upgrade from the deployed version (24090f5) to alerts + incidents + CI
     const e = await deployed24090f5()
     const r = await apply(e.client, BASE)
     expect(e.mock.problems).toEqual([])
-    expect(r.created.filter((c: string) => c.startsWith('table '))).toEqual(['table owatch_incident'])
+    expect(r.created.filter((c: string) => c.startsWith('table '))).toEqual(['table owatch_command', 'table owatch_incident'])
     expect(r.created.filter((c: string) => c.startsWith('column owatch_target.') || c.startsWith('column owatch_result.')).sort()).toEqual([...NEW_RESULT_COLS.map((c) => 'column owatch_result.' + c), ...NEW_TARGET_COLS.map((c) => 'column owatch_target.' + c)].sort())
     expect(r.created.some((c: string) => c.startsWith('target '))).toBe(false)
     expect(JSON.stringify(e.mock.db.owatch_targets)).toBe(e.targetsBefore)                    // 36 rows byte-for-byte, incl. the admin's disabled one
@@ -93,7 +94,7 @@ describe('upgrade from the deployed version (24090f5) to alerts + incidents + CI
     const r = await apply(e.client, { ...BASE, teams: parseTeamsChannelLink(LINK), teamsConnectionId: 'ffffffffbbbbccccddddeeeeeeeeeeee', webhooks: { slack: SLACK }, sendTestAlert: true }, (t: string) => lines.push(t))
     expect(e.mock.problems).toEqual([])
     expect(r.alerts).toMatchObject({ status: 'on', channels: ['teams', 'slack'] })
-    expect(e.mock.db.workflows.map((w: any) => [w.name, w.statecode]).sort()).toEqual([['Outage Watch - alert', 1], ['Outage Watch - probe', 1]])
+    expect(e.mock.db.workflows.map((w: any) => [w.name, w.statecode]).sort()).toEqual([['Outage Watch - alert', 1], ['Outage Watch - probe', 1], ['Outage Watch - test notification', 1]])
     expect(e.mock.db.connectionreferences.map((c: any) => c.connectionreferencelogicalname).sort()).toEqual(['owatch_dataverse', 'owatch_teams'])
     const set = (n: string) => e.mock.db.owatch_settings.find((s: any) => s.owatch_name === n)?.owatch_value
     expect([set('alert_configured'), set('alert_channels'), set('alert_channel_name'), set('alert_test')]).toEqual(['yes', 'teams,slack', 'Ops Alerts', 'yes'])
@@ -101,7 +102,7 @@ describe('upgrade from the deployed version (24090f5) to alerts + incidents + CI
     const everywhere = JSON.stringify(e.mock.db.owatch_settings) + JSON.stringify(e.mock.db.owatch_targets) + JSON.stringify(r) + lines.join('\n') + JSON.stringify(e.mock.db.connectionreferences)
     expect(everywhere).not.toContain('SECRET'); expect(everywhere).not.toContain('hooks.slack.com')
     expect(existingChannels(e.mock.db.workflows.find((w: any) => w.name === 'Outage Watch - alert').clientdata).slack).toBe(SLACK)
-    expect(r.estimate).toMatchObject({ probePerDay: 15264, alertPerDay: 3600, perDay: 18864, pctOf40k: 47, high: false })
+    expect(r.estimate).toMatchObject({ probePerDay: 15264, alertPerDay: 4032, perDay: 19296, pctOf40k: 48, high: false })
     // later runs without channel options keep both channels and write nothing
     e.mock.log.length = 0
     const again = await apply(e.client, BASE)
@@ -110,7 +111,7 @@ describe('upgrade from the deployed version (24090f5) to alerts + incidents + CI
     // add Webex, remove Slack: one flow, updated in place
     const third = await apply(e.client, { ...BASE, webhooks: { webex: 'https://webexapis.com/v1/webhooks/incoming/webexSECRETid' }, removeChannels: ['slack'] })
     expect(third.alerts.channels).toEqual(['teams', 'webex'])
-    expect(e.mock.db.workflows).toHaveLength(2)
+    expect(e.mock.db.workflows).toHaveLength(3)
     expect(JSON.stringify(e.mock.db.workflows)).not.toContain('hooks.slack.com')
   })
 
@@ -119,7 +120,7 @@ describe('upgrade from the deployed version (24090f5) to alerts + incidents + CI
     await expect(apply(e.client, { ...BASE, teams: parseTeamsChannelLink(LINK) })).rejects.toBeInstanceOf(NeedsTeamsConnection)
     expect(e.mock.entities.has('owatch_incident')).toBe(true); expect(e.mock.db.workflows[0].statecode).toBe(1)      // probing is back on before alerts are attempted
     const r = await apply(e.client, { ...BASE, teams: parseTeamsChannelLink(LINK), teamsConnectionId: 'ffffffffbbbbccccddddeeeeeeeeeeee' })
-    expect(r.alerts.status).toBe('on'); expect(e.mock.db.workflows).toHaveLength(2)
+    expect(r.alerts.status).toBe('on'); expect(e.mock.db.workflows).toHaveLength(3)
   })
 
   it('if the service rejects the alert flow, the deployment still succeeds and says exactly why alerts are not active', async () => {
@@ -141,10 +142,10 @@ describe('upgrade from the deployed version (24090f5) to alerts + incidents + CI
     await apply(e.client, withTeams)
     const off = await apply(e.client, { ...BASE, noAlerts: true })
     expect(off.alerts.status).toBe('disabled')
-    expect(e.mock.db.workflows.map((w: any) => [w.name, w.statecode]).sort()).toEqual([['Outage Watch - alert', 0], ['Outage Watch - probe', 1]])
+    expect(e.mock.db.workflows.map((w: any) => [w.name, w.statecode]).sort()).toEqual([['Outage Watch - alert', 0], ['Outage Watch - probe', 1], ['Outage Watch - test notification', 0]])
     expect((await apply(e.client, BASE)).alerts.status).toBe('on')                              // a run without -NoAlerts turns it back on with the kept channel
     await uninstall(e.client, { purge: false })
-    expect(e.mock.db.workflows).toEqual([]); expect(e.mock.entities.size).toBe(4)
+    expect(e.mock.db.workflows).toEqual([]); expect(e.mock.entities.size).toBe(5)
     await apply(e.client, withTeams)
     await uninstall(e.client, { purge: true })
     expect(e.mock.entities.size).toBe(0); expect(e.mock.db.connectionreferences).toEqual([]); expect(e.mock.problems).toEqual([])
@@ -180,11 +181,12 @@ describe('CLI: channels, secrets from the environment only, exit codes', () => {
     const r = await run(['plan', '--teams-channel-link', LINK], { OWPP_SLACK_WEBHOOK: SLACK, OWPP_WEBEX_WEBHOOK: 'https://webexapis.com/v1/webhooks/incoming/webexSECRETid' })
     expect(r.code).toBe(0)
     expect(r.out).toContain("EntityDefinitions(LogicalName='owatch_incident')")
-    expect((r.out.match(/POST   workflows/g) ?? []).length).toBe(2)
+    expect((r.out.match(/POST   workflows/g) ?? []).length).toBe(3)                               // probe, alert, test notification
+    expect(r.out).toContain("EntityDefinitions(LogicalName='owatch_command')"); expect(r.out).toContain('Test button: ON'); expect(r.out).toMatch(/Test button: ~29 requests per test|Test button: ~35 requests per test/)
     expect((r.out.match(/POST   connectionreferences/g) ?? []).length).toBe(2)
     expect(r.out).toContain('Alerts: ON to teams, slack, webex')
-    expect(r.out).toMatch(/Alert flow: 144 runs\/day x ~25 actions when nothing is failing = ~3,600 requests\/day/)
-    expect(r.out).toMatch(/TOTAL: ~19,152 requests\/day = about 48% of the 40,000/)
+    expect(r.out).toMatch(/Alert flow: 144 runs\/day x ~28 actions when nothing is failing = ~4,032 requests\/day/)
+    expect(r.out).toMatch(/TOTAL: ~19,584 requests\/day = about 49% of the 40,000/)
     expect(r.out).not.toContain('SECRET'); expect(r.out).not.toContain('hooks.slack.com')
   }, 30000)
 })
@@ -192,6 +194,8 @@ describe('CLI: channels, secrets from the environment only, exit codes', () => {
 // ------------------------------------------------------------------------------------------------
 // @ts-expect-error test fixture
 import { buildAlertClientData as alertFlow5a09ecd } from './helpers/alert-flow-5a09ecd.mjs'
+// @ts-expect-error plain .mjs helpers
+import { buildAlertClientData as alertFlow1cf41bd } from './helpers/alert-flow-1cf41bd.mjs'
 
 describe('upgrade from commit 5a09ecd (alerts already deployed) to the insights version', () => {
   const NEW_SETTINGS = ['drift_percent', 'drift_min_ms', 'flap_changes', 'impact_headcount']
@@ -233,9 +237,86 @@ describe('upgrade from commit 5a09ecd (alerts already deployed) to the insights 
     expect(e.mock.db.owatch_settings.find((s: any) => s.owatch_name === 'alert_last_round').owatch_value).toBe('2026-11-15T09:20:00Z')
     expect(lines.join('\n') + JSON.stringify(r) + JSON.stringify(e.mock.db.owatch_settings)).not.toContain('SECRET')
     for (const s of e.mock.db.owatch_settings) expect(rowViolations('owatch_setting', { owatch_name: s.owatch_name, owatch_value: s.owatch_value }), s.owatch_name).toEqual([])
-    expect(r.estimate).toMatchObject({ alertPerDay: 3600, pctOf40k: 48, high: false })           // quota unchanged: insights run in the browser
+    expect(r.estimate).toMatchObject({ alertPerDay: 4032, pctOf40k: 49, high: false })           // quota unchanged: insights run in the browser
     e.mock.log.length = 0
     await apply(e.client, BASE)
     expect(e.mock.log.filter((l: any) => l.method !== 'GET')).toEqual([])
+  })
+})
+
+describe('upgrade from commit 1cf41bd (the deployed version) to delivery-checked alerts + the test-notification button', () => {
+  const NEW_SETTINGS = ['alert_stale_notified', 'last_test_at', 'test_button']
+  async function deployed1cf41bd() {
+    const mock = createMockDataverse({ autoRun: false }); const srv = await mock.listen(); closers.push(srv.close)
+    const client = createClient({ orgUrl: srv.url, token: mock.token, sleep: async () => {} })
+    await apply(client, { ...BASE, teams: parseTeamsChannelLink(LINK), teamsConnectionId: 'ffffffffbbbbccccddddeeeeeeeeeeee', webhooks: { slack: SLACK } })
+    const db = mock.db
+    // back to what that commit had: its alert flow, no command table, no test flow, none of the new settings
+    const alert = db.workflows.find((w: any) => w.name === 'Outage Watch - alert')
+    alert.clientdata = JSON.stringify(alertFlow1cf41bd({ intervalMinutes: 10, channels: { teams: { groupId: '11111111-2222-3333-4444-555555555555', channelId: '19:aBc123_-xyz@thread.tacv2' }, slack: SLACK }, sets: { target: 'owatch_targets', result: 'owatch_results', setting: 'owatch_settings', incident: 'owatch_incidents' } }))
+    db.workflows.splice(db.workflows.findIndex((w: any) => w.name === 'Outage Watch - test notification'), 1)
+    mock.entities.delete('owatch_command'); delete db.owatch_commands
+    db.owatch_settings = db.owatch_settings.filter((s: any) => !NEW_SETTINGS.includes(s.owatch_name))
+    db.owatch_incidents = [{ owatch_incidentid: '12121212-1212-4121-8121-121212121212', owatch_name: 'exchange', owatch_family: 'Exchange', owatch_isopen: true, owatch_openedat: '2026-11-15T08:10:00Z', owatch_closedat: '2000-01-01T00:00:00Z', owatch_firsterror: 'HTTP 503 - x', owatch_reminders: 1, owatch_durationminutes: 60, owatch_failedrounds: 7 }]
+    Object.assign(db.owatch_targets.find((t: any) => t.owatch_name === 'exchange'), { owatch_failcount: 7, owatch_alertopen: true, owatch_failingsince: '2026-11-15T08:10:00Z', owatch_lastalertat: '2026-11-15T09:23:00Z', owatch_lastok: '2026-11-15T08:00:00Z' })
+    db.owatch_settings.find((s: any) => s.owatch_name === 'alert_reminder_minutes').owatch_value = '120'
+    db.owatch_settings.find((s: any) => s.owatch_name === 'drift_percent').owatch_value = '75'
+    mock.log.length = 0
+    return { mock, client, alertId: alert.workflowid as string, probe: JSON.stringify(db.workflows.find((w: any) => w.name === 'Outage Watch - probe')), targets: JSON.stringify(db.owatch_targets), results: JSON.stringify(db.owatch_results ?? []), incidents: JSON.stringify(db.owatch_incidents) }
+  }
+
+  it('plain re-run adds the command table, the third flow and three settings, replaces the alert flow definition in place; nothing else changes and a second run changes nothing', async () => {
+    const e = await deployed1cf41bd()
+    const lines: string[] = []
+    const r = await apply(e.client, BASE, (t: string) => lines.push(t))
+    expect(e.mock.problems).toEqual([])
+    const writes = e.mock.log.filter((l: any) => l.method !== 'GET').map((l: any) => `${l.method} ${l.path.replace(/\(.*/, '')}`)
+    expect(writes.filter((w: string) => w.startsWith('DELETE'))).toEqual([])
+    expect(writes.filter((w: string) => w === 'POST workflows')).toHaveLength(1)                      // only the new test-notification flow
+    expect(writes.filter((w: string) => w === 'POST owatch_settings')).toHaveLength(NEW_SETTINGS.length)
+    expect(writes.filter((w: string) => /owatch_(targets|results|incidents)/.test(w))).toEqual([])     // no data row is written
+    expect(r.created).toEqual(expect.arrayContaining(['cloud flow "Outage Watch - test notification"', ...NEW_SETTINGS.map((n) => 'setting ' + n)]))
+    expect(r.created.filter((c: string) => !/owatch_command|test notification|^setting /.test(c))).toEqual([])
+    expect(r.updated.filter((u: string) => !/test_button/.test(u))).toEqual(['cloud flow "Outage Watch - alert" definition', 'cloud flow "Outage Watch - alert" turned ON', 'cloud flow "Outage Watch - test notification" turned ON'])
+    expect(e.mock.entities.has('owatch_command')).toBe(true)
+    expect([...e.mock.entities.get('owatch_command').attributes.keys()].sort()).toEqual(['owatch_channels', 'owatch_commandid', 'owatch_completedat', 'owatch_name', 'owatch_note', 'owatch_requestedby', 'owatch_result', 'owatch_status'])
+    const alert = e.mock.db.workflows.find((w: any) => w.name === 'Outage Watch - alert')
+    expect(alert.workflowid).toBe(e.alertId); expect(alert.statecode).toBe(1)
+    expect(alert.clientdata).toContain('If_delivered'); expect(alert.clientdata).toContain('message shortened')
+    expect(existingChannels(alert.clientdata)).toEqual({ teams: { groupId: '11111111-2222-3333-4444-555555555555', channelId: '19:aBc123_-xyz@thread.tacv2' }, slack: SLACK, webex: null, webhook: null })
+    const test = e.mock.db.workflows.find((w: any) => w.name === 'Outage Watch - test notification')
+    expect(test.statecode).toBe(1)
+    expect(test.clientdata.split(SLACK).length - 1).toBe(1)                                            // the kept Slack webhook is carried into the new flow, once
+    expect(r.alerts).toMatchObject({ status: 'on', channels: ['teams', 'slack'], test: { status: 'on' } })
+    expect(JSON.stringify(e.mock.db.workflows.find((w: any) => w.name === 'Outage Watch - probe'))).toBe(e.probe)
+    expect(JSON.stringify(e.mock.db.owatch_targets)).toBe(e.targets); expect(JSON.stringify(e.mock.db.owatch_incidents)).toBe(e.incidents); expect(JSON.stringify(e.mock.db.owatch_results ?? [])).toBe(e.results)
+    expect(e.mock.db.owatch_settings.find((s: any) => s.owatch_name === 'alert_reminder_minutes').owatch_value).toBe('120')
+    expect(e.mock.db.owatch_settings.find((s: any) => s.owatch_name === 'drift_percent').owatch_value).toBe('75')
+    expect(e.mock.db.owatch_settings.find((s: any) => s.owatch_name === 'test_button').owatch_value).toBe('yes')
+    expect(lines.join('\n') + JSON.stringify(r) + JSON.stringify(e.mock.db.owatch_settings)).not.toContain('SECRET')
+    for (const s of e.mock.db.owatch_settings) expect(rowViolations('owatch_setting', { owatch_name: s.owatch_name, owatch_value: s.owatch_value }), s.owatch_name).toEqual([])
+    expect(r.estimate).toMatchObject({ alertPerDay: 4032, pctOf40k: 49, high: false, testWorstCasePerDay: 288 * 29 })
+    e.mock.log.length = 0
+    await apply(e.client, BASE)
+    expect(e.mock.log.filter((l: any) => l.method !== 'GET')).toEqual([])
+  })
+
+  it('the test-notification flow cannot be created (e.g. trigger rejected): alerts stay ON, the button is reported as not active, the deployment does not fail', async () => {
+    const e = await deployed1cf41bd()
+    e.mock.state.failTestCreate = 'The trigger operation is not valid.'
+    const lines: string[] = []
+    const r = await apply(e.client, BASE, (t: string) => lines.push(t))
+    expect(r.alerts.status).toBe('on'); expect(r.alerts.test.status).toBe('failed')
+    expect(e.mock.db.workflows.find((w: any) => w.name === 'Outage Watch - alert').statecode).toBe(1)
+    expect(e.mock.db.owatch_settings.find((s: any) => s.owatch_name === 'test_button').owatch_value).toBe('no')
+    expect(lines.join('\n')).toContain('TEST-NOTIFICATION FLOW NOT ACTIVE')
+  })
+
+  it('-NoAlerts turns the test flow off too', async () => {
+    const e = await deployed1cf41bd()
+    await apply(e.client, BASE)
+    await apply(e.client, { ...BASE, noAlerts: true })
+    expect(e.mock.db.workflows.map((w: any) => [w.name, w.statecode]).sort()).toEqual([['Outage Watch - alert', 0], ['Outage Watch - probe', 1], ['Outage Watch - test notification', 0]])
+    expect(e.mock.db.owatch_settings.find((s: any) => s.owatch_name === 'test_button').owatch_value).toBe('no')
   })
 })

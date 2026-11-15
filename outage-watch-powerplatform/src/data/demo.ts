@@ -6,7 +6,7 @@
  */
 import catalog from '../../shared/catalog.json'
 import type { RawRow } from '../logic/classify'
-import type { DataSource, Snapshot, TargetRow } from './types'
+import type { DataSource, Notifier, Snapshot, TargetRow } from './types'
 
 /** 34 fixed services + the two tenant-specific ones, which are "unconfigured" unless a tenant name is given. */
 export function demoTargetList(tenant: string | null): TargetRow[] {
@@ -71,10 +71,31 @@ export function simulateRows(names: string[], rounds: number, endMs: number, ste
 
 /** Demo source. `staleMinutes` makes the newest row that old (to show the STALE banner). */
 /** `alerts`: 'on' = channels configured with sample deliveries and incidents, 'off' = not configured (the default). */
-export function demoSource(staleMinutes = 0, tenant: string | null = null, alerts: 'on' | 'off' = 'off'): DataSource {
+/** Demo stand-in for the test-notification flow: queued -> sending -> the chosen outcome. Sends nothing anywhere. */
+export function demoNotifier(outcome = 'done', stepMs = 3500): Notifier {
+  const RESULT: Record<string, string> = {
+    done: 'teams=delivered; slack=delivered; webex=delivered; webhook=not configured',
+    partial: 'teams=delivered; slack=delivered; webex=FAILED HTTP 404; webhook=not configured',
+    failed: 'teams=FAILED Forbidden; slack=FAILED HTTP 404; webex=FAILED HTTP 404; webhook=not configured',
+    rejected: 'rate limit: one test every 5 minutes',
+  }
+  let started = 0
+  return {
+    async request() { if (outcome === 'denied') throw new Error("Principal user is missing prvCreateowatch_command privilege (HTTP 403)"); started = Date.now(); return '00000000-0000-4000-8000-00000000d3m0' },
+    async poll() {
+      const age = Date.now() - started
+      if (outcome === 'timeout' || age < stepMs) return { status: 'queued', result: '' }
+      if (age < 2 * stepMs && outcome !== 'rejected') return { status: 'sending', result: '' }
+      return { status: outcome in RESULT ? outcome : 'done', result: RESULT[outcome] ?? RESULT.done }
+    },
+  }
+}
+
+export function demoSource(staleMinutes = 0, tenant: string | null = null, alerts: 'on' | 'off' = 'off', notify = 'done'): DataSource {
   const targets = demoTargetList(tenant)
   return {
     kind: 'demo',
+    notifier: demoNotifier(notify),
     async load(): Promise<Snapshot> {
       const interval = catalog.defaults.intervalMinutes
       const end = Date.now() - staleMinutes * 60_000 - 20_000
@@ -85,7 +106,7 @@ export function demoSource(staleMinutes = 0, tenant: string | null = null, alert
           interval_minutes: String(interval), retention_days: String(catalog.defaults.retentionDays), heartbeat_configured: 'no',
           ...(alerts === 'on' ? {
             impact_headcount: 'Email & calendar=240; Meetings=310; Dashboards & reporting=45',
-            alert_configured: 'yes', alert_channels: 'teams,slack,webex', alert_channel_name: 'Ops Alerts', alert_enabled: 'yes', alert_snooze_until: '', alert_channels_off: '',
+            alert_configured: 'yes', test_button: 'yes', alert_channels: 'teams,slack,webex', alert_channel_name: 'Ops Alerts', alert_enabled: 'yes', alert_snooze_until: '', alert_channels_off: '',
             last_alert_at: iso(end - 95 * 60_000), last_delivery_teams: 'ok ' + iso(end - 95 * 60_000), last_delivery_slack: 'ok ' + iso(end - 95 * 60_000),
             last_delivery_webex: 'FAILED ' + iso(end - 95 * 60_000) + ' HTTP 404 NotFound',
             ci_status: JSON.stringify({ level: 'ok', since: iso(end - 95 * 60_000), updated: iso(end), round: iso(end), failing: 0, confirmed: 0, services: '' }),

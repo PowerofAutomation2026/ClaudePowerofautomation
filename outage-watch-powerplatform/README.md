@@ -32,6 +32,7 @@ unconfirmed item.
 | Cloud flow `Outage Watch - probe` | every 10 min: unauthenticated `GET` on every enabled target, **all in parallel** (no retries, 10 s timeout, async polling off), **one raw row per probe**, prune rows older than the retention, optional heartbeat ping. The flow never decides whether something is "up" |
 | Connection reference `owatch_dataverse` | binds the flow to your Microsoft Dataverse connection |
 | Cloud flow `Outage Watch - alert` (only when a channel is configured) | tells Teams / Slack / Webex / a webhook when a service fails, keeps failing or recovers; keeps incident records (`owatch_incident`) and the CI status row. Separate from the probe flow on purpose |
+| Table `owatch_command` + cloud flow `Outage Watch - test notification` (only when a channel is configured) | the dashboard button "Send test notification now" (and `-SendTestAlert`) writes one row; the flow, started by the Dataverse trigger "When a row is added", posts a live TEST message with the current status and writes each channel's result back to the row |
 | Code app `Outage Watch` (React + TypeScript) | reads the tables, computes states **in the browser** with a tested port of the Python logic, shows the blast-radius map (family clusters on a sign-in bus and a Copilot bus, filter box, "show only problems", collapsible families), "Can I do my job?" (11 tasks), STALE banner, and a clearly labelled SIMULATION mode |
 
 ## Requirements
@@ -161,11 +162,12 @@ exact command, and the dashboard panel "Alerts, CI gate and incidents" shows the
 3. For Teams: the same solution > **Connection references**: **Outage Watch - Teams** (`owatch_teams`), connected.
    **Slack and Webex have no connection or connector to look for**: they are incoming *webhooks* called by an HTTP
    action inside the alert flow, so nothing appears under Connections.
-4. Run with `-SendTestAlert`: within one probe interval (10 minutes by default, plus up to 2 minutes) a message
-   that starts with "TEST - Outage Watch alert test" arrives in every channel.
+4. Press **Send test notification now** on the dashboard (or run with `-SendTestAlert`): a message that starts with
+   "TEST - Outage Watch live status" arrives in every channel, usually within about a minute (it can take longer),
+   and the button / the script shows each channel's result.
 5. Dashboard > "Alerts, CI gate and incidents": each channel shows "delivered <time>" or the failure.
 
-If step 4 brings nothing: open the run history of "Outage Watch - alert" and see Troubleshooting > Alerts. None of
+If step 4 brings nothing: open the run history of "Outage Watch - test notification" and see Troubleshooting > Alerts. None of
 this was observed on a real tenant by the author.
 
 ### Set it up
@@ -185,15 +187,70 @@ Deploy-OutageWatchPP.cmd <environment-id> -TeamsChannelLink "<link>" -SetSlackWe
 - Unattended (`-Yes`): `OUTAGEWATCH_SLACK_WEBHOOK`, `OUTAGEWATCH_WEBEX_WEBHOOK`, `OUTAGEWATCH_ALERT_WEBHOOK`
   environment variables; `-TeamsChannelLink` as a parameter (a channel link is not a secret). With `-Yes` and no
   channel at all, alerts stay unconfigured and the summary says so.
-- **Test**: `-SendTestAlert`, or set the setting `alert_test` to `yes`: a clearly labelled TEST goes to every
-  channel within one interval and the flag resets. **Mute**: setting `alert_snooze_until` = a UTC time such as
+- **Test**: the dashboard button or `-SendTestAlert` (next section). **Mute**: setting `alert_snooze_until` = a UTC time such as
   `2026-12-31T18:00:00Z` (probing, incidents and the CI status continue). **Silence one channel**: setting
   `alert_channels_off` = `slack,webex`. **Change channel**: re-run with the new link / flag. **Remove**:
   `-RemoveChannels slack`. **Stop**: `-NoAlerts`. Channels are kept between runs unless you change them.
 
+### Send a test notification now (dashboard button, `-SendTestAlert`, command line)
+
+**Status: built and tested against the mock and the interpreter only. The trigger definition and the code app's
+write call have never run on a real tenant** (DESIGN.md, Unconfirmed 46-50).
+
+Dashboard > "Alerts, CI gate and incidents" > **Test the notifications**: choose *all configured* or one channel,
+optionally add a short note, press **Send test notification now**, confirm in the page. What happens:
+
+1. The dashboard creates **one row** in the table `owatch_command` (`test_notification`, the chosen channels, the
+   note, your display name). The browser never sees a webhook URL and never posts to a channel.
+2. The flow **Outage Watch - test notification** is started by the Dataverse trigger for new rows of that table. It
+   reads the newest complete probe round and builds a message labelled **TEST** with: who asked and when (UTC), the
+   level (ok / caution / freeze), "all N services answered" or the failing services with HTTP status, time and error
+   text (10 at most, then "... and N more"), the families affected, the dashboard link, and the same-fate note.
+3. It posts to each selected channel **independently**, with exactly the post actions and encodings of a real alert,
+   and writes the outcome to the row: `teams=delivered; slack=FAILED HTTP 404; webex=not selected; ...`. For a
+   failure only the HTTP status (Teams: the error code) is stored, never an error text or a URL.
+4. The dashboard polls the row and shows: **queued**, **sending**, **delivered** / **failed** per channel, **not
+   sent** (rate limit), **timed out** (no answer after 3 minutes; the message may still arrive), **not allowed**.
+
+- **How fast:** usually within about a minute; it can take longer. Microsoft's documentation of the trigger gives
+  no time; nothing here measured it on a real tenant.
+- **Who may press it:** whoever may **create** rows in `owatch_command`. System Administrators and System
+  Customizers can; nobody else can until you add **Create + Read on "Outage Watch Command"** to one of their roles
+  (Power Platform admin centre > environment > Security roles). The script does not create a role. Without the
+  privilege Dataverse answers 403 and the dashboard says "NOT ALLOWED" with this explanation. Give viewers only Read.
+- **Rate limit:** one test per 5 minutes for the whole environment (setting `last_test_at`); a second request gets
+  "NOT SENT". A trigger that fires twice for one row is ignored (the row is no longer `queued`). Command rows older
+  than 7 days are deleted by the flow.
+- **A test is not an alert:** it changes no alert state, opens no incident, and is sent even while alerts are
+  snoozed or a channel is listed in `alert_channels_off`.
+- **Button disabled?** The page says why: no channel configured (with the command to run), the test flow is not on
+  (re-run the deploy script and read its "Alerts" line), a test was sent less than 5 minutes ago, or one is running.
+- **Command line** (same mechanism; exit code 0 = every selected channel delivered, 7 = not delivered / rejected,
+  8 = no answer in time): `Deploy-OutageWatchPP.cmd <environment-id> -SendTestAlert` sends to all channels after
+  deploying and waits up to 180 s. By hand, with a Dataverse token in `OWPP_TOKEN`:
+  `node provision/owpp.mjs test-notification --org-url https://<org>.crm.dynamics.com [--channels slack,webex] [--note "text"]`.
+- Cost: about 35 requests per test with four channels (26 with one). Nothing while unused.
+
+### Alert flow audit (this version): defects found and fixed
+
+Found by reading the generated definition against the workflow language rules and by adversarial runs in the
+interpreter; none was observed on a tenant. Each has a regression test in `tests/alert-flow.test.ts` ("audit").
+
+| # | Severity | What was wrong | Now |
+|---|---|---|---|
+| D1 | high | Alert state ("announced", "last alert at") was saved **before** the posts. If every channel failed, the failure counted as announced: nothing more until the next reminder (60 min by default). | State is kept only if at least one channel accepted the message; otherwise this round's changes are rolled back and the event is announced again next round. Incident creation is idempotent. |
+| D7 | high | Probe flow stopped (turned off, throttled, licence): no new rounds, so the alert flow stayed silent. | One "PROBING STOPPED" message when the newest round is older than 3 intervals + 5 min; once per stale period. |
+| D9 | high | A target with **no result row** in a round (probe run cut short) was treated as recovered: false "RECOVERED" and a closed incident. | Missing row = unknown: nothing changes for that target in that round. |
+| D8 | medium | A target disabled during an incident was announced as "answering again". | "[CLOSED] ... no longer monitored". |
+| D2 | medium | Size caps counted characters, not bytes, and cut silently. Webex accepts 7,439 bytes; emoji and non-Latin text are 3-4 bytes each. | Caps are in UTF-16 units chosen so the worst case fits in bytes (Webex 2,400 units = at most 7,200 bytes; Teams 8,000 after escaping); a cut message ends with a visible "[message shortened ...]" line. |
+
+Known and accepted: reminders count attempts; an incident closes at the first observed recovery even if that
+message could not be delivered; webhook posts are not retried inside a run (the next round retries undelivered
+events instead); silencing every channel behaves like a snooze.
+
 **Where the webhook URLs are kept.** A webhook URL is a credential. It is never a command-line value, never
-printed, never written to a table, a setting, the dashboard or the summary. It is stored in one place: the
-definition of the alert flow, on an HTTP action with secure inputs and outputs (so it stays out of the run
+printed, never written to a table, a setting, the dashboard or the summary. It is stored only in the
+definitions of the alert flow and the test-notification flow, on HTTP actions with secure inputs and outputs (so it stays out of the run
 history). Trade-off: flow owners / co-owners and system administrators can read it there. Dataverse "secret"
 environment variables backed by Azure Key Vault would be stronger; they need a Key Vault and could not be
 verified here, so they are not used. For a failed webhook delivery only the HTTP status is recorded, never the
@@ -247,13 +304,14 @@ enabled target (probe, record) + about 1 delete per target once pruning is in st
 | 34 | 3 min | 108 | 480 | 51,840 | 130% - throttled |
 | 15 (the earlier version) | 5 min | 51 | 288 | 14,688 | 37% |
 
-**With alerts on, add the alert flow:** about 25 requests per run when nothing is failing = **3,600/day** at 10
-minutes. Default total (34 targets, 10 minutes, alerts on): **19,152 requests/day = 48% of 40,000** (36 targets:
-20,016 = 50%). While something fails, each failing service adds about 10 requests per run, and each posted message
-about 10 plus 3 per channel: a day with 5 services down all day and hourly reminders costs roughly 7,500 more
-(about 67% in total) - still inside one licence, and exactly the day you want the monitor to keep running. At 5
-minutes with alerts the quiet-day total is 38,304 (96%): do not combine a 5-minute interval with alerts on one
-Premium licence. Unconfirmed: whether a Teams post or a skipped branch is counted differently; the figures count
+**With alerts on, add the alert flow:** 28 requests per run when nothing is failing = **4,032/day** at 10
+minutes. Default total (34 targets, 10 minutes, alerts on): **19,584 requests/day = 49% of 40,000** (37 targets
+with SharePoint / OneDrive: 20,880 = 52%). While something fails, each failing service adds about 7 requests per
+run and each posted message about 12: a day with 5 services down all day and hourly reminders stays well inside
+one licence. At 5 minutes with alerts the quiet-day total is 39,168 (98%): do not combine a 5-minute interval with
+alerts on one Premium licence. **The test button** costs about 35 requests per test (four channels) and nothing
+while unused; the 5-minute rate limit caps it at 288 tests = 10,080 requests/day (25% of the licence) - only if
+someone presses it every 5 minutes for 24 hours. It is not included in the totals. Unconfirmed: whether a Teams post or a skipped branch is counted differently; the figures count
 every action that runs once.
 
 **The default interval was raised from 5 to 10 minutes when the catalogue grew from 15 to 36 services**, because
@@ -317,7 +375,7 @@ Run the same command again. The upgrade is additive and tested against a mock of
 
 ## What was verified, and what was not
 
-Verified here (`npm test`, 283 tests; `npm run build`; headless Chromium):
+Verified here (`npm test`, 319 tests; `npm run build`; headless Chromium):
 
 - the TypeScript logic against **golden cases produced by the real Python code** (`tests/golden/gen_golden.py`
   runs the updated 36-service `outage-watch/outagewatch.py`): the catalogue itself (36 services, URLs, alive codes,
@@ -356,6 +414,17 @@ also checked against the column limits (the mock enforces them; added after the 
   settings added, probe flow updated in place, 36 targets and all results untouched, idempotent.
 - Column limits: every value either flow writes is bounded and the mock rejects anything too long.
 - The CI gate script against the mock; the pipeline YAML and the PowerShell gate were **not** run.
+- This version: the alert-flow audit (table above) with a 150-round adversarial comparison of interpreter and
+  reference; the **test-notification flow executed by the interpreter** and compared with its reference
+  (`provision/lib/test-logic.mjs`): healthy / failing / more than 10 failing / no round yet, every combination of
+  failing channels (16), duplicate trigger, rate limit, hostile note and requester, pruning, permission denied
+  (mock answers 403), CLI exit codes; upgrade from the deployed commit 1cf41bd (its real alert-flow definition):
+  one table, one flow and three settings added, alert flow replaced in place, no data row written, second run
+  writes nothing. The button's states were rendered from the demo layer in headless Chromium at 1440 / 360 / 390 /
+  412 px, dark and light, with an interactive walk (choose Slack, confirm, queued > sending > result).
+- **Not verified:** that Dataverse accepts the trigger definition (`SubscribeWebhookTrigger`), how long the trigger
+  takes, that `createRecordAsync` / `retrieveRecordAsync` of the code-apps SDK behave as typed for this table, what
+  the SDK returns for a 403, and everything in the next bullet.
 - **Not verified at all:** the Teams action on a real tenant (its operation id and parameter names are not in
   Microsoft's reference documentation), how the message renders in Teams / Slack / Webex, real webhook delivery,
   flow activation with a Teams connection reference, real request consumption, the agent definition in any agent
@@ -388,11 +457,12 @@ non-existing tenant name answers (which is why 404 is rejected), and anything on
 1. Have code apps enabled and the licences assigned (admin, once).
 2. Run the command; sign in / click "Create" if prompted.
 3. Open the dashboard URL from the summary and approve the connection prompt.
-4. For other viewers: share the app, and give them a security role with **Read** on the three `owatch_` tables
-   (the script does not create a role).
+4. For other viewers: share the app, and give them a security role with **Read** on the `owatch_` tables
+   (the script does not create a role). Only people who should send test notifications also get **Create** on
+   "Outage Watch Command".
 5. Recommended: `-SetHeartbeat`, and keep the independent Python monitor running elsewhere.
 6. For alerts: paste the Teams channel link when asked (and click "Create" once for the Teams connection), and/or
-   enter the Slack / Webex webhook URLs at the hidden prompts. Then check the TEST message arrived (`-SendTestAlert`).
+   enter the Slack / Webex webhook URLs at the hidden prompts. Then press "Send test notification now" on the dashboard (or use `-SendTestAlert`) and check each channel.
 
 ## Troubleshooting
 
@@ -411,8 +481,13 @@ non-existing tenant name answers (which is why 404 is rejected), and anything on
   Most likely the Teams action definition (unconfirmed on a real tenant) or a DLP policy. Probing is unaffected.
   Workaround until fixed: use Slack / Webex / webhook (`-RemoveChannels teams`), or build the Teams post by hand
   in the flow designer.
-- *No TEST message*: open the dashboard panel "Alerts, CI gate and incidents": each channel shows its last delivery
-  or the error. Then the run history of "Outage Watch - alert" in Power Automate.
+- *Test button says TIMED OUT*: the flow "Outage Watch - test notification" did not answer in 3 minutes. Open its run
+  history (Solutions > Outage Watch > Cloud flows). No run at all = the trigger did not fire: turn the flow off and on
+  once, or re-run the deploy script. *Summary says "test : NOT AVAILABLE"*: Dataverse refused that flow (message
+  printed above the summary; the trigger definition is unconfirmed, DESIGN.md 46); alerts themselves still work.
+- *Test button says NOT ALLOWED*: your role lacks Create on "Outage Watch Command" (see the test section).
+- *A channel shows FAILED (HTTP 404 / 403 / 410)*: the webhook was revoked or mistyped: set it again
+  (`-SetSlackWebhook` / `-SetWebexWebhook`). *Teams FAILED*: see the next item.
 - *Teams: "last delivery FAILED"*: the connection's account is not a member of the team, the channel is private, or
   the Power Automate app is blocked in Teams. *Slack / Webex: "FAILED HTTP 404/410"*: the webhook was revoked;
   create a new one and re-run with `-SetSlackWebhook` / `-SetWebexWebhook`.

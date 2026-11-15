@@ -121,7 +121,7 @@ describe('re-running on top of the failed run (the user\'s environment)', () => 
     expect([...new Set(writes)].sort()).toEqual(['PATCH workflows', 'POST owatch_settings'])   // settings completed (flow id + the newer alert_* rows), flow turned on. No table, target or flow is created.
     expect(writes.filter((w: string) => w === 'PATCH workflows')).toHaveLength(1)
     expect(mock.db.workflows).toHaveLength(1); expect(mock.db.workflows[0].workflowid).toBe(flowId); expect(mock.db.workflows[0].statecode).toBe(1)
-    expect(mock.db.owatch_targets).toHaveLength(37); expect(mock.entities.size).toBe(4)
+    expect(mock.db.owatch_targets).toHaveLength(37); expect(mock.entities.size).toBe(5)
     expect(mock.db.owatch_settings.find((s: any) => s.owatch_name === 'flow_workflowid').owatch_value).toBe(flowId)
     expect(mock.db.owatch_settings.find((s: any) => s.owatch_name === 'roles_json')).toBeUndefined()
     expect(r.flowOn).toBe(true); expect(r.created.every((c: string) => c.startsWith('setting '))).toBe(true); expect(r.created).toContain('setting flow_workflowid')

@@ -4,7 +4,8 @@ import { DEFAULT_THRESHOLDS, buildFrames, dependencyEdges, isStale, stressScore,
 import { ROLE_WORD, SEV, derive, downstream, familySummary, groupFamilies, isProblem, layoutFamilies, list, roleStatus, topo, type Derived, type Family, type FamilySummary, type Kind, type Topology } from './logic/graph'
 import { SCENARIOS, demoSource, demoTargetList, probed, simulateRows, type Scenario } from './data/demo'
 import { hasDataverse, liveSource } from './data/live'
-import type { IncidentRow, Snapshot } from './data/types'
+import type { IncidentRow, Notifier, Snapshot } from './data/types'
+import { CHANNEL_NAME, NOTE_MAX, PENDING, POLL_MS, RATE_LIMIT_SECONDS, TEST_CHANNELS, WAIT_MS, availability, channelsValue, cleanNote, isDenied, parseResult, phaseOf, timedOut, type Phase } from './logic/notify'
 import { commonCause, drifting, flapping, incidentReport, incidentStats, parseHeadcount, scorecard, staffUpdate } from './logic/insights'
 
 // ---------- glyphs: state is always shape + icon + word, never colour alone ----------
@@ -194,7 +195,124 @@ const dur = (m: number) => (m < 90 ? m + ' min' : (m / 60).toFixed(1) + ' h')
  * Read-only status of the automation around the monitor. Everything here comes from setting rows and the incident
  * table; none of it is a secret (webhook URLs live only inside the flow definition and are never readable here).
  */
-function AutomationPanel({ settings, incidents, now, interval }: { settings: Record<string, string>; incidents: IncidentRow[]; now: number; interval: number }) {
+// ---------- send a live test notification ----------
+interface NotifyState { phase: Phase; result: string; id: string; started: number; message: string }
+const NOTIFY_IDLE: NotifyState = { phase: 'idle', result: '', id: '', started: 0, message: '' }
+/** Screenshot / review states of the demo layer: ?notify=confirm|queued|sending|done|partial|failed|rejected|timeout|denied */
+function initialNotify(): NotifyState {
+  const R: Record<string, string> = {
+    done: 'teams=delivered; slack=delivered; webex=delivered; webhook=not configured', partial: 'teams=delivered; slack=delivered; webex=FAILED HTTP 404; webhook=not configured',
+    failed: 'teams=FAILED Forbidden; slack=FAILED HTTP 404; webex=FAILED HTTP 404; webhook=not configured', rejected: 'rate limit: one test every 5 minutes',
+  }
+  const p = qNotifyState as Phase
+  if (!qDemo || !['confirm', 'queued', 'sending', 'done', 'partial', 'failed', 'rejected', 'timeout', 'denied'].includes(p)) return NOTIFY_IDLE
+  return { phase: p, result: R[p] ?? '', id: '', started: Date.now() - 12_000, message: p === 'denied' ? 'Principal user is missing prvCreateowatch_command privilege (HTTP 403)' : '' }
+}
+const PHASE_HEAD: Record<Exclude<Phase, 'idle' | 'confirm'>, [Kind, string]> = {
+  queued: ['unconfigured', 'QUEUED'], sending: ['warning', 'SENDING'], done: ['up', 'DELIVERED'], partial: ['warning', 'PARTLY DELIVERED'], failed: ['down', 'FAILED'],
+  rejected: ['blocked', 'NOT SENT'], timeout: ['suspect', 'TIMED OUT'], denied: ['blocked', 'NOT ALLOWED'], error: ['down', 'COULD NOT BE REQUESTED'],
+}
+
+function TestNotify({ settings, notifier, now }: { settings: Record<string, string>; notifier?: Notifier; now: number }) {
+  const [choice, setChoice] = useState('all')
+  const [note, setNote] = useState('')
+  const [st, setSt] = useState<NotifyState>(initialNotify)
+  const av = availability(settings, now)
+  const pending = PENDING.includes(st.phase)
+  const names = (cs: readonly string[]) => cs.map((c) => CHANNEL_NAME[c]).join(', ')
+  const target = choice === 'all' ? av.channels : av.channels.filter((c) => c === choice)
+
+  // poll the command row while the flow works; stop at a final state or after WAIT_MS
+  useEffect(() => {
+    if (!pending || !st.id || !notifier) return
+    const t = setInterval(() => {
+      if (timedOut(st.started, Date.now())) { setSt((s) => (PENDING.includes(s.phase) ? { ...s, phase: 'timeout' } : s)); return }
+      notifier.poll(st.id).then(
+        (r) => setSt((s) => (s.id === st.id && PENDING.includes(s.phase) ? { ...s, phase: phaseOf(r.status), result: r.result } : s)),
+        () => { /* a failed read is retried on the next tick; the timeout still applies */ },
+      )
+    }, POLL_MS)
+    return () => clearInterval(t)
+  }, [pending, st.id, st.started, notifier])
+
+  const send = async () => {
+    if (!notifier) return
+    setSt({ phase: 'queued', result: '', id: '', started: Date.now(), message: '' })
+    try {
+      const id = await notifier.request(channelsValue(choice, av.channels), cleanNote(note))
+      setSt((s) => ({ ...s, id }))
+    } catch (e) {
+      const m = String((e as Error)?.message ?? e).slice(0, 300)
+      setSt({ ...NOTIFY_IDLE, phase: isDenied(m) ? 'denied' : 'error', message: m })
+    }
+  }
+
+  const why = !notifier ? 'This dashboard build has no command table yet. Re-run Deploy-OutageWatchPP.cmd <environment-id> to add the button.'
+    : av.reason === 'no-channel' ? 'No channel is configured, so there is nowhere to send a test. On the machine where you deployed, run this (or use -SetSlackWebhook / -SetWebexWebhook instead of the Teams link):'
+    : av.reason === 'flow-off' ? 'The flow "Outage Watch - test notification" is not on. Re-run Deploy-OutageWatchPP.cmd <environment-id> and read its "Alerts" line.'
+    : av.reason === 'wait' ? `One test every ${RATE_LIMIT_SECONDS / 60} minutes: the next one is possible in about ${Math.ceil(av.waitSeconds / 60)} min.`
+    : pending ? 'A test is in progress.' : ''
+  const canPress = !!notifier && av.usable && !pending && st.phase !== 'confirm'
+  const outcomes = parseResult(st.result)
+  const head = st.phase !== 'idle' && st.phase !== 'confirm' ? PHASE_HEAD[st.phase] : null
+  const waited = Math.max(0, Math.round((now - st.started) / 1000))
+
+  return (
+    <div className="notify">
+      <h3 className="sub">Test the notifications</h3>
+      <p className="hint">Posts a real message, clearly labelled TEST, with the current service status to the chosen channel(s). It is sent by a flow in this environment, not by your browser: usually within about a minute, sometimes longer.</p>
+      <fieldset className="chooser" disabled={!canPress}>
+        <legend>Send to</legend>
+        <label><input type="radio" name="notifyTo" value="all" checked={choice === 'all'} onChange={() => setChoice('all')} /> All configured{av.channels.length ? ` (${names(av.channels)})` : ''}</label>
+        {TEST_CHANNELS.map((c) => { const has = av.channels.includes(c); return (
+          <label key={c} className={has ? '' : 'na'}><input type="radio" name="notifyTo" value={c} disabled={!has} checked={choice === c} onChange={() => setChoice(c)} /> {CHANNEL_NAME[c]}{has ? '' : ' (not configured)'}</label>
+        ) })}
+      </fieldset>
+      <label className="noteField">Optional note (plain text, {NOTE_MAX} characters at most)
+        <input type="text" maxLength={NOTE_MAX} value={note} disabled={!canPress} onChange={(e) => setNote(e.target.value)} autoComplete="off" />
+      </label>
+      <div className="btns">
+        <button type="button" className="primary" disabled={!canPress} aria-describedby={why ? 'notifyWhy' : undefined} onClick={() => setSt({ ...NOTIFY_IDLE, phase: 'confirm' })}>Send test notification now</button>
+      </div>
+      {why && <p id="notifyWhy" className="why"><Glyph kind="blocked" /><span><b>Button disabled.</b> {why}{notifier && av.reason === 'no-channel' && <code>Deploy-OutageWatchPP.cmd &lt;environment-id&gt; -TeamsChannelLink "&lt;link&gt;"</code>}</span></p>}
+      {st.phase === 'confirm' && (
+        <div className="confirmBox" role="group" aria-labelledby="notifyAsk">
+          <p id="notifyAsk"><b>Send a real TEST message to {target.length ? names(target) : 'the configured channels'} now?</b> People in {target.length === 1 ? 'that channel' : 'those channels'} will see it.</p>
+          <div className="btns">
+            <button type="button" className="primary" onClick={() => void send()}>Yes, send it</button>
+            <button type="button" onClick={() => setSt(NOTIFY_IDLE)}>Cancel</button>
+          </div>
+        </div>
+      )}
+      <div role="status" aria-live="polite" className="notifyStatus">
+        {head && (
+          <p className={'autoLine k-' + head[0]}><Glyph kind={head[0]} /><span><b>{head[1]}</b>{' '}
+            {st.phase === 'queued' && `The request is stored; waiting for the flow to pick it up (${waited} s so far).`}
+            {st.phase === 'sending' && `The flow is posting the message (${waited} s so far).`}
+            {st.phase === 'done' && 'Every selected channel accepted the message. Check that it is visible there.'}
+            {st.phase === 'partial' && 'Some channels accepted the message, at least one refused it.'}
+            {st.phase === 'failed' && (outcomes.some((o) => o.state === 'failed') ? 'No channel accepted the message.' : 'Nothing was sent: the selection matches no configured channel.')}
+            {st.phase === 'rejected' && `A test was sent less than ${RATE_LIMIT_SECONDS / 60} minutes ago. Try again later.`}
+            {st.phase === 'timeout' && `No answer from the flow after ${WAIT_MS / 60000} minutes. The message may still arrive. Check the run history of the flow "Outage Watch - test notification" in Power Automate.`}
+            {st.phase === 'denied' && 'Your account may not create rows in the table "Outage Watch Command" (HTTP 403). Only admins can send tests: ask a System Administrator for a role with Create and Read on that table.'}
+            {st.phase === 'error' && 'The request could not be stored in Dataverse. Nothing was sent.'}
+          </span></p>
+        )}
+        {outcomes.length > 0 && (
+          <ul className="deliv">
+            {outcomes.map((o) => { const k: Kind = o.state === 'delivered' ? 'up' : o.state === 'failed' ? 'down' : o.state === 'not selected' ? 'blocked' : 'unconfigured'; return (
+              <li key={o.channel} className={'k-' + k}><Glyph kind={k} /><span><b>{CHANNEL_NAME[o.channel]}</b>: {o.state === 'delivered' ? 'delivered' : o.state === 'failed' ? `FAILED (${o.detail})` : o.state}</span></li>
+            ) })}
+          </ul>
+        )}
+        {(st.phase === 'error') && st.message && <p className="hint mono">{st.message.slice(0, 200)}</p>}
+      </div>
+      {head && !pending && <div className="btns"><button type="button" onClick={() => setSt(NOTIFY_IDLE)}>Clear result</button></div>}
+    </div>
+  )
+}
+
+function AutomationPanel({ settings, incidents, now, interval, notifier }: { settings: Record<string, string>; incidents: IncidentRow[]; now: number; interval: number; notifier?: Notifier }) {
   const configured = settings.alert_configured === 'yes'
   const off = (settings.alert_channels_off ?? '').toLowerCase().replace(/ /g, '').split(',')
   const channels = (settings.alert_channels ?? '').split(',').filter((c) => c in CHANNEL_LABEL)
@@ -212,11 +330,11 @@ function AutomationPanel({ settings, incidents, now, interval }: { settings: Rec
         <div className="setup" role="note">
           <p className="autoLine k-suspect"><Glyph kind="suspect" /><span><b>ALERTS ARE NOT SET UP.</b> Nobody is told when a service fails: there is no Teams, Slack or Webex integration until a channel is given to the deploy script. On the machine where you deployed, run one of:</span></p>
           <ul className="cmds">
-            <li><b>Teams</b> (needs the channel link: channel name &gt; ... &gt; Get link to channel; a standard channel; one click to create the Teams connection)<code>Deploy-OutageWatchPP.cmd &lt;environment-id&gt; -TeamsChannelLink "&lt;link&gt;" -SendTestAlert</code></li>
-            <li><b>Slack</b> (needs an Incoming Webhook URL for the channel; asked with hidden input; a webhook, not a connector)<code>Deploy-OutageWatchPP.cmd &lt;environment-id&gt; -SetSlackWebhook -SendTestAlert</code></li>
-            <li><b>Webex</b> (needs the Incoming Webhooks integration URL for the space; hidden input)<code>Deploy-OutageWatchPP.cmd &lt;environment-id&gt; -SetWebexWebhook -SendTestAlert</code></li>
+            <li><b>Teams</b> (needs the channel link: channel name &gt; ... &gt; Get link to channel; a standard channel; one click to create the Teams connection)<code>Deploy-OutageWatchPP.cmd &lt;environment-id&gt; -TeamsChannelLink "&lt;link&gt;"</code></li>
+            <li><b>Slack</b> (needs an Incoming Webhook URL for the channel; asked with hidden input; a webhook, not a connector)<code>Deploy-OutageWatchPP.cmd &lt;environment-id&gt; -SetSlackWebhook</code></li>
+            <li><b>Webex</b> (needs the Incoming Webhooks integration URL for the space; hidden input)<code>Deploy-OutageWatchPP.cmd &lt;environment-id&gt; -SetWebexWebhook</code></li>
           </ul>
-          <p className="hint">Or run the script with no options and answer the "Alert channels" questions. A TEST message then arrives within one probe interval, and this panel shows each channel's last delivery.</p>
+          <p className="hint">Or run the script with no options and answer the "Alert channels" questions. Then use the button below to send a TEST message; this panel shows each channel's last delivery.</p>
         </div>
       ) : (
         <>
@@ -231,6 +349,7 @@ function AutomationPanel({ settings, incidents, now, interval }: { settings: Rec
           </ul>
         </>
       )}
+      <TestNotify settings={settings} notifier={notifier} now={now} />
       <p className={'autoLine k-' + ciKind}><Glyph kind={ciKind} /><span>
         <b>CI gate: {!ci ? 'no status yet' : ciStale ? 'STALE (unknown)' : String(ci.level)}</b>
         {ci && !ciStale ? ` since ${utc(String(ci.since ?? ''))}, updated ${ciAge} min ago.` : !ci ? ' The alert flow writes it once it is on.' : ` Last update ${ciAge ?? '?'} min ago: pipelines fail closed by default.`}
@@ -341,11 +460,13 @@ const qFilter = params.get('filter') ?? ''
 const qOnly = params.get('only') === '1'
 const qCollapse = params.get('collapse')
 const qAlerts = params.get('alerts') === '1' ? 'on' : 'off'
+const qNotifyState = params.get('notify') ?? ''
+const qNotifyDemo = params.get('notifyresult') ?? 'done'
 const DEMO_TARGETS = demoTargetList(qTenant ? 'contoso' : null)
 const SIM_STEP_MS = 2500
 
 export default function App() {
-  const source = useMemo(() => (hasDataverse && !qDemo ? liveSource() : demoSource(qDemo === 'stale' ? 60 : 0, qTenant ? 'contoso' : null, qAlerts)), [])
+  const source = useMemo(() => (hasDataverse && !qDemo ? liveSource() : demoSource(qDemo === 'stale' ? 60 : 0, qTenant ? 'contoso' : null, qAlerts, qNotifyDemo)), [])
   const [snap, setSnap] = useState<Snapshot | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [failedSince, setFailedSince] = useState<number | null>(null)
@@ -549,7 +670,7 @@ export default function App() {
               ) })}
             </ul>
           </section>
-          <AutomationPanel settings={settings} incidents={snap?.incidents ?? []} now={now} interval={interval} />
+          <AutomationPanel settings={settings} incidents={snap?.incidents ?? []} now={now} interval={interval} notifier={source.notifier} />
           <section className="panel" aria-labelledby="hChanges">
             <h2 id="hChanges">Recent level changes</h2>
             {levelChanges.length ? (

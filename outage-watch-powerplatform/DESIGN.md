@@ -237,6 +237,53 @@ Nothing in this folder has been run against a real tenant. Specifically:
     operation ids / parameter names in a flow definition could not be confirmed, and the false-failure cases (no OneDrive
     provisioned, conditional access, throttling) could not be distinguished reliably without running them.
 
+46. **Dataverse trigger in a flow definition** (`type: OpenApiConnectionWebhook`, `operationId: SubscribeWebhookTrigger`, parameters
+    `subscriptionRequest/message` 1 = added, `subscriptionRequest/entityname`, `subscriptionRequest/scope` 4 = organization): this is the
+    shape the designer writes, known from exported flows, **not from reference documentation**. If Dataverse refuses it the deploy
+    prints the message, sets `test_button = no`, and alerts stay on (tested with the mock).
+47. **Trigger latency**: the trigger page (MicrosoftDocs source of power-automate/dataverse/create-update-delete-trigger) gives no
+    time. "Usually within about a minute, can be longer" is the author's expectation, not a documented or measured figure. The
+    same page says an update "can result in multiple flow runs"; the flow therefore re-reads the row and acts only on `queued`.
+48. **Trigger prerequisites**: that page lists create / read / write / delete on the *Callback Registration* table for the flow
+    owner. A System Administrator has them; a less privileged owner was not considered. Licensing of the trigger is not stated on
+    the page; the flows need Premium anyway (HTTP action).
+49. **Code app write path**: `createRecordAsync` / `retrieveRecordAsync` exist in the typings of `@microsoft/power-apps` (checked in
+    `node_modules`), but whether create returns the new row id, and how a 403 is surfaced (`success: false` + message, or a
+    rejection), is unconfirmed. Both are handled: id read back by query if missing; any message containing 403 / privilege is
+    shown as "NOT ALLOWED", anything else as "could not be requested". `getContext().user.fullName` for the requester name is
+    typed as optional; "dashboard user" is used when absent.
+50. **Channel facts cited from memory, not fetched** (docs.slack.dev and developer.webex.com were not reachable from the build
+    sandbox): Slack incoming webhook answers `200 ok` or 4xx with a short text (`invalid_payload`, `no_service`, ...), rate limit
+    about 1 message/second, text must escape `&`, `<`, `>`; Webex incoming webhook accepts `{"text"}` or `{"markdown"}`, message
+    limit 7,439 bytes; Teams message size about 28 KB. The caps below are set well under these.
+51. **Stale-probe notice**, **delivery-checked state** and **roll-back** (alert-flow audit) exist only in the interpreter runs.
+
+## Channel payloads (alert flow and test-notification flow share `buildPosts`)
+
+| Channel | Transport | Request | Body | Success | Cap (UTF-16 units -> worst-case bytes) | Escaping / injection |
+|---|---|---|---|---|---|---|
+| Teams | Teams connector, action `PostMessageToConversation`, connection reference `owatch_teams`, poster "Flow bot", location "Channel" | connector call (no URL in the flow) | `body/messageBody` = `<p>text with <br></p>` (HTML) | action status Succeeded | 8,000 after escaping -> at most 24,000 bytes (limit about 28 KB, from memory) | `&`, `<`, `>`, `"` become entities **before** `<br>` is added: no tag, no `<at>` mention, no link markup can come from probe data, the note or the requester name |
+| Slack | incoming webhook | `POST` URL (secure inputs/outputs), `Content-Type: application/json`, timeout 20 s, **no retry**, async pattern off | `{"text": "..."}` | HTTP 2xx | 12,000 after escaping -> at most 36,000 bytes (limit 40,000 characters, from memory) | `&`, `<`, `>` escaped: `<!channel>`, `<!here>`, `<@U..>`, `<url|label>` are inert. Plain `@channel` is not a mention in webhook text (from memory). `*bold*` style markup from hostile text may render; it cannot notify anyone |
+| Webex | incoming webhook | same | `{"text": "..."}` - the plain `text` field, never `markdown` or `html` | HTTP 2xx | 2,400 -> at most 7,200 bytes (limit 7,439 bytes, from memory) | plain text is not interpreted: no mentions, no links, no markup |
+| Generic webhook | any HTTPS endpoint the admin gave | same | `{"text": "..."}` | HTTP 2xx | 12,000 | none applied: the receiver gets plain text and must treat it as such |
+
+All four: one message per round (or per test), newlines `\n`, a message over its cap is cut and ends with
+`[message shortened ...]`; a failed post records only the status (`FAILED HTTP 404`, Teams: the error code), never
+the response body or the URL. No retry inside a run: the alert flow re-announces undelivered events next round, and
+a test simply reports the failure. Rate limits are not a concern at one message per round per channel.
+
+## Test notification flow
+
+Trigger: row added to `owatch_command` (organization scope), concurrency 1 (the rate-limit check cannot race).
+Actions: read settings; read the row again; act only if `owatch_name = test_notification` and `owatch_status =
+queued`; if `last_test_at` is younger than 300 s write `rejected`; else `sending`, save `last_test_at`, read the
+newest complete round and the targets, compose the message (reference: `provision/lib/test-logic.mjs`), one
+`If_<channel>` per configured channel (run-after: always, so one failing channel never stops the next), `Finish`
+writes `done` / `partial` / `failed` + the per-channel string + `owatch_completedat` (run-after: always, so the
+row never stays on `sending` because a query failed); finally delete command rows older than 7 days. Free text
+that reaches a channel: the note (200) and the requester name (100), both single-lined, bounded, and escaped by
+the same per-channel encoding as probe data. 35 requests per test with four channels, 11 when rejected.
+
 ## Test map
 
 | File | Proves |
@@ -251,6 +298,7 @@ Nothing in this folder has been run against a real tenant. Specifically:
 | `tests/gate.test.ts` | CI gate decisions and end-to-end read from the mock; pipeline snippets and agent definition (structure, existing columns) |
 | `tests/insights.test.ts` | every insight rule with its evidence, boundaries, hostile and degenerate input, deterministic report |
 | `tests/tenant.test.ts` | SharePoint tenant name: extraction, validation, reachability probe (local server), CLI, upgrade from bcadc4c incl. admin edits |
+| `tests/test-notification.test.ts`, `tests/notify.test.ts` | test-notification flow EXECUTED and compared with its reference (status, per-channel result, message per channel), channel-failure combinations, duplicate trigger, rate limit, hostile note, pruning, 403, CLI exit codes; dashboard helpers (availability, result parsing, demo notifier) |
 | `tests/limits.test.ts` | every value the provisioner or the flow can write fits its column; mock enforces limits (0x80044331); re-run on top of the failed third real run |
 | `tests/ps1-static.test.ts` | `.ps1` balanced, PS 5.1-compatible syntax, ASCII, no secrets printed, `.cmd` wrappers |
 

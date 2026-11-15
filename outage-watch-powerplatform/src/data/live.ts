@@ -2,13 +2,15 @@
  * Live data: the three Outage Watch tables in the Dataverse of the environment this code app runs in.
  * Same access pattern as the repository's existing code app (Ownership Command Center): the tables are added with
  * `pac code add-data-source -a dataverse -t <table>`, which generates `.power/schemas/appschemas/dataSourcesInfo.ts`;
- * rows are read with the code-apps SDK (`getClient(...).retrieveMultipleRecordsAsync`). READ ONLY: the dashboard
- * never writes.
+ * rows are read with the code-apps SDK (`getClient(...).retrieveMultipleRecordsAsync`). The dashboard writes exactly
+ * one thing: a row in owatch_command when an admin presses "Send test notification now" (createRecordAsync).
  */
 import { getClient } from '@microsoft/power-apps/data'
+import { getContext } from '@microsoft/power-apps/app'
+import { COMMAND_NAME, cleanNote } from '../logic/notify'
 import catalog from '../../shared/catalog.json'
 import { parseAliveCodes, type RawRow } from '../logic/classify'
-import type { DataSource, IncidentRow, Snapshot, TargetRow } from './types'
+import type { DataSource, IncidentRow, Notifier, Snapshot, TargetRow } from './types'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const infoModules = import.meta.glob('../../.power/schemas/appschemas/dataSourcesInfo.ts', { eager: true }) as Record<string, any>
@@ -97,9 +99,39 @@ async function readIncidents(): Promise<IncidentRow[]> {
   } catch { return [] }
 }
 
+const hasTable = (logical: string) => { try { tableKey(logical); return true } catch { return false } }
+
+/** The button's write path. Errors keep the Dataverse wording (bounded) so a 403 can be recognised and explained. */
+function liveNotifier(): Notifier {
+  const table = () => tableKey('owatch_command')
+  const fail = (r: any, what: string) => new Error(String(r?.error?.message ?? r?.error ?? what).slice(0, 300))
+  return {
+    async request(channels, note) {
+      let by = ''
+      try { const c: any = await getContext(); by = text(c?.user?.fullName || c?.user?.userPrincipalName, 100) } catch { by = '' }
+      const stamp = new Date().toISOString()
+      const r: any = await sdk().createRecordAsync<any, any>(table(), { owatch_name: COMMAND_NAME, owatch_channels: text(channels, 100), owatch_note: cleanNote(note), owatch_requestedby: by || 'dashboard user', owatch_status: 'queued' })
+      if (!r?.success) throw fail(r, 'The request could not be created')
+      const id = text(r?.data?.owatch_commandid, 40)
+      if (/^[0-9a-f-]{36}$/i.test(id)) return id
+      // the create did not return the row: find the one just written
+      const rows = await readAll('owatch_command', { select: ['owatch_commandid'], filter: `owatch_name eq '${COMMAND_NAME}' and createdon ge ${stamp}`, orderBy: ['createdon desc'], top: 1 })
+      const found = text(rows[0]?.owatch_commandid, 40)
+      if (!/^[0-9a-f-]{36}$/i.test(found)) throw new Error('The request was created but could not be read back')
+      return found
+    },
+    async poll(id) {
+      const r: any = await sdk().retrieveRecordAsync<any>(table(), id, { select: ['owatch_status', 'owatch_result'] })
+      if (!r?.success) throw fail(r, 'The request could not be read')
+      return { status: text(r.data?.owatch_status, 40), result: text(r.data?.owatch_result, 400) }
+    },
+  }
+}
+
 export function liveSource(hoursBack = 12): DataSource {
   return {
     kind: 'live',
+    notifier: hasTable('owatch_command') ? liveNotifier() : undefined,
     async load(): Promise<Snapshot> {
       const since = new Date(Date.now() - hoursBack * 3_600_000).toISOString()
       const [t, s, r] = await Promise.all([

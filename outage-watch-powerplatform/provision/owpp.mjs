@@ -6,14 +6,15 @@
 import { writeFileSync } from 'node:fs'
 import { createClient, DataverseError } from './lib/client.mjs'
 import { createMockDataverse } from './lib/mock-dataverse.mjs'
-import { apply, setDashboardUrl, smoke, uninstall, NeedsConnection, NeedsTeamsConnection, FlowNotOn } from './lib/provision.mjs'
+import { apply, requestTestNotification, setDashboardUrl, smoke, uninstall, NeedsConnection, NeedsTeamsConnection, FlowNotOn } from './lib/provision.mjs'
+import { estimateTestRequests, RATE_LIMIT_SECONDS } from './lib/test-flow.mjs'
 import { estimateAlertRequests } from './lib/alert-flow.mjs'
 import { assertTenantLabel, detectTenant, initialDomainLabels, initialFromGraphOrganization, probeTenant, sharePointCloudSupported } from './lib/tenant.mjs'
 import { catalog } from './lib/schema.mjs'
 import { PROBE_CONCURRENCY, estimateRequests, worstCaseRunSeconds } from './lib/flow.mjs'
 import { InputError, assertConnectionId, assertDashboardUrl, assertGuid, assertHeartbeatUrl, assertInt, assertOrgUrl, assertTenantName, assertWebhookUrl, parseTeamsChannelLink } from './lib/validate.mjs'
 
-export const EXIT = { ok: 0, failed: 1, badInput: 2, needsConnection: 3, flowNotOn: 4, smokeTimeout: 5, needsTeamsConnection: 6 }
+export const EXIT = { ok: 0, failed: 1, badInput: 2, needsConnection: 3, flowNotOn: 4, smokeTimeout: 5, needsTeamsConnection: 6, testNotDelivered: 7, testTimeout: 8 }
 
 function parseArgs(argv) {
   const [cmd, ...rest] = argv
@@ -69,7 +70,7 @@ function withAlerts(e, alertPerDay) {
 
 function alertsLine(al) {
   if (!al) return ''
-  if (al.status === 'on') return `Alerts: ON to ${al.channels.join(', ')} (flow "Outage Watch - alert"; webhook URLs are never shown)`
+  if (al.status === 'on') return `Alerts: ON to ${al.channels.join(', ')} (flow "Outage Watch - alert"; webhook URLs are never shown). Test button: ${al.test?.status === 'on' ? 'ON (flow "Outage Watch - test notification")' : 'NOT ACTIVE - ' + (al.test?.message ?? 'unknown reason')}`
   if (al.status === 'disabled') return 'Alerts: OFF (-NoAlerts)'
   if (al.status === 'failed') return 'Alerts: NOT ACTIVE - the alert flow could not be created or turned on: ' + al.message
   return 'Alerts: not configured (no channel given)'
@@ -83,6 +84,7 @@ function printEstimate(e, targets, interval, timeout = catalog.defaults.probeTim
   const probe = e.probePerDay ?? e.perDay
   say(`  Probe flow: ${targets} enabled targets every ${interval} min = ${e.runsPerDay} runs/day x ~${e.perRun} actions = ~${probe.toLocaleString('en-US')} Power Platform requests/day`)
   if (e.alertPerDay) say(`  Alert flow: ${e.runsPerDay} runs/day x ~${Math.round(e.alertPerDay / e.runsPerDay)} actions when nothing is failing = ~${e.alertPerDay.toLocaleString('en-US')} requests/day (plus about 7 per failing service per run, and about 12 per posted message)`)
+  if (e.testWorstCasePerDay) say(`  Test button: ~${estimateTestRequests(4).perTest} requests per test with four channels, nothing while unused; at most one test per ${RATE_LIMIT_SECONDS / 60} min (${e.testWorstCasePerDay.toLocaleString('en-US')}/day only if pressed every ${RATE_LIMIT_SECONDS / 60} min all day; NOT in the total).`)
   say(`  TOTAL: ~${e.perDay.toLocaleString('en-US')} requests/day = about ${e.pctOf40k}% of the 40,000/day of a Power Automate Premium / Power Apps Premium user (${e.pctOf6k}% of the 6,000/day of a Microsoft 365 seeded licence); ${e.rowsPerDay.toLocaleString('en-US')} result rows/day.`)
 }
 
@@ -114,7 +116,7 @@ export async function main(argv) {
         mock.log.forEach((l, i) => say(`  ${String(i + 1).padStart(3)}. ${l.method.padEnd(6)} ${l.path}${l.query ? ' ' + l.query.slice(0, 90) : ''}${l.solution ? '   [solution ' + l.solution + ']' : ''}`))
         say(`  = ${mock.log.length} requests; creates: ${r.created.length} objects (${r.targets} targets, ${r.enabledTargets} enabled). A re-run only reads and patches what changed.`)
         say(`  Heartbeat (dead man's switch): ${r.heartbeat ? 'configured (URL not shown)' : 'not configured'}`)
-        say('  ' + alertsLine(r.alerts) + (r.alerts.status === 'not-configured' ? '. With a channel (-TeamsChannelLink / -SetSlackWebhook / -SetWebexWebhook) the plan also creates the flow "Outage Watch - alert" (and the connection reference owatch_teams for Teams).' : ''))
+        say('  ' + alertsLine(r.alerts) + (r.alerts.status === 'not-configured' ? '. With a channel (-TeamsChannelLink / -SetSlackWebhook / -SetWebexWebhook) the plan also creates the flows "Outage Watch - alert" and "Outage Watch - test notification" (and the connection reference owatch_teams for Teams). The table owatch_command (the test button) is always created.' : ''))
         if (r.unconfigured.length) say(`  SharePoint / OneDrive (${r.unconfigured.join(', ')}): in this offline plan they are shown as not set up. A real run AUTO-DETECTS the SharePoint tenant name (Get-AzTenant, then Microsoft Graph), verifies that https://<name>.sharepoint.com answers, and enables them; -TenantName contoso overrides.`)
         printEstimate(r.estimate, r.enabledTargets, o.intervalMinutes, o.timeoutSeconds)
         return EXIT.ok
@@ -187,6 +189,21 @@ export async function main(argv) {
         else say('  SharePoint tenant name could not be detected and verified' + (d.tried.length ? ': ' + d.tried.map((t) => `${t.label} - ${t.detail}`).join('; ').slice(0, 300) : ' (no candidate domain was available).'))
         out(a, res); return EXIT.ok
       }
+      case 'test-notification': {
+        // Same mechanism as the dashboard button: one command row, the flow does the sending. Exit code = delivery.
+        const channels = String(a.channels ?? 'all').toLowerCase()
+        if (!/^(all|(teams|slack|webex|webhook)(,(teams|slack|webex|webhook)){0,3})$/.test(channels)) throw new InputError('--channels takes all, or a comma list of teams,slack,webex,webhook')
+        const note = String(a.note ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim()
+        if (note.length > 200) throw new InputError('--note is limited to 200 characters')
+        const by = String(a['requested-by'] ?? 'command line').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 100)
+        const test = process.env.OWPP_TEST_MODE === '1'
+        const r = await requestTestNotification(client(a), { channels, note, requestedBy: by, waitSeconds: assertInt(a['wait-seconds'] ?? 180, 0, 1800, 'wait seconds'), ...(test ? { pollSeconds: 0.05 } : {}) }, say)
+        out(a, r)
+        say(`  test notification: ${r.status.toUpperCase()}${r.result ? ' - ' + r.result : ''}`)
+        if (r.status === 'done') return EXIT.ok
+        if (r.status === 'timeout') return EXIT.testTimeout
+        return EXIT.testNotDelivered
+      }
       case 'smoke': {
         const c = client(a)
         const r = await smoke(c, { waitSeconds: a['no-wait'] ? 0 : assertInt(a['wait-seconds'] ?? 240, 0, 1800, 'wait seconds') }, say)
@@ -203,7 +220,7 @@ export async function main(argv) {
         return EXIT.ok
       }
       default:
-        say('usage: owpp.mjs <validate|estimate|plan|apply|smoke|uninstall|set-dashboard-url|check-teams-link|detect-tenant> [--org-url URL] [--environment-id GUID] [--connection-id ID] [--interval MIN] [--retention DAYS] [--timeout SEC] [--tenant NAME] [--out FILE] [--purge] [--clear-heartbeat] [--wait-seconds N]')
+        say('usage: owpp.mjs <validate|estimate|plan|apply|smoke|uninstall|set-dashboard-url|check-teams-link|detect-tenant|test-notification> [--channels all|teams,slack,webex,webhook] [--note TEXT] [--org-url URL] [--environment-id GUID] [--connection-id ID] [--interval MIN] [--retention DAYS] [--timeout SEC] [--tenant NAME] [--out FILE] [--purge] [--clear-heartbeat] [--wait-seconds N]')
         return EXIT.badInput
     }
   } catch (e) {

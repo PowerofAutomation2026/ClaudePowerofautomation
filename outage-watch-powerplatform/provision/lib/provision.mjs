@@ -1,8 +1,9 @@
 // Idempotent provisioning of Outage Watch into one Dataverse environment.
 // Every step first READS, then creates only what is missing: running it again is an upgrade, never a duplicate.
 import { q, DataverseError } from './client.mjs'
-import { ALERT_FLOW_NAME, CONNREF, FLOW_NAME, PUBLISHER, RENAMED, RETIRED_SETTINGS, SOLUTION, TABLES, TEAMS_CONNREF, TENANT_TARGET_NAMES, assertRowFits, seedSettings, seedTargets } from './schema.mjs'
+import { TEST_FLOW_NAME, ALERT_FLOW_NAME, CONNREF, FLOW_NAME, PUBLISHER, RENAMED, RETIRED_SETTINGS, SOLUTION, TABLES, TEAMS_CONNREF, TENANT_TARGET_NAMES, assertRowFits, seedSettings, seedTargets } from './schema.mjs'
 import { CHANNELS, buildAlertClientData, estimateAlertRequests, existingChannels } from './alert-flow.mjs'
+import { COMMAND_NAME, buildTestClientData, estimateTestRequests } from './test-flow.mjs'
 import { buildClientData, canonical, estimateRequests, existingHeartbeatUrl, worstCaseRunSeconds } from './flow.mjs'
 
 const SOL = { 'MSCRM.SolutionUniqueName': SOLUTION.uniquename }
@@ -135,7 +136,7 @@ export async function apply(client, o, log = () => {}) {
   }
   log('  checking that the Web API can read the new columns')
   await waitForColumns(client, res.entitySets, log)
-  const sets = { target: res.entitySets.owatch_target, result: res.entitySets.owatch_result, setting: res.entitySets.owatch_setting, incident: res.entitySets.owatch_incident }
+  const sets = { target: res.entitySets.owatch_target, result: res.entitySets.owatch_result, setting: res.entitySets.owatch_setting, incident: res.entitySets.owatch_incident, command: res.entitySets.owatch_command }
 
   log('[4/8] Seeding targets (existing rows are never overwritten)')
   const existing = (await client.get(`${sets.target}?$select=owatch_name,owatch_url,owatch_enabled,owatch_targetid`)).json.value
@@ -244,6 +245,7 @@ export async function apply(client, o, log = () => {}) {
   // total for BOTH flows: the alert flow costs requests only while it is on
   res.estimate.probePerDay = res.estimate.perDay
   res.estimate.alertPerDay = res.alerts.status === 'on' ? estimateAlertRequests(o.intervalMinutes).perDay : 0     // quiet-day figure; failures and messages add a little (see README)
+  res.estimate.testWorstCasePerDay = res.alerts.status === 'on' ? estimateTestRequests(res.alerts.channels.length).worstCasePerDay : 0   // only if someone presses the button every 5 minutes all day
   res.estimate.perDay = res.estimate.probePerDay + res.estimate.alertPerDay
   res.estimate.pctOf40k = Math.round((res.estimate.perDay / 40000) * 100)
   res.estimate.pctOf6k = Math.round((res.estimate.perDay / 6000) * 100)
@@ -260,8 +262,31 @@ async function upsertSetting(client, sets, name, value, did) {
   else if ((cur.owatch_value ?? '') !== value) { await client.patch(`${sets.setting}(${cur.owatch_settingid})`, { owatch_value: value }); did?.('updated', `setting ${name}`) }
 }
 
-async function findAlertFlow(client) {
-  return (await client.get(`workflows?$select=workflowid,name,statecode,clientdata&$filter=category eq 5 and name eq ${q(ALERT_FLOW_NAME)}`)).json.value[0] ?? null
+async function findAlertFlow(client, name = ALERT_FLOW_NAME) {
+  return (await client.get(`workflows?$select=workflowid,name,statecode,clientdata&$filter=category eq 5 and name eq ${q(name)}`)).json.value[0] ?? null
+}
+
+/** Creates / updates / turns on (or off) one of the secondary flows. Returns its id. */
+async function ensureFlow(client, name, clientdata, description, did, on = true) {
+  const flow = await findAlertFlow(client, name)
+  if (!on) {
+    if (flow && flow.statecode === 1) { await client.patch(`workflows(${flow.workflowid})`, { statecode: 0 }); did('updated', `cloud flow "${name}" turned OFF`) }
+    return flow?.workflowid ?? null
+  }
+  let flowId = flow?.workflowid ?? null
+  let state = flow?.statecode ?? 0
+  if (!flow) {
+    const r = await client.post('workflows', { category: 5, name, type: 1, description, primaryentity: 'none', clientdata: JSON.stringify(clientdata) }, SOL)
+    flowId = r.entityId ?? (await findAlertFlow(client, name))?.workflowid ?? null
+    if (!flowId) throw new DataverseError(`the flow "${name}" was created but its id could not be read back`, 0, 'FlowId')
+    did('created', `cloud flow "${name}"`)
+  } else if (!sameDefinition(flow.clientdata, clientdata)) {
+    if (state === 1) { await client.patch(`workflows(${flowId})`, { statecode: 0 }); state = 0 }
+    await client.patch(`workflows(${flowId})`, { clientdata: JSON.stringify(clientdata), description })
+    did('updated', `cloud flow "${name}" definition`)
+  }
+  if (state !== 1) { await client.patch(`workflows(${flowId})`, { statecode: 1 }); did('updated', `cloud flow "${name}" turned ON`) }
+  return flowId
 }
 
 /**
@@ -279,6 +304,8 @@ async function applyAlerts(client, o, sets, did, log) {
   const flow = await findAlertFlow(client)
   if (o.noAlerts) {
     if (flow && flow.statecode === 1) { await client.patch(`workflows(${flow.workflowid})`, { statecode: 0 }); did('updated', `cloud flow "${ALERT_FLOW_NAME}" turned OFF (-NoAlerts)`) }
+    await ensureFlow(client, TEST_FLOW_NAME, null, '', did, false)
+    await upsertSetting(client, sets, 'test_button', 'no', did)
     await upsertSetting(client, sets, 'alert_configured', 'no', did)
     return { status: 'disabled', channels: [] }
   }
@@ -288,6 +315,8 @@ async function applyAlerts(client, o, sets, did, log) {
   const names = CHANNELS.filter((c) => channels[c])
   if (!names.length) {
     if (flow && flow.statecode === 1) { await client.patch(`workflows(${flow.workflowid})`, { statecode: 0 }); did('updated', `cloud flow "${ALERT_FLOW_NAME}" turned OFF (no channel left)`) }
+    await ensureFlow(client, TEST_FLOW_NAME, null, '', did, false)
+    await upsertSetting(client, sets, 'test_button', 'no', did)
     await upsertSetting(client, sets, 'alert_configured', 'no', did)
     await upsertSetting(client, sets, 'alert_channels', '', did)
     log('  not configured: no alert channel was given (re-run with -TeamsChannelLink, -SetSlackWebhook or -SetWebexWebhook to add alerts)')
@@ -322,16 +351,44 @@ async function applyAlerts(client, o, sets, did, log) {
       did('updated', `cloud flow "${ALERT_FLOW_NAME}" definition`)
     }
     if (state !== 1) { await client.patch(`workflows(${flowId})`, { statecode: 1 }); did('updated', `cloud flow "${ALERT_FLOW_NAME}" turned ON`) }
+    // The test-notification flow (the dashboard button). Its own try: if the Dataverse trigger is rejected, alerts stay ON.
+    let test = { status: 'on' }
+    try {
+      await ensureFlow(client, TEST_FLOW_NAME, buildTestClientData({ channels, sets }), 'Outage Watch: sends a clearly labelled TEST message with the current status when a row named test_notification is added to the table Outage Watch Command (the dashboard button). Managed by Deploy-OutageWatchPP.', did)
+    } catch (e) { test = { status: 'failed', message: String(e.message).slice(0, 300) }; log('  TEST-NOTIFICATION FLOW NOT ACTIVE (the button will not work; alerts are unaffected): ' + e.message) }
+    await upsertSetting(client, sets, 'test_button', test.status === 'on' ? 'yes' : 'no', did)
     await upsertSetting(client, sets, 'alert_configured', 'yes', did)
     await upsertSetting(client, sets, 'alert_channels', names.join(','), did)                   // channel TYPES only - never a URL
     if (o.teams) await upsertSetting(client, sets, 'alert_channel_name', o.teams.channelName ?? '', did)
     if (o.sendTestAlert) { await upsertSetting(client, sets, 'alert_test', 'yes', did); log('  TEST message requested: it is sent to every configured channel by the next run of the alert flow (within one interval)') }
-    return { status: 'on', flowId, channels: names }
+    return { status: 'on', flowId, channels: names, test }
   } catch (e) {
     // The probe flow, tables and dashboard are fine. Say exactly what happened and carry on.
     try { await upsertSetting(client, sets, 'alert_configured', 'no') } catch { /* the original error is the one to report */ }
     log('  ALERT FLOW NOT ACTIVE: ' + e.message)
     return { status: 'failed', message: String(e.message).slice(0, 500), channels: names }
+  }
+}
+
+/**
+ * Asks for a live test notification the same way the dashboard button does: one row in owatch_command, then waits for
+ * the flow to write the outcome. Returns { status, result, waitedSeconds } - status 'timeout' when the flow did not answer.
+ */
+export async function requestTestNotification(client, { channels = 'all', note = '', requestedBy = 'command line', waitSeconds = 180, pollSeconds = 5, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = () => Date.now() } = {}, log = () => {}) {
+  const meta = await client.find(`EntityDefinitions(LogicalName='owatch_command')?$select=EntitySetName`)
+  if (!meta) throw new DataverseError('the command table does not exist: deploy this version first', 404, 'Missing')
+  const set = meta.EntitySetName
+  const row = assertRowFits('owatch_command', { owatch_name: COMMAND_NAME, owatch_channels: channels, owatch_note: note, owatch_requestedby: requestedBy, owatch_status: 'queued' })
+  const id = (await client.post(set, row)).entityId
+  if (!id) throw new DataverseError('the command row was created but its id could not be read back', 0, 'CommandId')
+  log('  test notification requested; waiting for the flow "' + TEST_FLOW_NAME + '" (usually under a minute, it can take longer)...')
+  const start = now()
+  for (;;) {
+    const cur = await client.find(`${set}(${id})?$select=owatch_status,owatch_result`)
+    const status = String(cur?.owatch_status ?? 'queued').toLowerCase()
+    if (['done', 'partial', 'failed', 'rejected'].includes(status)) return { status, result: cur.owatch_result ?? '', waitedSeconds: Math.round((now() - start) / 1000) }
+    if (now() - start >= waitSeconds * 1000) return { status: 'timeout', result: `no answer from the flow after ${waitSeconds} s (last state: ${status}). Is "${TEST_FLOW_NAME}" turned on?`, waitedSeconds: waitSeconds }
+    await sleep(pollSeconds * 1000)
   }
 }
 
@@ -401,11 +458,12 @@ export async function uninstall(client, { purge = false } = {}, log = () => {}) 
     await client.del(`workflows(${flow.workflowid})`)
     gone(`cloud flow "${FLOW_NAME}"`)
   }
-  const alertFlow = await findAlertFlow(client)
-  if (alertFlow) {
-    if (alertFlow.statecode === 1) await client.patch(`workflows(${alertFlow.workflowid})`, { statecode: 0 })
-    await client.del(`workflows(${alertFlow.workflowid})`)
-    gone(`cloud flow "${ALERT_FLOW_NAME}"`)
+  for (const name of [ALERT_FLOW_NAME, TEST_FLOW_NAME]) {
+    const f = await findAlertFlow(client, name)
+    if (!f) continue
+    if (f.statecode === 1) await client.patch(`workflows(${f.workflowid})`, { statecode: 0 })
+    await client.del(`workflows(${f.workflowid})`)
+    gone(`cloud flow "${name}"`)
   }
   if (!purge) { res.kept.push('tables and collected data', 'connection reference', 'solution', 'publisher'); return res }
   const ref = (await client.get(`connectionreferences?$select=connectionreferenceid&$filter=connectionreferencelogicalname eq ${q(CONNREF.logicalName)}`)).json.value[0]

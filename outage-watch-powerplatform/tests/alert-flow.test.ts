@@ -16,9 +16,9 @@ import { createMockDataverse } from '../provision/lib/mock-dataverse.mjs'
 // @ts-expect-error plain .mjs helpers
 import { apply } from '../provision/lib/provision.mjs'
 // @ts-expect-error plain .mjs helpers
-import { CAPS, CHANNELS, COMMON, SAME_FATE, TAGS, TITLES, buildAlertClientData, estimateAlertRequests, existingChannels } from '../provision/lib/alert-flow.mjs'
+import { CAPS, CHANNELS, COMMON, SAME_FATE, SHORTENED, STALE_TITLE, TAGS, TITLES, buildAlertClientData, estimateAlertRequests, existingChannels } from '../provision/lib/alert-flow.mjs'
 // @ts-expect-error plain .mjs helpers
-import { ciStatus, context, decide, escapeHtml, evaluateRun, isFailure, latestCompleteRound, slackText, teamsHtml, webexText, webhookText, worstCaseTextChars } from '../provision/lib/alert-logic.mjs'
+import { ciStatus, context, decide, escapeHtml, evaluateRun, isFailure, latestCompleteRound, slackText, teamsHtml, utf8Bytes, webexText, webhookText, worstCaseTextChars } from '../provision/lib/alert-logic.mjs'
 // @ts-expect-error plain .mjs helpers
 import { columnSpec, rowViolations } from '../provision/lib/schema.mjs'
 // @ts-expect-error plain .mjs helpers
@@ -85,9 +85,10 @@ async function world(extra: any = {}) {
     const settingsBefore = settingsMap()
     const expected = evaluateRun({
       targets: mock.db.owatch_targets.map((t: any) => ({ ...t })), settings: settingsBefore, nowMs, round,
-      failingRows: mock.db.owatch_results.filter((x: any) => x.owatch_round === round && x.owatch_failed === true).map((x: any) => ({ ...x })),
+      roundRows: mock.db.owatch_results.filter((x: any) => x.owatch_round === round).map((x: any) => ({ ...x })),
     })
     const before = sent.length
+    const openBefore = new Set<string>(incidents().filter((x: any) => x.owatch_isopen === true).map((x: any) => x.owatch_name))
     const prevRound = setting('alert_last_round')?.owatch_value ?? ''
     const r = await runFlow(flows().alert, { ...env(), http: hooks })
     const posted = sent.slice(before)
@@ -95,7 +96,12 @@ async function world(extra: any = {}) {
     if (check) {
       expect(r.expressionErrors, 'no expression may fail').toEqual([])
       expect(r.status).toBe('Succeeded')
-      for (const u of expected.updates) { const { name, ...cols } = u; expect(target(name), `state of ${name}`).toMatchObject(cols) }
+      const offNow = String(settingsBefore.alert_channels_off ?? '').toLowerCase().replace(/ /g, '').split(',')
+      const anyOk = expected.text !== null && res.alerts.channels.some((c: string) => !offNow.includes(c) && !state.fails[c])
+      // nothing delivered -> the alert state of this round's events must be put back (so they are announced again next round)
+      const undo = new Map<string, any>(anyOk ? [] : expected.rollback.map((u: any) => [u.name, u]))
+      for (const u of expected.updates) { const { name, ...cols } = u; const back = undo.get(name); expect(target(name), `state of ${name}`).toMatchObject(back ? { ...cols, owatch_alertopen: back.owatch_alertopen, owatch_lastalertat: back.owatch_lastalertat } : cols) }
+      if (expected.clearTest) expect(setting('alert_test').owatch_value, 'TEST flag').toBe(anyOk ? 'no' : 'yes')
       expect(setting('alert_last_round').owatch_value ?? '').toBe(expected.saveRound ?? prevRound)
       if (expected.ci !== null) expect(setting('ci_status').owatch_value, 'CI status').toBe(expected.ci)
       const off = String(settingsBefore.alert_channels_off ?? '').toLowerCase().replace(/ /g, '').split(',')
@@ -108,10 +114,14 @@ async function world(extra: any = {}) {
         if (got !== want[c]) { let i = 0; while (got[i] === want[c][i]) i++; throw new Error(`${c} message differs from the reference at ${i}:\n flow: ${JSON.stringify(got.slice(Math.max(0, i - 60), i + 120))}\n  ref: ${JSON.stringify(want[c].slice(Math.max(0, i - 60), i + 120))}`) }
       }
       // incident records follow the reference operations
-      for (const op of expected.incidents) {
+      // incident records follow the reference operations. (A repeated announcement after a delivery that failed everywhere
+      // finds the record written by the first attempt: it is not created or closed a second time.)
+      for (const op of anyOk ? expected.incidents : []) {
         const rows = incidents().filter((x: any) => x.owatch_name === op.name)
-        if (op.op === 'open') expect(rows.filter((x: any) => x.owatch_isopen === true).pop(), `incident opened for ${op.name}`).toMatchObject(op.row)
-        else if (rows.length) expect(rows[rows.length - 1], `incident ${op.op} for ${op.name}`).toMatchObject(op.row)
+        if (op.op === 'open') {
+          expect(rows.filter((x: any) => x.owatch_isopen === true), `exactly one open incident for ${op.name}`).toHaveLength(1)
+          if (!openBefore.has(op.name)) expect(rows.filter((x: any) => x.owatch_isopen === true)[0], `incident opened for ${op.name}`).toMatchObject(op.row)
+        } else if (openBefore.has(op.name)) expect(rows[rows.length - 1], `incident ${op.op} for ${op.name}`).toMatchObject(op.row)
       }
     }
     clock = nowMs + 7 * MIN            // next probe round starts 10 minutes after the previous one
@@ -196,11 +206,12 @@ describe('reference logic: one text, safely encoded per channel', () => {
     expect(slackText(hostile)).toBe('a &lt;script&gt;alert("x")&lt;/script&gt; &amp; &lt;!channel&gt; &lt;https://evil.example|click&gt; line2\nnext')
   })
   it('Webex and generic webhooks: plain text field (not markdown), bounded', () => {
-    expect(webexText('x'.repeat(9000))).toHaveLength(CAPS.webexText); expect(webhookText('x'.repeat(20000))).toHaveLength(CAPS.webhookText)
-    expect(CAPS.webexText).toBeLessThan(7439 / 2)                 // Webex limit is 7439 BYTES: room for 2-byte characters
+    expect(webexText('x'.repeat(9000)).length).toBeLessThanOrEqual(CAPS.webexText); expect(webexText('x'.repeat(9000)).endsWith(SHORTENED)).toBe(true); expect(webhookText('x'.repeat(20000)).length).toBeLessThanOrEqual(CAPS.webhookText)
+    expect(CAPS.webexText * 3).toBeLessThan(7439)                 // Webex limit is 7,439 BYTES; one UTF-16 unit is at most 3 bytes of UTF-8
+    expect(CAPS.teamsEscaped * 3 + 20).toBeLessThan(28000)        // Teams: about 28 KB
   })
   it('the size caps hold for ANY input and are far below the channel limits', () => {
-    expect(worstCaseTextChars()).toBeLessThan(16000)
+    expect(worstCaseTextChars()).toBeLessThan(17000)
     expect(CAPS.teamsEscaped + 20).toBeLessThan(28000)            // Teams message limit is about 28 KB
     expect(CAPS.slackEscaped).toBeLessThan(40000)                 // Slack text limit
     expect(CAPS.detailed).toBeGreaterThanOrEqual(10); expect(CAPS.error).toBe(300)
@@ -275,11 +286,11 @@ describe('generated flows, executed: the probe flow records what the alert flow 
 })
 
 describe('generated flows, executed: incident lifecycle on every channel (each run compared with the reference logic)', () => {
-  it('healthy: no message, no row touched, 25 requests per run, CI status ok', async () => {
+  it('healthy: no message, no row touched, 28 requests per run, CI status ok', async () => {
     const w = await world()
     for (let i = 0; i < 3; i++) { const { r, posted } = await w.round({}); expect(posted).toEqual([]); expect(r.count).toBe(estimateAlertRequests(10).perQuietRun) }
     expect(w.mock.db.owatch_targets.every((t: any) => (t.owatch_failcount ?? 0) === 0 && t.owatch_alertopen !== true)).toBe(true)
-    expect(estimateAlertRequests(10)).toMatchObject({ perQuietRun: 25, runsPerDay: 144, perDay: 3600 })
+    expect(estimateAlertRequests(10)).toMatchObject({ perQuietRun: 28, runsPerDay: 144, perDay: 4032 })
     expect(JSON.parse(w.setting('ci_status').owatch_value)).toMatchObject({ level: 'ok', failing: 0, since: '2026-11-15T08:03:00Z', updated: '2026-11-15T08:23:00Z' })
     expect(w.incidents()).toEqual([])
   })
@@ -471,7 +482,7 @@ describe('generated flows, executed: incident lifecycle on every channel (each r
     w.mock.db.owatch_settings.splice(w.mock.db.owatch_settings.findIndex((s: any) => s.owatch_name === 'alert_last_round'), 1)
     await w.probeRound({ teams: DOWN503 })
     const { r, posted } = await w.alertRun({ check: false })
-    expect(r.statuses.get('Save_round')).toBe('Failed'); expect(r.statuses.get('List_failing')).toBe('Skipped')
+    expect(r.statuses.get('Save_round')).toBe('Failed'); expect(r.statuses.get('List_round')).toBe('Skipped')
     expect(posted).toEqual([]); expect(w.target('teams').owatch_failcount ?? 0).toBe(0)
     expect(r.expressionErrors).toEqual([])
   })
@@ -559,6 +570,129 @@ describe('generated flows, executed: incident lifecycle on every channel (each r
 })
 
 // ------------------------------------------------------------------------------------------------
+describe('audit of the alert logic: defects found, each with the scenario that failed before the fix', () => {
+  it('D1 (high) a message nobody received is not counted as sent: state is put back and the NEXT round announces it; one incident record only', async () => {
+    const w = await world()
+    await w.round({}); await w.round({ exchange: DOWN503 })
+    for (const c of CHANNELS) w.state.fails[c] = 'down'
+    const lost = await w.round({ exchange: DOWN503 })                          // confirmed, but every channel fails
+    expect(lost.posted).toEqual([])
+    expect(w.target('exchange')).toMatchObject({ owatch_failcount: 2, owatch_alertopen: false })      // before the fix: alertopen = true -> silent for 60 minutes
+    expect(w.setting('last_alert_at').owatch_value ?? '').toBe('')
+    expect(w.setting('last_delivery_slack').owatch_value).toMatch(/^FAILED .* HTTP 404 NotFound$/)       // the failure is visible, not silent
+    for (const c of CHANNELS) w.state.fails[c] = undefined
+    const again = await w.round({ exchange: DOWN503 })
+    expect(again.posted).toHaveLength(4); expect(again.text).toContain('[NEW FAILURE] exchange'); expect(again.text).toContain('consecutive failures: 3')
+    expect(w.incidents()).toHaveLength(1)                                      // the retry did not create a second incident
+    expect((await w.round({ exchange: DOWN503 })).posted).toEqual([])          // and once delivered it is not repeated
+    // the same for a recovery: not lost when the channels are down at that moment
+    for (const c of CHANNELS) w.state.fails[c] = 'down'
+    expect((await w.round({})).posted).toEqual([])
+    expect(w.target('exchange').owatch_alertopen).toBe(true)
+    for (const c of CHANNELS) w.state.fails[c] = undefined
+    expect((await w.round({})).text).toContain('[RECOVERED] exchange')
+    expect(w.incidents()[0].owatch_isopen).toBe(false)
+  })
+  it('D1b a TEST that reached no channel is retried, and "last alert" is not stamped', async () => {
+    const w = await world({ sendTestAlert: true })
+    for (const c of CHANNELS) w.state.fails[c] = 'down'
+    await w.alertRun()
+    expect(w.setting('alert_test').owatch_value).toBe('yes'); expect(w.setting('last_alert_at').owatch_value ?? '').toBe('')
+    for (const c of CHANNELS) w.state.fails[c] = undefined
+    expect((await w.alertRun()).posted).toHaveLength(4); expect(w.setting('alert_test').owatch_value).toBe('no')
+  })
+  it('D2 (medium) size limits are BYTES: emoji / CJK / RTL / zero-width text can no longer push Webex over 7,439 bytes or Teams over 28 KB', async () => {
+    const w = await world()
+    const nasty = '\u{1F525}\u6F22\u5B57\u202E\u200B\u05E9\u05DC\u05D5\u05DD @all <@all> <!channel> [x](http://evil.example) **b** '.repeat(40)
+    const all: Record<string, Probe> = {}
+    for (const t of w.mock.db.owatch_targets) all[t.owatch_name] = { statusCode: 500, body: nasty, code: '\u{1F4A5}'.repeat(60) }
+    await w.round(all)
+    const { webex, teams, slack, text } = await w.round(all)
+    expect(utf8Bytes(text!)).toBeGreaterThan(7439)                             // the full text would not fit Webex
+    expect(utf8Bytes(JSON.stringify({ text: webex[0] }))).toBeLessThan(7439 + 2000); expect(utf8Bytes(webex[0])).toBeLessThanOrEqual(7439)
+    expect(webex[0].endsWith(SHORTENED)).toBe(true)                            // shortened visibly, not silently
+    expect(utf8Bytes(teams[0])).toBeLessThan(28000)
+    expect(slack[0]).not.toMatch(/[<>]/)                                       // <@all>, <!channel> and <url|text> are inert in Slack
+    expect(teams[0]).not.toMatch(/<(?!\/?p>|br>)/)
+  })
+  it('D7 (high) probing stopped: announced ONCE instead of silently doing nothing; announced again only for a new stop', async () => {
+    const w = await world()
+    await w.round({})                                                          // last round 08:00, judged 08:03
+    w.setClock(Date.parse('2026-11-15T08:30:00Z')); expect((await w.alertRun()).posted).toEqual([])       // 30 min: within 3 intervals + 5
+    w.setClock(Date.parse('2026-11-15T08:40:00Z'))
+    const stale = await w.alertRun()
+    expect(stale.posted).toHaveLength(4)
+    expect(stale.text!.split('\n')[0]).toBe(STALE_TITLE)
+    expect(stale.text).toContain('No new probe round for 40 minutes (last round: 2026-11-15T08:00:00Z, expected every 10 minutes).'); expect(stale.text).toContain('Service status is UNKNOWN')
+    expect(w.setting('alert_stale_notified').owatch_value).toBe('2026-11-15T08:00:00Z')
+    w.setClock(Date.parse('2026-11-15T09:40:00Z')); expect((await w.alertRun()).posted).toEqual([])       // not repeated
+    await w.round({})                                                          // probing resumes (round 09:47)
+    w.setClock(w.clockNow() + 50 * MIN)
+    expect((await w.alertRun()).text!.split('\n')[0]).toBe(STALE_TITLE)       // a NEW stop is announced
+    w.setting('alert_snooze_until').owatch_value = '2099-01-01T00:00:00Z'; w.setting('alert_stale_notified').owatch_value = null
+    expect((await w.alertRun()).posted).toEqual([])                            // muted: no notice either
+  })
+  it('D8 (medium) a target disabled during an incident is CLOSED, not announced as "answering again"', async () => {
+    const w = await world()
+    await w.round({ teams: DOWN503 }); await w.round({ teams: DOWN503 })
+    w.target('teams').owatch_enabled = false
+    const { text } = await w.round({})
+    expect(text).toContain('[CLOSED] teams'); expect(text).toContain('No longer monitored'); expect(text).not.toContain('Answering again')
+    expect(w.incidents()[0].owatch_isopen).toBe(false); expect(w.target('teams')).toMatchObject({ owatch_alertopen: false, owatch_failcount: 0 })
+  })
+  it('D9 (high) a result row that is missing from the round is "unknown", not "recovered"', async () => {
+    const w = await world()
+    await w.round({ teams: DOWN503 }); await w.round({ teams: DOWN503 })
+    expect(w.target('teams').owatch_alertopen).toBe(true)
+    await w.probeRound({ teams: DOWN503 })
+    const last = w.mock.db.owatch_results.map((x: any) => x.owatch_round).sort().pop()
+    w.mock.db.owatch_results = w.mock.db.owatch_results.filter((x: any) => !(x.owatch_round === last && x.owatch_name === 'teams'))    // its row was lost
+    const { posted } = await w.alertRun()
+    expect(posted).toEqual([])                                                 // before the fix: a false [RECOVERED] teams
+    expect(w.target('teams')).toMatchObject({ owatch_alertopen: true, owatch_failcount: 2 }); expect(w.incidents()[0].owatch_isopen).toBe(true)
+    expect((await w.round({})).text).toContain('[RECOVERED] teams')            // a real answer still closes it
+  })
+  it('overlap: the trigger allows one run at a time (documented runtimeConfiguration.concurrency.runs = 1), loops that touch variables are sequential', async () => {
+    const w = await world()
+    const def = w.flows().alert.properties.definition
+    expect(def.triggers.Recurrence.runtimeConfiguration).toEqual({ concurrency: { runs: 1 } })
+    const loops: any[] = []
+    const walk = (a: any) => { for (const x of Object.values<any>(a ?? {})) { if (x.type === 'Foreach') loops.push(x); walk(x.actions); walk(x.else?.actions) } }
+    walk(def.actions)
+    expect(loops.length).toBe(2); for (const l of loops) expect(l.runtimeConfiguration.concurrency.repetitions).toBe(1)
+    expect(Object.values<any>(def.actions).filter((x) => x.type === 'InitializeVariable')).toHaveLength(3)       // variables are initialised at the top level only
+  })
+  it('adversarial: 150 random rounds with lost rows, disabled targets, total channel outages, probing gaps and setting changes - flow and reference never diverge', async () => {
+    const w = await world()
+    let seed = 987654321
+    const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff }
+    const names = ['auth', 'exchange', 'teams', 'graph', 'm365-copilot', 'power-bi', 'office-cdn', 'intune', 'planner', 'purview']
+    const kinds: Probe[] = [DOWN503, NO_ANSWER, { statusCode: 429, body: 'slow' }, { statusCode: 404, body: 'x' }, { timedOut: true }, { statusCode: 500, body: '<!channel> \u{1F525} <b>x</b> & "q"' }]
+    let posts = 0
+    for (let i = 0; i < 150; i++) {
+      const bad: Record<string, Probe> = {}
+      const p = rnd() < 0.1 ? 0.7 : 0.15
+      for (const n of names) if (rnd() < p) bad[n] = kinds[Math.floor(rnd() * kinds.length)]
+      if (rnd() < 0.05) w.setting('alert_confirm').owatch_value = ['1', '2', '3'][Math.floor(rnd() * 3)]
+      if (rnd() < 0.05) w.setting('alert_reminder_minutes').owatch_value = ['10', '20', '60'][Math.floor(rnd() * 3)]
+      if (rnd() < 0.04) w.setting('alert_snooze_until').owatch_value = rnd() < 0.5 ? null : new Date(w.clockNow() + 25 * MIN).toISOString().replace(/\.\d+Z$/, 'Z')
+      if (rnd() < 0.04) w.setting('alert_channels_off').owatch_value = ['', 'slack', 'teams,slack,webex,webhook'][Math.floor(rnd() * 3)]
+      if (rnd() < 0.04) { const t = w.target(names[Math.floor(rnd() * names.length)]); t.owatch_enabled = !t.owatch_enabled }
+      const outage = rnd() < 0.08
+      for (const c of CHANNELS) w.state.fails[c] = outage || rnd() < 0.05 ? 'down' : undefined
+      if (rnd() < 0.06) { w.setClock(w.clockNow() + 45 * MIN); posts += (await w.alertRun()).posted.length }      // probing gap
+      await w.probeRound(bad)
+      if (rnd() < 0.08) { const last = w.mock.db.owatch_results.map((x: any) => x.owatch_round).sort().pop(); const drop = names[Math.floor(rnd() * names.length)]; w.mock.db.owatch_results = w.mock.db.owatch_results.filter((x: any) => !(x.owatch_round === last && x.owatch_name === drop)) }
+      posts += (await w.alertRun()).posted.length                              // alertRun() asserts flow == reference on state, messages, incidents, CI status
+    }
+    expect(posts).toBeGreaterThan(40)
+    const open = w.incidents().filter((x: any) => x.owatch_isopen).map((x: any) => x.owatch_name).sort()
+    expect(new Set(open).size).toBe(open.length)                               // never two open incidents for one service
+    expect(w.mock.problems).toEqual([])
+  }, 60000)
+})
+
+// ------------------------------------------------------------------------------------------------
 describe('generated alert flow: structure', () => {
   const sets = { target: 'owatch_targets', result: 'owatch_results', setting: 'owatch_settings', incident: 'owatch_incidents' }
   const cd = buildAlertClientData({ intervalMinutes: 10, channels: { teams: { groupId: TEAMS.groupId, channelId: TEAMS.channelId }, ...HOOKS }, sets })
@@ -606,9 +740,13 @@ describe('generated alert flow: structure', () => {
     expect(post.S_del_slack.runAfter).toEqual({ If_teams: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'] })
     expect(post.S_del_webex.runAfter).toEqual({ If_slack: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'] })
     expect(post.If_slack.actions.Status_slack.runAfter).toEqual({ Post_slack: ['Succeeded', 'Failed', 'TimedOut'] })
-    expect(post.Mark_sent.runAfter).toEqual({ If_webhook: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'] })
+    expect(post.AnyOk.runAfter).toEqual({ If_webhook: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'] })
+    expect(post.AnyOk.inputs).toBe("@or(equals(actions('Post_teams')?['status'],'Succeeded'),equals(actions('Post_slack')?['status'],'Succeeded'),equals(actions('Post_webex')?['status'],'Succeeded'),equals(actions('Post_webhook')?['status'],'Succeeded'))")
+    expect(Object.keys(post.If_delivered.actions)).toEqual(['Mark_sent', 'If_test', 'If_stale'])               // 'sent', TEST flag and stale flag only after a delivery
+    expect(Object.keys(post.If_delivered.else.actions)).toEqual(['Roll_back'])
+    expect(post.If_delivered.else.actions.Roll_back.runtimeConfiguration.concurrency.repetitions).toBe(1)
     expect(top.If_new_round.actions.Save_round.runAfter).toEqual({})
-    expect(top.If_new_round.actions.List_failing.runAfter).toEqual({ Save_round: ['Succeeded'] })
+    expect(top.If_new_round.actions.List_round.runAfter).toEqual({ Save_round: ['Succeeded'] })
     expect(top.If_new_round.actions.For_each_interesting.runtimeConfiguration.concurrency.repetitions).toBe(1)
   })
   it('every Dataverse action names an existing entity set and only columns that exist', () => {

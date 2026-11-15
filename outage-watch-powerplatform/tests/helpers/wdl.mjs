@@ -112,6 +112,10 @@ function functions(env, scope) {
     addMinutes: (t, n, f) => fmtTime(TICKS(t) / 10000 + n * 60000, f),
     addDays: (t, n, f) => fmtTime(TICKS(t) / 10000 + n * 86400000, f),
     json: (s) => JSON.parse(s),
+    union: (a, b) => { if (!Array.isArray(a) || !Array.isArray(b)) throw new Error('union(): needs arrays'); return [...new Set([...a, ...b])] },
+    addSeconds: (t, n, f) => fmtTime(TICKS(t) / 10000 + n * 1000, f),
+    triggerBody: () => env.trigger?.body ?? null,
+    triggerOutputs: () => (env.trigger ? { ...Object.fromEntries(Object.entries(env.trigger.body ?? {}).map(([k, v]) => ['body/' + k, v])), body: env.trigger.body } : null),      // the designer's 'body/<column>' form
     decodeUriComponent: (s) => decodeURIComponent(s),
     split: (s, d) => { if (typeof s !== 'string') throw new Error('split(): needs text'); return s.split(d) },
     last: (v) => { if (typeof v === 'string') return v.slice(-1); if (Array.isArray(v)) return v.length ? v[v.length - 1] : null; throw new Error('last(): needs text or an array') },
@@ -126,7 +130,10 @@ function functions(env, scope) {
   }
 }
 const find = (scope, pred) => { for (let s = scope; s; s = s.parent) if (pred(s)) return s; return null }
-function lookup(scope, name) { for (let s = scope; s; s = s.parent) if (s.results?.has(name)) return s.results.get(name); return null }
+// An action is visible to everything that runs after it in the same run (the engine keeps results per run, not per
+// branch). Inside a loop the current iteration's result is found first through the scope chain.
+let GLOBAL = new Map()
+function lookup(scope, name) { for (let s = scope; s; s = s.parent) if (s.results?.has(name)) return s.results.get(name); return GLOBAL.get(name) ?? null }
 
 function evalNode(n, env, scope) {
   if (n.t === 'lit') return n.v
@@ -246,7 +253,7 @@ async function runActions(actions, env, scope, container = '(root)') {
       pending.delete(n); progressed = true
       const allowed = deps.every(([d, sts]) => sts.includes(done.get(d).status))
       const rec = allowed ? await runAction(n, actions[n], env, scope) : { status: 'Skipped', code: 'ActionSkipped', outputs: null }
-      done.set(n, rec); scope.results.set(n, rec)
+      done.set(n, rec); scope.results.set(n, rec); GLOBAL.set(n, rec)
       env.statuses.set(n, rec.status)
     }
     if (!progressed) throw new Error(`${container}: runAfter cycle among ${[...pending].join(', ')}`)
@@ -267,6 +274,7 @@ async function runActions(actions, env, scope, container = '(root)') {
  * Returns { status, statuses (per action name, last value), count (actions executed), expressionErrors, trace }.
  */
 export async function runFlow(clientdata, env) {
+  GLOBAL = new Map()
   const e = { ...env, vars: new Map(), statuses: new Map(), count: 1, trace: [], expressionErrors: [], secured: [] }    // count starts at 1: the trigger
   const status = await runActions(clientdata.properties.definition.actions, e, { parent: null, results: new Map() })
   return { status, statuses: e.statuses, count: e.count, expressionErrors: e.expressionErrors, trace: e.trace, vars: e.vars, secured: e.secured }

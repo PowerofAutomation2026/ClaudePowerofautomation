@@ -134,7 +134,12 @@ describe('Deploy-OutageWatchPP.ps1 static checks (NOT an execution test)', () =>
     expect(ps).not.toMatch(/--(slack|webex|alert)-webhook/)
     // Teams: connection found or created by polling; a missing connection never fails the deployment
     expect(ps).toMatch(/connections\/available\?apiName=shared_teams/); expect(ps).toMatch(/\$code -eq 6/); expect(ps).toMatch(/continuing WITHOUT Teams alerts/)
-    expect(ps).toMatch(/'owatch_target', 'owatch_result', 'owatch_setting', 'owatch_incident'/)
+    expect(ps).toMatch(/'owatch_target', 'owatch_result', 'owatch_setting', 'owatch_incident', 'owatch_command'/)
+    // -SendTestAlert goes through the command row (same as the dashboard button), after the deployment, and reports per exit code
+    expect(ps).not.toContain('--send-test-alert')
+    expect(ps).toMatch(/Invoke-Helper @\('test-notification', '--org-url', \$orgUrl, '--channels', 'all'/)
+    expect(ps.indexOf("'test-notification'")).toBeGreaterThan(ps.indexOf("@('smoke'")); expect(ps.indexOf("'test-notification'")).toBeLessThan(ps.lastIndexOf('Clear-Secrets'))
+    for (const c of ['-eq 0', '-eq 8', '-eq 7']) expect(ps.slice(ps.indexOf("'test-notification'"), ps.indexOf('# ----- summary -----'))).toContain('$code ' + c)
     expect(ps).toMatch(/ALERTS ARE OFF: no channel is configured/); expect(ps).toMatch(/Deploy-OutageWatchPP\.cmd \{0\} -SetSlackWebhook -SendTestAlert/); expect(ps).toMatch(/incoming WEBHOOKS \(HTTP action\), not connectors/); expect(ps).toMatch(/Alert channels: who should be told/); expect(ps).toMatch(/connection reference 'Outage Watch - Teams' \(owatch_teams\)/); expect(ps).toMatch(/alert_snooze_until/); expect(ps).toMatch(/-SendTestAlert/)
   })
 

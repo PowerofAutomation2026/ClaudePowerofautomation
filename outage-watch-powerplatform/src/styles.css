@@ -226,3 +226,25 @@ table.mini td:nth-child(2){color:inherit;min-width:0;white-space:nowrap;text-ali
 .cmds{list-style:none;margin:.3rem 0;padding:0;display:grid;gap:.45rem;font-size:.86rem}
 .cmds code{display:block;font:600 .76rem var(--mono);background:var(--panel);border:1px solid var(--line);border-radius:.35rem;padding:.3rem .45rem;margin-top:.2rem;overflow-wrap:anywhere;user-select:all}
 table.mini th:first-child{white-space:normal;overflow-wrap:anywhere}table.mini{table-layout:auto}
+
+/* ---- send a test notification ---- */
+.notify{border:1px solid var(--line);border-radius:.5rem;padding:.5rem .7rem;margin:.5rem 0 .7rem;background:var(--panel2);min-width:0}
+.notify .sub{margin-top:.1rem}
+.chooser{border:0;margin:.3rem 0;padding:0;display:flex;flex-wrap:wrap;gap:.3rem .9rem;font-size:.88rem;min-width:0}
+.chooser legend{padding:0;font-weight:700;font-size:.84rem;margin-bottom:.2rem}
+.chooser label{display:inline-flex;align-items:center;gap:.35rem;min-height:2rem}
+.chooser label.na{color:var(--muted)}
+.chooser input{width:1.1rem;height:1.1rem;accent-color:var(--ink)}
+.noteField{display:grid;gap:.2rem;font-size:.84rem;margin:.3rem 0}
+.noteField input{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:.45rem;padding:.35rem .6rem;min-height:2.4rem;width:100%;max-width:34rem;min-width:0}
+button.primary{background:var(--ink);color:var(--bg);border-color:var(--ink);font-weight:700}
+button:disabled,.noteField input:disabled{opacity:.55;cursor:not-allowed}
+button:disabled:hover{border-color:var(--line)}
+button.primary:disabled:hover{border-color:var(--ink)}
+.why{display:flex;gap:.5rem;align-items:flex-start;font-size:.86rem;margin:.3rem 0;overflow-wrap:anywhere}
+.why .gl{margin-top:.15rem;flex:none}
+.confirmBox{border:2px solid var(--ink);border-radius:.5rem;padding:.45rem .7rem;margin:.4rem 0;background:var(--panel)}
+.confirmBox p{margin:.2rem 0;font-size:.9rem}
+.notifyStatus{min-height:1px}
+.why code{display:block;font:600 .76rem var(--mono);background:var(--panel);border:1px solid var(--line);border-radius:.35rem;padding:.3rem .45rem;margin-top:.25rem;overflow-wrap:anywhere;user-select:all}
+.why span{min-width:0}
