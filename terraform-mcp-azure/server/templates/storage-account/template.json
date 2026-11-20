@@ -1,0 +1,1 @@
+{"description":"Secure storage account (TLS1.2, no public blobs)","variables":{"account_tier":"Standard|Premium","replication_type":"LRS|GRS|ZRS|GZRS"}}

@@ -1,0 +1,1 @@
+{"description":"Virtual network with named subnets","variables":{"address_space":"list of CIDRs, e.g. [\"10.20.0.0/16\"]","subnets":"map of subnet name to CIDR, e.g. {\"app\":\"10.20.1.0/24\"}"}}

@@ -139,6 +139,7 @@ $existingScope = (az ad app show --id $apiId --query "api.oauth2PermissionScopes
 if ($existingScope) { $scopeId = $existingScope.Trim() }
 $apiBody = @{ identifierUris = @("api://$apiId"); api = @{
   requestedAccessTokenVersion = 2
+  preAuthorizedApplications = @(@{ appId='04b07795-8ddb-461a-bbee-02f9e1bf7b46'; delegatedPermissionIds=@($scopeId) })  # Azure CLI, for the smoke test
   oauth2PermissionScopes = @(@{ id=$scopeId; value='access_as_user'; type='User'; isEnabled=$true
     adminConsentDisplayName='Use Terraform MCP'; adminConsentDescription='Call the Terraform MCP server as the signed-in user'
     userConsentDisplayName='Use Terraform MCP'; userConsentDescription='Call the Terraform MCP server on your behalf' }) } } | ConvertTo-Json -Depth 6 -Compress

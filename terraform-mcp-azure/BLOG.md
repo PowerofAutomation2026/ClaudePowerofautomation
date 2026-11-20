@@ -6,7 +6,10 @@ provider docs, find the right workspace, and queue a plan for a human to approve
 HashiCorp's **Terraform MCP server** makes that possible, and Copilot Studio can call any MCP server as a tool. The missing piece
 was a safe, repeatable way to host it on Azure. This post (and the accompanying package) gives you exactly that, in one script.
 
-## The architecture
+> **Update:** the package now includes an Azure-native mode that provisions Azure resources *directly*: Terraform runs inside the Container App
+> with a managed identity (Contributor on one workload resource group only), from curated templates, with plan-then-confirm apply. See `DEPLOY-AZURE-NATIVE.md`.
+
+## The architecture (HCP Terraform mode)
 ```
 Copilot Studio agent ─ OAuth (Entra) ─> Azure Container Apps (Entra auth, 401 for anonymous)
                                          └─ terraform-mcp-server (streamable HTTP, /mcp)

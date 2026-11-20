@@ -1,0 +1,1 @@
+{"description":"Log Analytics workspace","variables":{"retention_days":"number 30-730"}}

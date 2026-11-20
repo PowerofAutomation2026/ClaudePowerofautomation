@@ -1,5 +1,16 @@
 # Terraform MCP → Copilot Studio on Azure (zero-touch)
 
+**Two options in this package**
+| | `Deploy-AzureTerraformMcp.ps1` (**Azure-native, direct**) | `Deploy-TerraformMcp.ps1` (HCP Terraform) |
+|---|---|---|
+| Provisions Azure resources | **Yes, itself** - Terraform runs in the container with a managed identity | Indirectly, via HCP Terraform workspace runs |
+| Needs HCP Terraform | No | Yes |
+| Guardrails | Curated templates, one resource group, plan-then-confirm apply | HCP approvals/policies |
+| Guide | `DEPLOY-AZURE-NATIVE.md` | `DEPLOY.md` |
+
+The rest of this README describes the HCP Terraform option.
+
+
 `Deploy-TerraformMcp.ps1` stands up HashiCorp's **Terraform MCP server** on **Azure Container Apps**,
 locks it behind **Entra ID**, and generates the **custom connector** that lets a **Copilot Studio agent**
 call it as an MCP tool.
