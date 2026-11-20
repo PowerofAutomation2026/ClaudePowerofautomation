@@ -1,0 +1,18 @@
+{
+  "version": "1.0.0",
+  "title": "Container registry",
+  "category": "compute",
+  "description": "Azure Container Registry with the admin account and anonymous pull disabled (Entra ID only). Premium adds private-only access, a private endpoint and zone redundancy.",
+  "security_defaults": [
+    "Admin user disabled; anonymous pull disabled: Entra ID RBAC only (AcrPull / AcrPush)",
+    "Public access is ON by default because turning it off needs the Premium SKU; the strict (production) policy requires Premium with public access off"
+  ],
+  "variables": {
+    "sku": { "type": "string", "enum": ["Basic", "Standard", "Premium"], "default": "Standard", "description": "Registry tier. Premium is required for private networking." },
+    "public_network_access_enabled": { "type": "boolean", "default": true, "description": "Reachable from the internet. false needs Premium." },
+    "zone_redundancy_enabled": { "type": "boolean", "default": false, "description": "Zone redundancy (Premium). Cannot be changed later." },
+    "private_endpoint_subnet_id": { "type": "string", "format": "azure_resource_id", "resource_type": "Microsoft.Network/virtualNetworks/subnets", "description": "Subnet for a private endpoint (Premium)." },
+    "private_dns_zone_id": { "type": "string", "format": "azure_resource_id", "resource_type": "Microsoft.Network/privateDnsZones", "description": "privatelink.azurecr.io zone for the private endpoint." }
+  },
+  "outputs": { "registry_name": "Registry name", "registry_id": "Resource ID", "login_server": "Login server (name.azurecr.io)" }
+}

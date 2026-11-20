@@ -1,0 +1,28 @@
+{
+  "version": "1.0.0",
+  "title": "Network security group",
+  "category": "network",
+  "description": "A network security group with a list of explicit rules. Policy blocks any rule that opens SSH (22) or RDP (3389) to the whole internet.",
+  "security_defaults": ["Azure's built-in rules deny all inbound traffic from the internet unless a rule here allows it"],
+  "variables": {
+    "rules": {
+      "type": "list", "max_items": 50, "default": [],
+      "description": "Security rules. Each rule name and each priority+direction must be unique.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "required": true, "pattern": "[A-Za-z0-9][A-Za-z0-9_.-]{0,78}[A-Za-z0-9_]", "description": "Rule name." },
+          "priority": { "type": "integer", "required": true, "minimum": 100, "maximum": 4096, "description": "Lower numbers win." },
+          "direction": { "type": "string", "required": true, "enum": ["Inbound", "Outbound"], "description": "Traffic direction." },
+          "access": { "type": "string", "required": true, "enum": ["Allow", "Deny"], "description": "Allow or deny." },
+          "protocol": { "type": "string", "enum": ["Tcp", "Udp", "Icmp", "*"], "default": "Tcp", "description": "Protocol." },
+          "source_address_prefix": { "type": "string", "required": true, "pattern": "\\*|[A-Za-z][A-Za-z.]{1,60}|\\d{1,3}(\\.\\d{1,3}){3}(/\\d{1,2})?", "description": "CIDR, IP, service tag (VirtualNetwork, AzureLoadBalancer, Internet ...) or *." },
+          "destination_address_prefix": { "type": "string", "pattern": "\\*|[A-Za-z][A-Za-z.]{1,60}|\\d{1,3}(\\.\\d{1,3}){3}(/\\d{1,2})?", "default": "*", "description": "CIDR, IP, service tag or *." },
+          "destination_port_range": { "type": "string", "required": true, "pattern": "\\*|\\d{1,5}(-\\d{1,5})?", "description": "Port, range (8000-8100) or *." },
+          "description": { "type": "string", "max_length": 140, "default": "", "description": "Why the rule exists." }
+        }
+      }
+    }
+  },
+  "outputs": { "nsg_id": "Resource ID", "nsg_name": "Name" }
+}

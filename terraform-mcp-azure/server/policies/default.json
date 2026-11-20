@@ -1,0 +1,193 @@
+{
+  "version": "2.0.0",
+  "description": "Guardrails evaluated on every Terraform plan (terraform show -json) before it may be applied. 'deny' blocks apply, 'warn' is reported, 'off' is skipped. Enforcement may be one value or a value per profile. Each environment picks a profile (environments.json: policy_profile).",
+  "profiles": {
+    "standard": "Development and test: unsafe settings are reported, the worst are blocked.",
+    "strict": "Production: private-by-default, protected data resources, smaller blast radius."
+  },
+  "rules": [
+    {
+      "id": "allowed-regions",
+      "type": "allowed_locations",
+      "description": "Resources may only be placed in the regions allowed for the environment.",
+      "enforcement": "deny"
+    },
+    {
+      "id": "mandatory-tags",
+      "type": "required_tags",
+      "description": "Every taggable resource carries the ownership tags used for audit and chargeback.",
+      "tags": {
+        "standard": ["managedBy", "environment", "owner", "deployment"],
+        "strict": ["managedBy", "environment", "owner", "deployment", "costCenter"]
+      },
+      "enforcement": "deny"
+    },
+    {
+      "id": "blast-radius",
+      "type": "max_changes",
+      "description": "One plan may only change a limited number of resources (creates + updates + deletes + replacements).",
+      "max": { "standard": 30, "strict": 15 },
+      "skip_destroy_plans": true,
+      "enforcement": "deny"
+    },
+    {
+      "id": "protected-resources",
+      "type": "deny_actions",
+      "description": "Data-bearing resources must not be deleted or replaced through the agent.",
+      "resource_types": [
+        "azurerm_key_vault",
+        "azurerm_mssql_server",
+        "azurerm_mssql_database",
+        "azurerm_postgresql_flexible_server",
+        "azurerm_cosmosdb_account",
+        "azurerm_cosmosdb_sql_database",
+        "azurerm_storage_account",
+        "azurerm_kubernetes_cluster",
+        "azurerm_log_analytics_workspace"
+      ],
+      "actions": ["delete", "replace"],
+      "message": "{address} ({type}) is a protected, data-bearing resource and would be {verb}. This is blocked here; a platform administrator must do it outside the agent.",
+      "enforcement": { "standard": "warn", "strict": "deny" }
+    },
+    {
+      "id": "no-public-ip",
+      "type": "deny_actions",
+      "description": "No new public IP addresses.",
+      "resource_types": ["azurerm_public_ip", "azurerm_public_ip_prefix"],
+      "actions": ["create", "replace"],
+      "message": "{address} would create a public IP address. Use private networking, Bastion or a shared ingress instead.",
+      "enforcement": { "standard": "warn", "strict": "deny" }
+    },
+    {
+      "id": "no-open-management-ports",
+      "type": "nsg_inbound",
+      "description": "No inbound Allow rule from the whole internet to SSH (22) or RDP (3389).",
+      "ports": [22, 3389],
+      "enforcement": "deny"
+    },
+    {
+      "id": "no-public-blob-access",
+      "type": "attribute",
+      "description": "Storage accounts never allow anonymous (public) blob access and always require HTTPS.",
+      "checks": [
+        { "resource_types": ["azurerm_storage_account"], "attribute": "allow_nested_items_to_be_public", "op": "equals", "value": false,
+          "message": "{address} would allow anonymous public access to blobs. Set allow_nested_items_to_be_public to false." },
+        { "resource_types": ["azurerm_storage_account"], "attribute": "https_traffic_only_enabled", "op": "equals", "value": true,
+          "message": "{address} would accept unencrypted HTTP traffic." }
+      ],
+      "enforcement": "deny"
+    },
+    {
+      "id": "minimum-tls-1-2",
+      "type": "attribute",
+      "description": "TLS 1.2 or newer everywhere.",
+      "message": "{address} would accept TLS older than 1.2 ({attribute} = {actual}).",
+      "checks": [
+        { "resource_types": ["azurerm_storage_account"], "attribute": "min_tls_version", "op": "in", "value": ["TLS1_2", "TLS1_3"] },
+        { "resource_types": ["azurerm_mssql_server"], "attribute": "minimum_tls_version", "op": "in", "value": ["1.2", "1.3"] },
+        { "resource_types": ["azurerm_servicebus_namespace", "azurerm_eventhub_namespace", "azurerm_redis_cache"], "attribute": "minimum_tls_version", "op": "in", "value": ["1.2", "1.3"] },
+        { "resource_types": ["azurerm_cosmosdb_account"], "attribute": "minimal_tls_version", "op": "in", "value": ["Tls12", "Tls13"] },
+        { "resource_types": ["azurerm_linux_web_app", "azurerm_windows_web_app", "azurerm_linux_function_app", "azurerm_windows_function_app"], "attribute": "site_config.minimum_tls_version", "op": "in", "value": ["1.2", "1.3"] },
+        { "resource_types": ["azurerm_linux_web_app", "azurerm_windows_web_app", "azurerm_linux_function_app", "azurerm_windows_function_app"], "attribute": "https_only", "op": "equals", "value": true,
+          "message": "{address} would serve plain HTTP. Set https_only to true." }
+      ],
+      "enforcement": "deny"
+    },
+    {
+      "id": "no-public-network-access",
+      "type": "attribute",
+      "description": "PaaS services are reachable over private networking only.",
+      "message": "{address} would be reachable from the public internet (public_network_access_enabled = {actual}). Turn public network access off and use a private endpoint.",
+      "checks": [
+        { "resource_types": [
+            "azurerm_storage_account", "azurerm_key_vault", "azurerm_mssql_server", "azurerm_postgresql_flexible_server",
+            "azurerm_cosmosdb_account", "azurerm_container_registry", "azurerm_servicebus_namespace",
+            "azurerm_linux_web_app", "azurerm_windows_web_app"
+          ], "attribute": "public_network_access_enabled", "op": "equals", "value": false }
+      ],
+      "enforcement": { "standard": "warn", "strict": "deny" }
+    },
+    {
+      "id": "private-kubernetes-api",
+      "type": "attribute",
+      "description": "AKS API servers are private and local (certificate) accounts are disabled.",
+      "checks": [
+        { "resource_types": ["azurerm_kubernetes_cluster"], "attribute": "private_cluster_enabled", "op": "equals", "value": true,
+          "message": "{address} would expose the Kubernetes API server on the public internet. Set private_cluster to true." },
+        { "resource_types": ["azurerm_kubernetes_cluster"], "attribute": "local_account_disabled", "op": "equals", "value": true,
+          "message": "{address} would keep local Kubernetes admin accounts enabled; require Entra ID sign-in instead." }
+      ],
+      "enforcement": { "standard": "warn", "strict": "deny" }
+    },
+    {
+      "id": "entra-only-authentication",
+      "type": "attribute",
+      "description": "Keys, SAS and local passwords are disabled in favour of Entra ID authentication.",
+      "message": "{address} would allow key or password based sign-in ({attribute} = {actual}). Use Entra ID authentication only.",
+      "checks": [
+        { "resource_types": ["azurerm_storage_account"], "attribute": "shared_access_key_enabled", "op": "equals", "value": false },
+        { "resource_types": ["azurerm_cosmosdb_account"], "attribute": "local_authentication_enabled", "op": "equals", "value": false },
+        { "resource_types": ["azurerm_servicebus_namespace"], "attribute": "local_auth_enabled", "op": "equals", "value": false },
+        { "resource_types": ["azurerm_container_registry"], "attribute": "admin_enabled", "op": "equals", "value": false },
+        { "resource_types": ["azurerm_mssql_server"], "attribute": "azuread_administrator.azuread_authentication_only", "op": "equals", "value": true, "if_missing": "fail" },
+        { "resource_types": ["azurerm_postgresql_flexible_server"], "attribute": "authentication.password_auth_enabled", "op": "equals", "value": false, "if_missing": "fail" }
+      ],
+      "enforcement": { "standard": "warn", "strict": "deny" }
+    },
+    {
+      "id": "vm-ssh-keys-only",
+      "type": "attribute",
+      "description": "Linux VMs never allow password sign-in.",
+      "checks": [
+        { "resource_types": ["azurerm_linux_virtual_machine"], "attribute": "disable_password_authentication", "op": "equals", "value": true,
+          "message": "{address} would allow SSH password sign-in." }
+      ],
+      "enforcement": "deny"
+    },
+    {
+      "id": "key-vault-recoverable",
+      "type": "attribute",
+      "description": "Key Vaults use Azure RBAC and purge protection.",
+      "checks": [
+        { "resource_types": ["azurerm_key_vault"], "attribute": "purge_protection_enabled", "op": "equals", "value": true,
+          "message": "{address} would be created without purge protection; deleted secrets could be destroyed permanently." },
+        { "resource_types": ["azurerm_key_vault"], "attribute": "rbac_authorization_enabled", "op": "equals", "value": true,
+          "message": "{address} would use legacy access policies instead of Azure RBAC." }
+      ],
+      "enforcement": { "standard": "warn", "strict": "deny" }
+    },
+    {
+      "id": "allowed-vm-sizes",
+      "type": "attribute",
+      "description": "Only approved VM sizes for virtual machines and AKS node pools.",
+      "message": "{address} asks for VM size {actual}, which is not on the approved list for this environment.",
+      "checks": [
+        { "resource_types": ["azurerm_linux_virtual_machine", "azurerm_windows_virtual_machine"], "attribute": "size", "op": "in",
+          "value": ["Standard_B2s", "Standard_B2ms", "Standard_B4ms", "Standard_D2s_v5", "Standard_D4s_v5", "Standard_D8s_v5", "Standard_D2ads_v5", "Standard_D4ads_v5", "Standard_E2s_v5", "Standard_E4s_v5"] },
+        { "resource_types": ["azurerm_kubernetes_cluster"], "attribute": "default_node_pool.vm_size", "op": "in",
+          "value": ["Standard_B4ms", "Standard_D2s_v5", "Standard_D4s_v5", "Standard_D8s_v5", "Standard_D2ads_v5", "Standard_D4ads_v5"] }
+      ],
+      "enforcement": "deny"
+    },
+    {
+      "id": "allowed-app-service-skus",
+      "type": "attribute",
+      "description": "No free/shared App Service tiers (no SLA, no private networking); production needs Premium v3.",
+      "message": "{address} asks for App Service plan SKU {actual}, which is not approved for this environment.",
+      "checks": [
+        { "resource_types": ["azurerm_service_plan"], "attribute": "sku_name", "op": "not_in", "value": ["F1", "D1", "FREE", "SHARED"] }
+      ],
+      "enforcement": "deny"
+    },
+    {
+      "id": "production-app-service-tier",
+      "type": "attribute",
+      "description": "Production web apps run on Premium v3 (zone redundancy, private endpoints).",
+      "message": "{address} asks for App Service plan SKU {actual}; production requires a Premium v3 SKU.",
+      "checks": [
+        { "resource_types": ["azurerm_service_plan"], "attribute": "sku_name", "op": "in", "value": ["P0v3", "P1v3", "P2v3", "P3v3", "P1mv3", "P2mv3", "P3mv3"] }
+      ],
+      "enforcement": { "standard": "off", "strict": "deny" }
+    }
+  ]
+}

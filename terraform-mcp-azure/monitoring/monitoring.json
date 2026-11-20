@@ -1,0 +1,563 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "2.0.0.0",
+  "metadata": {
+    "description": "Azure Terraform MCP monitoring: an audit workbook, an e-mail action group and log alert rules on the server's structured logs. Deployed by Deploy-AzureTerraformMcp.ps1 -EnableMonitoring. Not validated against a live tenant."
+  },
+  "parameters": {
+    "workspaceResourceId": {
+      "type": "string",
+      "metadata": {
+        "description": "Resource ID of the Log Analytics workspace the Container Apps environment logs to."
+      }
+    },
+    "alertEmail": {
+      "type": "string"
+    },
+    "prefix": {
+      "type": "string",
+      "defaultValue": "aztfmcp"
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]"
+    }
+  },
+  "variables": {
+    "actionGroupName": "[concat('ag-', parameters('prefix'))]",
+    "workbookName": "[guid(resourceGroup().id, parameters('prefix'), 'audit-workbook')]",
+    "workbookContent": {
+      "version": "Notebook/1.0",
+      "items": [
+        {
+          "type": 1,
+          "name": "intro",
+          "content": {
+            "json": "## Azure Terraform MCP - audit\nWho asked the agent for what, what was blocked, what changed in Azure. Source: structured JSON lines the server writes to stdout (table `ContainerAppConsoleLogs_CL`)."
+          }
+        },
+        {
+          "type": 9,
+          "name": "parameters",
+          "content": {
+            "version": "KqlParameterItem/1.0",
+            "parameters": [
+              {
+                "id": "a1b2c3d4-0000-4000-8000-000000000001",
+                "version": "KqlParameterItem/1.0",
+                "name": "TimeRange",
+                "type": 4,
+                "isRequired": true,
+                "value": {
+                  "durationMs": 604800000
+                },
+                "typeSettings": {
+                  "selectableValues": [
+                    {
+                      "durationMs": 86400000
+                    },
+                    {
+                      "durationMs": 604800000
+                    },
+                    {
+                      "durationMs": 2592000000
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": 3,
+          "name": "Tool calls per user and outcome",
+          "content": {
+            "version": "KqlItem/1.0",
+            "title": "Tool calls per user and outcome",
+            "query": "ContainerAppConsoleLogs_CL | where Log_s has \"azure-terraform-mcp\" | extend e = parse_json(Log_s) | where tostring(e.app) == \"azure-terraform-mcp\"\n| where tostring(e.type) == \"audit\" | summarize calls = count() by user = tostring(e.user), outcome = tostring(e.outcome) | order by calls desc",
+            "size": 0,
+            "timeContextFromParameter": "TimeRange",
+            "queryType": 0,
+            "resourceType": "microsoft.operationalinsights/workspaces",
+            "visualization": "table"
+          }
+        },
+        {
+          "type": 3,
+          "name": "Tool calls over time",
+          "content": {
+            "version": "KqlItem/1.0",
+            "title": "Tool calls over time",
+            "query": "ContainerAppConsoleLogs_CL | where Log_s has \"azure-terraform-mcp\" | extend e = parse_json(Log_s) | where tostring(e.app) == \"azure-terraform-mcp\"\n| where tostring(e.type) == \"audit\" | summarize calls = count() by bin(TimeGenerated, 1h), tool = tostring(e.tool)",
+            "size": 0,
+            "timeContextFromParameter": "TimeRange",
+            "queryType": 0,
+            "resourceType": "microsoft.operationalinsights/workspaces",
+            "visualization": "timechart"
+          }
+        },
+        {
+          "type": 3,
+          "name": "Applies and destroys (who planned, approved, applied)",
+          "content": {
+            "version": "KqlItem/1.0",
+            "title": "Applies and destroys (who planned, approved, applied)",
+            "query": "ContainerAppConsoleLogs_CL | where Log_s has \"azure-terraform-mcp\" | extend e = parse_json(Log_s) | where tostring(e.app) == \"azure-terraform-mcp\"\n| where tostring(e.type) == \"apply\" | project TimeGenerated, environment = tostring(e.environment), deployment = tostring(e.deployment), destroy = tobool(e.destroy), outcome = tostring(e.outcome), applied_by = tostring(e.user), planned_by = tostring(e.planned_by), approved_by = tostring(e.approved_by), origin = tostring(e.origin), plan_id = tostring(e.plan_id) | order by TimeGenerated desc",
+            "size": 0,
+            "timeContextFromParameter": "TimeRange",
+            "queryType": 0,
+            "resourceType": "microsoft.operationalinsights/workspaces",
+            "visualization": "table"
+          }
+        },
+        {
+          "type": 3,
+          "name": "Plans blocked by policy",
+          "content": {
+            "version": "KqlItem/1.0",
+            "title": "Plans blocked by policy",
+            "query": "ContainerAppConsoleLogs_CL | where Log_s has \"azure-terraform-mcp\" | extend e = parse_json(Log_s) | where tostring(e.app) == \"azure-terraform-mcp\"\n| where tostring(e.type) == \"plan\" and tobool(e.policy_allowed) == false | project TimeGenerated, user = tostring(e.user), environment = tostring(e.environment), deployment = tostring(e.deployment), rules = tostring(e.policy_violations), risk = tostring(e.risk) | order by TimeGenerated desc",
+            "size": 0,
+            "timeContextFromParameter": "TimeRange",
+            "queryType": 0,
+            "resourceType": "microsoft.operationalinsights/workspaces",
+            "visualization": "table"
+          }
+        },
+        {
+          "type": 3,
+          "name": "Denied and failed tool calls",
+          "content": {
+            "version": "KqlItem/1.0",
+            "title": "Denied and failed tool calls",
+            "query": "ContainerAppConsoleLogs_CL | where Log_s has \"azure-terraform-mcp\" | extend e = parse_json(Log_s) | where tostring(e.app) == \"azure-terraform-mcp\"\n| where tostring(e.type) == \"audit\" and tostring(e.outcome) != \"ok\" | project TimeGenerated, user = tostring(e.user), tool = tostring(e.tool), outcome = tostring(e.outcome), error = tostring(e.error), args = tostring(e.args) | order by TimeGenerated desc",
+            "size": 0,
+            "timeContextFromParameter": "TimeRange",
+            "queryType": 0,
+            "resourceType": "microsoft.operationalinsights/workspaces",
+            "visualization": "table"
+          }
+        },
+        {
+          "type": 3,
+          "name": "Approvals",
+          "content": {
+            "version": "KqlItem/1.0",
+            "title": "Approvals",
+            "query": "ContainerAppConsoleLogs_CL | where Log_s has \"azure-terraform-mcp\" | extend e = parse_json(Log_s) | where tostring(e.app) == \"azure-terraform-mcp\"\n| where tostring(e.type) in (\"approval_requested\", \"approval_decided\") | project TimeGenerated, event = tostring(e.type), decision = tostring(e.decision), by = tostring(e.user), requested_by = tostring(e.requested_by), environment = tostring(e.environment), deployment = tostring(e.deployment), plan_id = tostring(e.plan_id) | order by TimeGenerated desc",
+            "size": 0,
+            "timeContextFromParameter": "TimeRange",
+            "queryType": 0,
+            "resourceType": "microsoft.operationalinsights/workspaces",
+            "visualization": "table"
+          }
+        },
+        {
+          "type": 3,
+          "name": "Drift, time-boxed deployments and worker recovery",
+          "content": {
+            "version": "KqlItem/1.0",
+            "title": "Drift, time-boxed deployments and worker recovery",
+            "query": "ContainerAppConsoleLogs_CL | where Log_s has \"azure-terraform-mcp\" | extend e = parse_json(Log_s) | where tostring(e.app) == \"azure-terraform-mcp\"\n| where tostring(e.type) in (\"drift\", \"ttl_notice\", \"ttl_reaped\", \"ttl_reap_failed\", \"operation_recovered\") | where tostring(e.type) != \"drift\" or tobool(e.drifted) == true | project TimeGenerated, event = tostring(e.type), environment = tostring(e.environment), deployment = tostring(e.deployment), resources = tostring(e.drifted_resources), error = tostring(e.error), text = tostring(e.text) | order by TimeGenerated desc",
+            "size": 0,
+            "timeContextFromParameter": "TimeRange",
+            "queryType": 0,
+            "resourceType": "microsoft.operationalinsights/workspaces",
+            "visualization": "table"
+          }
+        },
+        {
+          "type": 3,
+          "name": "Estimated monthly cost added per day (from plans that were created)",
+          "content": {
+            "version": "KqlItem/1.0",
+            "title": "Estimated monthly cost added per day (from plans that were created)",
+            "query": "ContainerAppConsoleLogs_CL | where Log_s has \"azure-terraform-mcp\" | extend e = parse_json(Log_s) | where tostring(e.app) == \"azure-terraform-mcp\"\n| where tostring(e.type) == \"plan\" and tobool(e.has_changes) == true | summarize planned_delta_usd = sum(todouble(e.monthly_delta_usd)) by bin(TimeGenerated, 1d), environment = tostring(e.environment)",
+            "size": 0,
+            "timeContextFromParameter": "TimeRange",
+            "queryType": 0,
+            "resourceType": "microsoft.operationalinsights/workspaces",
+            "visualization": "barchart"
+          }
+        }
+      ],
+      "fallbackResourceIds": [],
+      "$schema": "https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Insights/actionGroups",
+      "apiVersion": "2023-01-01",
+      "name": "[variables('actionGroupName')]",
+      "location": "Global",
+      "properties": {
+        "groupShortName": "[take(parameters('prefix'), 12)]",
+        "enabled": true,
+        "emailReceivers": [
+          {
+            "name": "platform-team",
+            "emailAddress": "[parameters('alertEmail')]",
+            "useCommonAlertSchema": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Insights/workbooks",
+      "apiVersion": "2022-04-01",
+      "name": "[variables('workbookName')]",
+      "location": "[parameters('location')]",
+      "kind": "shared",
+      "properties": {
+        "displayName": "[concat('Azure Terraform MCP - audit (', parameters('prefix'), ')')]",
+        "category": "workbook",
+        "version": "1.0",
+        "sourceId": "[parameters('workspaceResourceId')]",
+        "serializedData": "[string(variables('workbookContent'))]"
+      }
+    },
+    {
+      "type": "Microsoft.Insights/scheduledQueryRules",
+      "apiVersion": "2021-08-01",
+      "name": "[concat(parameters('prefix'), '-apply-failed')]",
+      "location": "[parameters('location')]",
+      "kind": "LogAlert",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+      ],
+      "properties": {
+        "displayName": "[concat('Azure Terraform MCP (', parameters('prefix'), '): apply failed or was interrupted')]",
+        "description": "A Terraform apply failed or its worker stopped. The deployment may be partly changed: run a new plan.",
+        "severity": 1,
+        "enabled": true,
+        "evaluationFrequency": "PT15M",
+        "windowSize": "PT15M",
+        "scopes": [
+          "[parameters('workspaceResourceId')]"
+        ],
+        "skipQueryValidation": true,
+        "autoMitigate": false,
+        "criteria": {
+          "allOf": [
+            {
+              "query": "ContainerAppConsoleLogs_CL | where Log_s has \"azure-terraform-mcp\" | extend e = parse_json(Log_s) | where tostring(e.app) == \"azure-terraform-mcp\" | where tostring(e.type) == \"operation\" and tostring(e.kind) == \"apply\" and tostring(e.status) in (\"failed\", \"interrupted\")",
+              "timeAggregation": "Count",
+              "operator": "GreaterThan",
+              "threshold": 0,
+              "failingPeriods": {
+                "numberOfEvaluationPeriods": 1,
+                "minFailingPeriodsToAlert": 1
+              }
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/scheduledQueryRules",
+      "apiVersion": "2021-08-01",
+      "name": "[concat(parameters('prefix'), '-worker-recovered')]",
+      "location": "[parameters('location')]",
+      "kind": "LogAlert",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+      ],
+      "properties": {
+        "displayName": "[concat('Azure Terraform MCP (', parameters('prefix'), '): an operation was recovered from a dead worker')]",
+        "description": "A replica died while running Terraform. Plans are retried; applies are marked interrupted.",
+        "severity": 2,
+        "enabled": true,
+        "evaluationFrequency": "PT15M",
+        "windowSize": "PT15M",
+        "scopes": [
+          "[parameters('workspaceResourceId')]"
+        ],
+        "skipQueryValidation": true,
+        "autoMitigate": false,
+        "criteria": {
+          "allOf": [
+            {
+              "query": "ContainerAppConsoleLogs_CL | where Log_s has \"azure-terraform-mcp\" | extend e = parse_json(Log_s) | where tostring(e.app) == \"azure-terraform-mcp\" | where tostring(e.type) == \"operation_recovered\"",
+              "timeAggregation": "Count",
+              "operator": "GreaterThan",
+              "threshold": 0,
+              "failingPeriods": {
+                "numberOfEvaluationPeriods": 1,
+                "minFailingPeriodsToAlert": 1
+              }
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/scheduledQueryRules",
+      "apiVersion": "2021-08-01",
+      "name": "[concat(parameters('prefix'), '-auth-rejected')]",
+      "location": "[parameters('location')]",
+      "kind": "LogAlert",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+      ],
+      "properties": {
+        "displayName": "[concat('Azure Terraform MCP (', parameters('prefix'), '): many rejected sign-ins')]",
+        "description": "More than 10 requests were rejected by the server's own token validation in 15 minutes.",
+        "severity": 2,
+        "enabled": true,
+        "evaluationFrequency": "PT15M",
+        "windowSize": "PT15M",
+        "scopes": [
+          "[parameters('workspaceResourceId')]"
+        ],
+        "skipQueryValidation": true,
+        "autoMitigate": false,
+        "criteria": {
+          "allOf": [
+            {
+              "query": "ContainerAppConsoleLogs_CL | where Log_s has \"azure-terraform-mcp\" | extend e = parse_json(Log_s) | where tostring(e.app) == \"azure-terraform-mcp\" | where tostring(e.type) == \"auth_rejected\"",
+              "timeAggregation": "Count",
+              "operator": "GreaterThan",
+              "threshold": 10,
+              "failingPeriods": {
+                "numberOfEvaluationPeriods": 1,
+                "minFailingPeriodsToAlert": 1
+              }
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/scheduledQueryRules",
+      "apiVersion": "2021-08-01",
+      "name": "[concat(parameters('prefix'), '-denied-calls')]",
+      "location": "[parameters('location')]",
+      "kind": "LogAlert",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+      ],
+      "properties": {
+        "displayName": "[concat('Azure Terraform MCP (', parameters('prefix'), '): many denied tool calls')]",
+        "description": "More than 10 tool calls were denied (policy, approval, budget or disabled environment) in one hour.",
+        "severity": 3,
+        "enabled": true,
+        "evaluationFrequency": "PT1H",
+        "windowSize": "PT1H",
+        "scopes": [
+          "[parameters('workspaceResourceId')]"
+        ],
+        "skipQueryValidation": true,
+        "autoMitigate": false,
+        "criteria": {
+          "allOf": [
+            {
+              "query": "ContainerAppConsoleLogs_CL | where Log_s has \"azure-terraform-mcp\" | extend e = parse_json(Log_s) | where tostring(e.app) == \"azure-terraform-mcp\" | where tostring(e.type) == \"audit\" and tostring(e.outcome) == \"denied\"",
+              "timeAggregation": "Count",
+              "operator": "GreaterThan",
+              "threshold": 10,
+              "failingPeriods": {
+                "numberOfEvaluationPeriods": 1,
+                "minFailingPeriodsToAlert": 1
+              }
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/scheduledQueryRules",
+      "apiVersion": "2021-08-01",
+      "name": "[concat(parameters('prefix'), '-strict-env-apply')]",
+      "location": "[parameters('location')]",
+      "kind": "LogAlert",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+      ],
+      "properties": {
+        "displayName": "[concat('Azure Terraform MCP (', parameters('prefix'), '): change applied in an approval-controlled environment')]",
+        "description": "Informational: a plan was applied in an environment whose applies need approval. Check who planned, approved and applied.",
+        "severity": 3,
+        "enabled": true,
+        "evaluationFrequency": "PT15M",
+        "windowSize": "PT15M",
+        "scopes": [
+          "[parameters('workspaceResourceId')]"
+        ],
+        "skipQueryValidation": true,
+        "autoMitigate": false,
+        "criteria": {
+          "allOf": [
+            {
+              "query": "ContainerAppConsoleLogs_CL | where Log_s has \"azure-terraform-mcp\" | extend e = parse_json(Log_s) | where tostring(e.app) == \"azure-terraform-mcp\" | where tostring(e.type) == \"apply\" and isnotempty(tostring(e.approved_by))",
+              "timeAggregation": "Count",
+              "operator": "GreaterThan",
+              "threshold": 0,
+              "failingPeriods": {
+                "numberOfEvaluationPeriods": 1,
+                "minFailingPeriodsToAlert": 1
+              }
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/scheduledQueryRules",
+      "apiVersion": "2021-08-01",
+      "name": "[concat(parameters('prefix'), '-drift')]",
+      "location": "[parameters('location')]",
+      "kind": "LogAlert",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+      ],
+      "properties": {
+        "displayName": "[concat('Azure Terraform MCP (', parameters('prefix'), '): drift detected')]",
+        "description": "Azure no longer matches what was deployed for at least one deployment.",
+        "severity": 2,
+        "enabled": true,
+        "evaluationFrequency": "PT1H",
+        "windowSize": "PT1H",
+        "scopes": [
+          "[parameters('workspaceResourceId')]"
+        ],
+        "skipQueryValidation": true,
+        "autoMitigate": false,
+        "criteria": {
+          "allOf": [
+            {
+              "query": "ContainerAppConsoleLogs_CL | where Log_s has \"azure-terraform-mcp\" | extend e = parse_json(Log_s) | where tostring(e.app) == \"azure-terraform-mcp\" | where tostring(e.type) == \"drift\" and tobool(e.drifted) == true",
+              "timeAggregation": "Count",
+              "operator": "GreaterThan",
+              "threshold": 0,
+              "failingPeriods": {
+                "numberOfEvaluationPeriods": 1,
+                "minFailingPeriodsToAlert": 1
+              }
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/scheduledQueryRules",
+      "apiVersion": "2021-08-01",
+      "name": "[concat(parameters('prefix'), '-ttl-notice')]",
+      "location": "[parameters('location')]",
+      "kind": "LogAlert",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+      ],
+      "properties": {
+        "displayName": "[concat('Azure Terraform MCP (', parameters('prefix'), '): a time-boxed deployment is about to be destroyed')]",
+        "description": "A time-boxed deployment reached its notice period. Extend it with extend_ttl or let it expire.",
+        "severity": 4,
+        "enabled": true,
+        "evaluationFrequency": "PT15M",
+        "windowSize": "PT15M",
+        "scopes": [
+          "[parameters('workspaceResourceId')]"
+        ],
+        "skipQueryValidation": true,
+        "autoMitigate": false,
+        "criteria": {
+          "allOf": [
+            {
+              "query": "ContainerAppConsoleLogs_CL | where Log_s has \"azure-terraform-mcp\" | extend e = parse_json(Log_s) | where tostring(e.app) == \"azure-terraform-mcp\" | where tostring(e.type) == \"ttl_notice\"",
+              "timeAggregation": "Count",
+              "operator": "GreaterThan",
+              "threshold": 0,
+              "failingPeriods": {
+                "numberOfEvaluationPeriods": 1,
+                "minFailingPeriodsToAlert": 1
+              }
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/scheduledQueryRules",
+      "apiVersion": "2021-08-01",
+      "name": "[concat(parameters('prefix'), '-ttl-reap-failed')]",
+      "location": "[parameters('location')]",
+      "kind": "LogAlert",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+      ],
+      "properties": {
+        "displayName": "[concat('Azure Terraform MCP (', parameters('prefix'), '): an expired deployment could not be destroyed')]",
+        "description": "The TTL reaper failed to destroy an expired deployment; it keeps costing money.",
+        "severity": 2,
+        "enabled": true,
+        "evaluationFrequency": "PT1H",
+        "windowSize": "PT1H",
+        "scopes": [
+          "[parameters('workspaceResourceId')]"
+        ],
+        "skipQueryValidation": true,
+        "autoMitigate": false,
+        "criteria": {
+          "allOf": [
+            {
+              "query": "ContainerAppConsoleLogs_CL | where Log_s has \"azure-terraform-mcp\" | extend e = parse_json(Log_s) | where tostring(e.app) == \"azure-terraform-mcp\" | where tostring(e.type) == \"ttl_reap_failed\"",
+              "timeAggregation": "Count",
+              "operator": "GreaterThan",
+              "threshold": 0,
+              "failingPeriods": {
+                "numberOfEvaluationPeriods": 1,
+                "minFailingPeriodsToAlert": 1
+              }
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+          ]
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "alertRules": {
+      "type": "int",
+      "value": 8
+    }
+  }
+}

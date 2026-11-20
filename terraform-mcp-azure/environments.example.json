@@ -1,0 +1,36 @@
+{
+  "dev": {
+    "resource_group": "rg-aztfmcp-dev",
+    "allowed_locations": ["eastus2", "westus2"],
+    "policy_profile": "standard",
+    "enable_apply": true,
+    "enable_destroy": true,
+    "allow_ephemeral": true,
+    "max_ttl_hours": 168,
+    "monthly_budget_usd": 500,
+    "default_tags": { "costCenter": "CC-SANDBOX" }
+  },
+  "test": {
+    "resource_group": "rg-aztfmcp-test",
+    "allowed_locations": ["eastus2"],
+    "policy_profile": "standard",
+    "enable_apply": true,
+    "enable_destroy": false,
+    "max_resource_changes": 20,
+    "monthly_budget_usd": 1500
+  },
+  "prod": {
+    "resource_group": "rg-payments-prod",
+    "subscription_id": "00000000-0000-0000-0000-000000000000",
+    "allowed_locations": ["eastus2"],
+    "policy_profile": "strict",
+    "enable_apply": true,
+    "enable_destroy": false,
+    "require_approval": true,
+    "approver_group_ids": ["00000000-0000-0000-0000-000000000000"],
+    "plan_ttl_minutes": 480,
+    "monthly_budget_usd": 5000,
+    "budget_block_if_unknown": false,
+    "allowed_templates": ["storage-account", "key-vault", "sql-database", "postgres-flexible", "app-service", "private-endpoint", "service-bus", "cosmos-db", "log-analytics"]
+  }
+}

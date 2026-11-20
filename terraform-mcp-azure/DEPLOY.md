@@ -22,3 +22,5 @@ Azure CLI 2.60+, PowerShell 7, an HCP Terraform org with a **team** API token, C
 10. **Remove:** `./Deploy-TerraformMcp.ps1 -SubscriptionId <sub-guid> -Destroy`
 
 Rotate the connector client secret yearly (`az ad app credential reset --id <connector client id>`) and update it in the connection.
+
+Note: v1 of this script could not run at all - its `Az` wrapper function shadowed the `az` executable and called itself. That is fixed; the script now runs to completion against a fake `az` CLI in CI (`ci/test-deploy-script.sh`), but it is still not validated against a live tenant.

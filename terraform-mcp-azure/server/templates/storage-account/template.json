@@ -1,1 +1,24 @@
-{"description":"Secure storage account (TLS1.2, no public blobs)","variables":{"account_tier":"Standard|Premium","replication_type":"LRS|GRS|ZRS|GZRS"}}
+{
+  "version": "2.0.0",
+  "title": "Storage account",
+  "category": "storage",
+  "description": "General-purpose v2 storage account, private by default: no public network access, no anonymous blobs, no account keys (Entra ID only), TLS 1.2, blob versioning and soft delete.",
+  "security_defaults": [
+    "Public network access off; firewall default action Deny",
+    "Anonymous blob access off; HTTPS only; TLS 1.2 minimum",
+    "Shared key (account key / SAS) sign-in off: Entra ID RBAC only",
+    "Blob versioning on; blob and container soft delete on"
+  ],
+  "variables": {
+    "account_tier": { "type": "string", "enum": ["Standard", "Premium"], "default": "Standard", "description": "Performance tier." },
+    "replication_type": { "type": "string", "enum": ["LRS", "ZRS", "GRS", "RAGRS", "GZRS", "RAGZRS"], "default": "ZRS", "description": "Redundancy. Premium supports only LRS and ZRS." },
+    "public_network_access_enabled": { "type": "boolean", "default": false, "description": "Allow access from the internet (through the IP firewall). Leave false and use a private endpoint." },
+    "allowed_ip_ranges": { "type": "list", "items": { "type": "string", "format": "ip_or_cidr" }, "max_items": 50, "default": [], "description": "Public IPs / CIDR ranges allowed through the firewall when public access is on." },
+    "shared_access_key_enabled": { "type": "boolean", "default": false, "description": "Allow account keys and SAS tokens. Leave false: use Entra ID roles." },
+    "versioning_enabled": { "type": "boolean", "default": true, "description": "Keep previous versions of blobs." },
+    "soft_delete_days": { "type": "integer", "minimum": 1, "maximum": 365, "default": 14, "description": "Days deleted blobs and containers can be recovered." },
+    "containers": { "type": "list", "items": { "type": "string", "pattern": "[a-z0-9]([a-z0-9]|-(?!-)){1,61}[a-z0-9]" }, "max_items": 20, "default": [], "description": "Private blob containers to create." }
+  },
+  "outputs": { "storage_account_name": "Account name", "storage_account_id": "Resource ID (target for a private endpoint, subresource 'blob')", "primary_blob_endpoint": "Blob endpoint URL" },
+  "notes": ["Grant data access with Azure RBAC (for example Storage Blob Data Contributor); the agent's identity cannot assign roles."]
+}

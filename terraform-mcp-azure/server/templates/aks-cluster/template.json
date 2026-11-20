@@ -1,0 +1,29 @@
+{
+  "version": "1.0.0",
+  "title": "AKS cluster (small, Entra ID RBAC, private API)",
+  "category": "compute",
+  "description": "A small Azure Kubernetes Service cluster: private API server, Entra ID sign-in with Azure RBAC, local accounts disabled, workload identity, Azure Policy add-on, Azure CNI Overlay with Cilium network policy, automatic patch upgrades.",
+  "security_defaults": [
+    "Private API server (no public Kubernetes endpoint)",
+    "Entra ID authentication + Azure RBAC; local (certificate) accounts disabled",
+    "Workload identity (OIDC) enabled; Azure Policy add-on enabled",
+    "Automatic patch and node-image upgrades; Cilium network policy"
+  ],
+  "variables": {
+    "admin_group_object_ids": { "type": "list", "items": { "type": "string", "format": "guid" }, "min_items": 1, "max_items": 10, "required": true, "description": "Entra group object IDs whose members are cluster administrators." },
+    "private_cluster": { "type": "boolean", "default": true, "description": "Private API server. If false, restrict access with authorized_ip_ranges." },
+    "authorized_ip_ranges": { "type": "list", "items": { "type": "string", "format": "cidr" }, "max_items": 50, "default": [], "description": "Public clusters only: CIDR ranges allowed to reach the API server." },
+    "kubernetes_version": { "type": "string", "pattern": "1\\.\\d{2}(\\.\\d{1,2})?", "description": "Kubernetes version such as 1.31 (omit for the regional default)." },
+    "sku_tier": { "type": "string", "enum": ["Free", "Standard"], "default": "Free", "description": "Standard adds the financially backed uptime SLA; use it for production." },
+    "node_vm_size": { "type": "string", "enum": ["Standard_B4ms", "Standard_D2s_v5", "Standard_D4s_v5", "Standard_D8s_v5", "Standard_D2ads_v5", "Standard_D4ads_v5"], "default": "Standard_D2s_v5", "description": "VM size of the system node pool." },
+    "node_count": { "type": "integer", "minimum": 1, "maximum": 5, "default": 2, "description": "Number of nodes." },
+    "node_subnet_id": { "type": "string", "format": "azure_resource_id", "resource_type": "Microsoft.Network/virtualNetworks/subnets", "description": "Existing subnet for the nodes (omit to let AKS create its own network). Cannot be changed later." },
+    "log_analytics_workspace_id": { "type": "string", "format": "azure_resource_id", "resource_type": "Microsoft.OperationalInsights/workspaces", "description": "Workspace for Container Insights." }
+  },
+  "outputs": { "cluster_name": "Cluster name", "cluster_id": "Resource ID", "oidc_issuer_url": "OIDC issuer for workload identity federation", "node_resource_group": "Resource group AKS manages for nodes", "private_fqdn": "Private API server host name" },
+  "notes": [
+    "AKS creates and manages a second resource group for its nodes (node_resource_group), including a public IP for outbound traffic that is not part of this plan.",
+    "With node_subnet_id, the cluster identity needs Network Contributor on that subnet; grant it separately - the agent's identity cannot assign roles.",
+    "A private cluster is reachable only from its network (or az aks command invoke)."
+  ]
+}

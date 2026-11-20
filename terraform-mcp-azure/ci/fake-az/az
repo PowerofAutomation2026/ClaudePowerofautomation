@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""A fake Azure CLI for exercising the deploy scripts without Azure.
+
+It records every invocation in $FAKE_AZ_LOG (one JSON array of arguments per line), remembers
+which resources were "created" in $FAKE_AZ_STATE, and answers `--query ... -o tsv` with plausible
+values. `show` on something that was never created exits 3, like the real CLI.
+It proves the script's control flow, quoting and generated files - not Azure's behaviour."""
+import hashlib
+import json
+import os
+import sys
+
+args = sys.argv[1:]
+log = os.environ.get("FAKE_AZ_LOG", "/tmp/fake-az.log")
+state_path = os.environ.get("FAKE_AZ_STATE", "/tmp/fake-az-state.json")
+with open(log, "a", encoding="utf-8") as f:
+    f.write(json.dumps(args) + "\n")
+try:
+    state = json.load(open(state_path, encoding="utf-8"))
+except (OSError, ValueError):
+    state = {}
+
+
+def opt(*names):
+    for n in names:
+        if n in args:
+            i = args.index(n)
+            return args[i + 1] if i + 1 < len(args) else ""
+    return None
+
+
+def guid(seed):
+    h = hashlib.md5(seed.encode()).hexdigest()
+    return f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}"
+
+
+words = []
+for a in args:
+    if a.startswith("-"):
+        break
+    words.append(a)
+verb = words[-1] if words else ""
+noun = " ".join(words[:-1])
+name = opt("-n", "--name", "--display-name", "--id") or ""
+key = f"{noun}|{name}"
+query = opt("--query") or ""
+fail_on = os.environ.get("FAKE_AZ_FAIL", "")
+if fail_on and fail_on in " ".join(words):
+    sys.stderr.write(f"ERROR: simulated failure of '{' '.join(words)}'\n")
+    sys.exit(1)
+sys.stderr.write("WARNING: fake az - this warning on stderr must not corrupt captured values\n")
+
+
+def save():
+    json.dump(state, open(state_path, "w", encoding="utf-8"))
+
+
+def answer(value):
+    print(value)
+    sys.exit(0)
+
+
+if noun == "account" and verb == "show":
+    answer("22222222-2222-2222-2222-222222222222" if "tenantId" in query else json.dumps({"id": "sub"}))
+if noun == "ad app" and verb == "list":
+    app = state.get(f"ad app|{name}")
+    answer(app or "")
+if noun == "ad app" and verb == "create":
+    state[key] = guid("app" + name)
+    state[f"ad sp-needed|{state[key]}"] = True
+    save()
+    answer(state[key])
+if noun == "ad app credential" and verb == "reset":
+    answer("fake-generated-secret-not-real")
+if noun == "ad sp" and verb == "create":
+    state[key] = True
+    save()
+    answer("{}")
+if noun == "ad sp" and verb == "show":
+    if key not in state:
+        sys.stderr.write("ERROR: service principal not found\n")
+        sys.exit(1)
+    answer(guid("sp" + name))
+if verb in ("create", "assign", "add", "set", "update", "register", "build", "grant", "login", "reset"):
+    if verb == "create":
+        state[key] = True
+        save()
+    if query:
+        last = query.replace("]", "").split(".")[-1]
+        answer(guid(noun + name + last))
+    answer("{}")
+if verb == "delete":
+    state.pop(key, None)
+    save()
+    sys.exit(0)
+if verb == "show" or verb == "get-shared-keys":
+    always = ("ad app", "ad signed-in-user", "group", "monitor log-analytics workspace")
+    if key not in state and noun not in always and verb == "show":
+        sys.stderr.write(f"ERROR: (ResourceNotFound) {noun} '{name}' was not found\n")
+        sys.exit(3)
+    if not query:
+        answer(json.dumps({"name": name}))
+    if "oauth2PermissionScopes" in query:
+        answer("")
+    last = query.replace("]", "").split(".")[-1]
+    if last == "fqdn":
+        answer(f"{name}.fakeenv.eastus2.azurecontainerapps.io")
+    if last in ("primarySharedKey", "password"):
+        answer("fake-key-not-real")
+    if last == "id" and noun not in ("ad app", "ad signed-in-user"):
+        sub = opt("--subscription") or "11111111-1111-1111-1111-111111111111"
+        answer(f"/subscriptions/{sub}/resourceGroups/{opt('-g', '--resource-group') or name}/providers/Fake/{noun.replace(' ', '-')}/{name}")
+    answer(guid(noun + name + last))
+answer("{}")

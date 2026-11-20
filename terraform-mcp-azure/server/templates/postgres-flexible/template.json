@@ -1,0 +1,28 @@
+{
+  "version": "1.0.0",
+  "title": "Azure Database for PostgreSQL flexible server",
+  "category": "data",
+  "description": "PostgreSQL flexible server with one database. Entra ID is the only sign-in method (password authentication is off), closed to the internet by default, optional VNet integration and zone-redundant high availability.",
+  "security_defaults": [
+    "Entra ID-only authentication: no administrator password is ever created",
+    "Public network access off",
+    "7-day backups; optional geo-redundant backup and zone-redundant HA"
+  ],
+  "variables": {
+    "entra_admin_name": { "type": "string", "required": true, "min_length": 1, "max_length": 128, "description": "Display name (group / service principal) or UPN (user) of the Entra administrator." },
+    "entra_admin_object_id": { "type": "string", "required": true, "format": "guid", "description": "Object ID of the Entra administrator." },
+    "entra_admin_type": { "type": "string", "enum": ["User", "Group", "ServicePrincipal"], "default": "Group", "description": "Kind of Entra principal." },
+    "postgres_version": { "type": "string", "enum": ["14", "15", "16", "17"], "default": "16", "description": "PostgreSQL major version." },
+    "sku_name": { "type": "string", "enum": ["B_Standard_B1ms", "B_Standard_B2s", "GP_Standard_D2ds_v5", "GP_Standard_D4ds_v5", "GP_Standard_D8ds_v5", "MO_Standard_E2ds_v5", "MO_Standard_E4ds_v5"], "default": "B_Standard_B1ms", "description": "Compute size: B_ burstable (dev/test), GP_ general purpose, MO_ memory optimised." },
+    "storage_mb": { "type": "integer", "enum": [32768, 65536, 131072, 262144, 524288, 1048576], "default": 32768, "description": "Storage in MB (32 GB = 32768). Can grow, never shrink." },
+    "backup_retention_days": { "type": "integer", "minimum": 7, "maximum": 35, "default": 7, "description": "Backup retention." },
+    "geo_redundant_backup_enabled": { "type": "boolean", "default": false, "description": "Copy backups to the paired region. Cannot be changed later." },
+    "high_availability": { "type": "boolean", "default": false, "description": "Zone-redundant standby (not on burstable sizes)." },
+    "public_network_access_enabled": { "type": "boolean", "default": false, "description": "Reachable from the internet. Leave false." },
+    "delegated_subnet_id": { "type": "string", "format": "azure_resource_id", "resource_type": "Microsoft.Network/virtualNetworks/subnets", "description": "Subnet delegated to Microsoft.DBforPostgreSQL/flexibleServers (VNet integration). Needs private_dns_zone_id too. Cannot be changed later." },
+    "private_dns_zone_id": { "type": "string", "format": "azure_resource_id", "resource_type": "Microsoft.Network/privateDnsZones", "description": "A *.postgres.database.azure.com private DNS zone linked to the VNet." },
+    "database_name": { "type": "string", "pattern": "[a-z_][a-z0-9_]{0,62}", "default": "appdb", "description": "Database to create." }
+  },
+  "outputs": { "server_name": "Server name", "server_fqdn": "Server host name", "server_id": "Server resource ID (target for a private endpoint, subresource 'postgresqlServer')", "database_name": "Database name" },
+  "notes": ["With public access off and no delegated subnet, reach the server through a private-endpoint deployment (subresource 'postgresqlServer')."]
+}

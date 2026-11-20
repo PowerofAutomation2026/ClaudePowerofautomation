@@ -1,1 +1,13 @@
-{"description":"Virtual network with named subnets","variables":{"address_space":"list of CIDRs, e.g. [\"10.20.0.0/16\"]","subnets":"map of subnet name to CIDR, e.g. {\"app\":\"10.20.1.0/24\"}"}}
+{
+  "version": "2.0.0",
+  "title": "Virtual network (simple)",
+  "category": "network",
+  "description": "A virtual network with named private subnets (no default outbound internet access). For subnets with their own firewalls use hub-network.",
+  "security_defaults": ["Subnets are private: default outbound internet access is off"],
+  "variables": {
+    "address_space": { "type": "list", "items": { "type": "string", "format": "cidr" }, "min_items": 1, "max_items": 5, "default": ["10.20.0.0/16"], "description": "Address ranges of the network." },
+    "subnets": { "type": "map", "values": { "type": "string", "format": "cidr" }, "key_pattern": "[A-Za-z0-9][A-Za-z0-9_.-]{0,78}[A-Za-z0-9_]", "min_items": 1, "max_items": 20, "default": { "default": "10.20.0.0/24" }, "description": "Subnet name -> CIDR, for example {\"app\": \"10.20.1.0/24\"}." },
+    "dns_servers": { "type": "list", "items": { "type": "string", "pattern": "(\\d{1,3}\\.){3}\\d{1,3}" }, "max_items": 4, "default": [], "description": "Custom DNS server IPs (empty = Azure DNS)." }
+  },
+  "outputs": { "vnet_id": "Virtual network resource ID", "subnet_ids": "Subnet name -> resource ID" }
+}

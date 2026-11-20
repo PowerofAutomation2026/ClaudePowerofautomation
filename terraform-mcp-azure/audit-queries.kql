@@ -1,16 +1,102 @@
-// Who called the MCP server, and how often (Log Analytics > Logs). Container Apps console + system logs.
-ContainerAppConsoleLogs_CL
-| where ContainerAppName_s == "ca-tfmcp"
-| summarize calls=count() by bin(TimeGenerated, 1h)
+// Azure Terraform MCP (v2) - audit queries for the Log Analytics workspace log-<prefix>.
+// The server writes one structured JSON line per event to stdout; Container Apps stores it in
+// ContainerAppConsoleLogs_CL (column Log_s). Every query starts from the same base.
+// Event types: audit (one per tool call), plan, apply, operation, operation_recovered, drift,
+// approval_requested, approval_decided, ttl_notice, ttl_reaped, ttl_reap_failed, auth_rejected, startup, shutdown.
+
+// --- base (paste this first, or save it as a function named TfMcpEvents) --------------------------------
+let TfMcpEvents = ContainerAppConsoleLogs_CL
+| where Log_s has "azure-terraform-mcp"
+| extend e = parse_json(Log_s)
+| where tostring(e.app) == "azure-terraform-mcp"
+| extend type = tostring(e.type), user = tostring(e.user), user_oid = tostring(e.user_oid);
+
+// 1. WHO did WHAT: every tool call with the Entra user, tool, outcome and argument fingerprint
+TfMcpEvents
+| where type == "audit"
+| project TimeGenerated, user, user_oid, tool = tostring(e.tool), outcome = tostring(e.outcome), args = tostring(e.args),
+          args_sha256 = tostring(e.args_sha256), plan_id = tostring(e.result_plan_id), operation_id = tostring(e.result_operation_id),
+          duration_ms = todouble(e.duration_ms), error = tostring(e.error), audit_id = tostring(e.audit_id)
 | order by TimeGenerated desc;
 
-// Auth failures (401/403) in the last 24h
-ContainerAppSystemLogs_CL
-| where TimeGenerated > ago(24h) and Log_s has_any ("401","403")
-| project TimeGenerated, Log_s;
+// 2. Activity per user per day
+TfMcpEvents
+| where type == "audit"
+| summarize calls = count(), denied = countif(tostring(e.outcome) == "denied"), invalid = countif(tostring(e.outcome) == "invalid"),
+            errors = countif(tostring(e.outcome) == "error") by user, bin(TimeGenerated, 1d)
+| order by TimeGenerated desc, calls desc;
 
-// Terraform apply/destroy attempts requested through the server
-ContainerAppConsoleLogs_CL
-| where Log_s has_any ("create_run","apply","destroy")
-| project TimeGenerated, Log_s
-| order by TimeGenerated desc
+// 3. Every change to Azure: who planned it, who approved it, who applied it
+TfMcpEvents
+| where type == "apply"
+| project TimeGenerated, environment = tostring(e.environment), deployment = tostring(e.deployment), destroy = tobool(e.destroy),
+          outcome = tostring(e.outcome), applied_by = user, planned_by = tostring(e.planned_by), approved_by = tostring(e.approved_by),
+          origin = tostring(e.origin), plan_id = tostring(e.plan_id)
+| order by TimeGenerated desc;
+
+// 4. Two-person rule check: applies in approval environments where approver is missing or equals the planner (should return nothing)
+TfMcpEvents
+| where type == "apply" and tostring(e.environment) in ("prod")          // list your approval environments here
+| where tostring(e.origin) != "ttl-reaper"
+| where isempty(tostring(e.approved_by)) or tostring(e.approved_by) == tostring(e.planned_by)
+| project TimeGenerated, environment = tostring(e.environment), deployment = tostring(e.deployment), applied_by = user,
+          planned_by = tostring(e.planned_by), approved_by = tostring(e.approved_by), plan_id = tostring(e.plan_id);
+
+// 5. Approval trail
+TfMcpEvents
+| where type in ("approval_requested", "approval_decided")
+| project TimeGenerated, type, decision = tostring(e.decision), by = user, requested_by = tostring(e.requested_by),
+          environment = tostring(e.environment), deployment = tostring(e.deployment), plan_id = tostring(e.plan_id),
+          justification = tostring(e.justification)
+| order by TimeGenerated desc;
+
+// 6. Plans blocked by the policy gate, and which rules fired
+TfMcpEvents
+| where type == "plan" and tobool(e.policy_allowed) == false
+| mv-expand rule = e.policy_violations
+| summarize blocked_plans = dcount(tostring(e.plan_id)) by rule = tostring(rule), user, environment = tostring(e.environment)
+| order by blocked_plans desc;
+
+// 7. Denied tool calls (policy, approval, budget, disabled environment) and invalid input
+TfMcpEvents
+| where type == "audit" and tostring(e.outcome) in ("denied", "invalid")
+| project TimeGenerated, user, tool = tostring(e.tool), outcome = tostring(e.outcome), error = tostring(e.error), args = tostring(e.args)
+| order by TimeGenerated desc;
+
+// 8. Estimated monthly cost added by plans, per environment and user (list prices, estimates only)
+TfMcpEvents
+| where type == "plan" and tobool(e.has_changes) == true
+| summarize planned_delta_usd = sum(todouble(e.monthly_delta_usd)), plans = count() by environment = tostring(e.environment), user
+| order by planned_delta_usd desc;
+
+// 9. Drift: deployments that no longer match what was applied
+TfMcpEvents
+| where type == "drift"
+| summarize arg_max(TimeGenerated, *) by environment = tostring(e.environment), deployment = tostring(e.deployment)
+| where tobool(e.drifted) == true
+| project TimeGenerated, environment, deployment, drifted_resources = tostring(e.drifted_resources);
+
+// 10. Time-boxed deployments: notices, automatic destroys and failures
+TfMcpEvents
+| where type in ("ttl_notice", "ttl_reaped", "ttl_reap_failed", "ttl_reap_skipped")
+| project TimeGenerated, type, environment = tostring(e.environment), deployment = tostring(e.deployment), owner = tostring(e.owner),
+          expires_at = tostring(e.expires_at), error = tostring(e.error)
+| order by TimeGenerated desc;
+
+// 11. Reliability: failed / interrupted operations and operations recovered from a dead replica
+TfMcpEvents
+| where (type == "operation" and tostring(e.status) in ("failed", "interrupted")) or type == "operation_recovered"
+| project TimeGenerated, type, kind = tostring(e.kind), status = tostring(e.status), action = tostring(e.action),
+          environment = tostring(e.environment), deployment = tostring(e.deployment), operation_id = tostring(e.operation_id), user
+| order by TimeGenerated desc;
+
+// 12. Requests rejected by the server's own token validation (should be near zero behind Easy Auth)
+TfMcpEvents
+| where type == "auth_rejected"
+| summarize rejected = count() by reason = tostring(e.reason), bin(TimeGenerated, 1h)
+| order by TimeGenerated desc;
+
+// 13. Platform-level sign-in failures (Easy Auth, before the request reaches the server)
+ContainerAppSystemLogs_CL
+| where TimeGenerated > ago(24h) and Log_s has_any ("401", "403")
+| project TimeGenerated, Log_s;

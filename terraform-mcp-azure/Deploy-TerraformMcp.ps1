@@ -35,10 +35,20 @@ $app     = "ca-$Prefix"
 $law     = "log-$Prefix"
 $outDir  = Join-Path $PSScriptRoot 'out'
 
-function Az { # run az, fail on non-zero, return stdout
-  $out = & az @args 2>&1
-  if ($LASTEXITCODE -ne 0) { throw "az $($args -join ' ') failed:`n$out" }
-  $out
+# NOTE: the wrapper must not be called "Az": PowerShell command names are case-insensitive and a function
+# wins over an executable, so `function Az { & az ... }` would call itself forever (a bug in v1 of this script).
+$script:AzExe = $null
+function Invoke-AzCli { # run az, fail on non-zero, return stdout only (stderr warnings never pollute values)
+  if (-not $script:AzExe) { $script:AzExe = (Get-Command az -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source }
+  $previous = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  try { $all = & $script:AzExe @args 2>&1 } finally { $ErrorActionPreference = $previous }
+  $code = $LASTEXITCODE
+  $stdout = @($all | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }) -join "`n"
+  if ($code -ne 0) {
+    $stderr = @($all | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] } | ForEach-Object { "$_" }) -join "`n"
+    throw "az $($args[0..([Math]::Min(2, $args.Count - 1))] -join ' ') ... failed (exit $code):`n$stderr`n$stdout"
+  }
+  $stdout.Trim()
 }
 
 # --- prerequisites -----------------------------------------------------------
@@ -53,8 +63,8 @@ az provider register --namespace Microsoft.App --wait | Out-Null
 az provider register --namespace Microsoft.OperationalInsights | Out-Null
 
 if (-not (az account show 2>$null)) { az login | Out-Null }
-Az account set --subscription $SubscriptionId | Out-Null
-$tenantId = (Az account show --query tenantId -o tsv).Trim()
+Invoke-AzCli account set --subscription $SubscriptionId | Out-Null
+$tenantId = (Invoke-AzCli account show --query tenantId -o tsv).Trim()
 
 # --- teardown ----------------------------------------------------------------
 if ($Destroy) {
@@ -76,13 +86,13 @@ $tfePlain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropS
 
 # --- Azure hosting -----------------------------------------------------------
 Write-Host '1/5 Resource group + Container Apps environment' -ForegroundColor Cyan
-Az group create -n $rg -l $Location | Out-Null
-Az monitor log-analytics workspace create -g $rg -n $law -l $Location | Out-Null
-$lawId  = (Az monitor log-analytics workspace show -g $rg -n $law --query customerId -o tsv).Trim()
-$lawKey = (Az monitor log-analytics workspace get-shared-keys -g $rg -n $law --query primarySharedKey -o tsv).Trim()
+Invoke-AzCli group create -n $rg -l $Location | Out-Null
+Invoke-AzCli monitor log-analytics workspace create -g $rg -n $law -l $Location | Out-Null
+$lawId  = (Invoke-AzCli monitor log-analytics workspace show -g $rg -n $law --query customerId -o tsv).Trim()
+$lawKey = (Invoke-AzCli monitor log-analytics workspace get-shared-keys -g $rg -n $law --query primarySharedKey -o tsv).Trim()
 $envExists = az containerapp env show -g $rg -n $envName 2>$null
 if (-not $envExists) {
-  Az containerapp env create -g $rg -n $envName -l $Location --logs-workspace-id $lawId --logs-workspace-key $lawKey | Out-Null
+  Invoke-AzCli containerapp env create -g $rg -n $envName -l $Location --logs-workspace-id $lawId --logs-workspace-key $lawKey | Out-Null
 }
 
 Write-Host '2/5 Terraform MCP server container' -ForegroundColor Cyan
@@ -95,35 +105,35 @@ $envVars = @(
 )
 $appExists = az containerapp show -g $rg -n $app 2>$null
 if (-not $appExists) {
-  Az containerapp create -g $rg -n $app --environment $envName --image $Image `
+  Invoke-AzCli containerapp create -g $rg -n $app --environment $envName --image $Image `
     --target-port 8080 --ingress external --transport http `
     --min-replicas 1 --max-replicas 5 --cpu 0.5 --memory 1Gi `
     --scale-rule-name http --scale-rule-type http --scale-rule-http-concurrency 20 `
     --secrets "tfe-token=$tfePlain" --env-vars $envVars | Out-Null
 } else {
-  Az containerapp secret set -g $rg -n $app --secrets "tfe-token=$tfePlain" | Out-Null
-  Az containerapp update -g $rg -n $app --image $Image --set-env-vars $envVars | Out-Null
+  Invoke-AzCli containerapp secret set -g $rg -n $app --secrets "tfe-token=$tfePlain" | Out-Null
+  Invoke-AzCli containerapp update -g $rg -n $app --image $Image --set-env-vars $envVars | Out-Null
 }
-$fqdn = (Az containerapp show -g $rg -n $app --query properties.configuration.ingress.fqdn -o tsv).Trim()
+$fqdn = (Invoke-AzCli containerapp show -g $rg -n $app --query properties.configuration.ingress.fqdn -o tsv).Trim()
 
 # --- optional: Key Vault for the HCP Terraform token -------------------------
 if ($UseKeyVault) {
   Write-Host '2b/5 Key Vault + managed identity for the HCP token' -ForegroundColor Cyan
-  $kv = ("kv-$Prefix-" + (Az account show --query id -o tsv).Trim().Substring(0,6)).ToLower()
+  $kv = ("kv-$Prefix-" + (Invoke-AzCli account show --query id -o tsv).Trim().Substring(0,6)).ToLower()
   if (-not (az keyvault show -n $kv 2>$null)) {
-    Az keyvault create -g $rg -n $kv -l $Location --enable-rbac-authorization true --enable-purge-protection true | Out-Null
+    Invoke-AzCli keyvault create -g $rg -n $kv -l $Location --enable-rbac-authorization true --enable-purge-protection true | Out-Null
   }
-  $kvScope = (Az keyvault show -n $kv --query id -o tsv).Trim()
-  $me = (Az ad signed-in-user show --query id -o tsv).Trim()
-  Az role assignment create --assignee-object-id $me --assignee-principal-type User --role 'Key Vault Secrets Officer' --scope $kvScope 2>$null | Out-Null
+  $kvScope = (Invoke-AzCli keyvault show -n $kv --query id -o tsv).Trim()
+  $me = (Invoke-AzCli ad signed-in-user show --query id -o tsv).Trim()
+  Invoke-AzCli role assignment create --assignee-object-id $me --assignee-principal-type User --role 'Key Vault Secrets Officer' --scope $kvScope 2>$null | Out-Null
   Start-Sleep 20
-  Az keyvault secret set --vault-name $kv --name tfe-token --value $tfePlain | Out-Null
-  $kvUri = (Az keyvault secret show --vault-name $kv --name tfe-token --query id -o tsv).Trim() -replace '/[0-9a-f]{32}$',''
-  Az containerapp identity assign -g $rg -n $app --system-assigned | Out-Null
-  $miPrincipal = (Az containerapp show -g $rg -n $app --query identity.principalId -o tsv).Trim()
-  Az role assignment create --assignee-object-id $miPrincipal --assignee-principal-type ServicePrincipal --role 'Key Vault Secrets User' --scope $kvScope | Out-Null
+  Invoke-AzCli keyvault secret set --vault-name $kv --name tfe-token --value $tfePlain | Out-Null
+  $kvUri = (Invoke-AzCli keyvault secret show --vault-name $kv --name tfe-token --query id -o tsv).Trim() -replace '/[0-9a-f]{32}$',''
+  Invoke-AzCli containerapp identity assign -g $rg -n $app --system-assigned | Out-Null
+  $miPrincipal = (Invoke-AzCli containerapp show -g $rg -n $app --query identity.principalId -o tsv).Trim()
+  Invoke-AzCli role assignment create --assignee-object-id $miPrincipal --assignee-principal-type ServicePrincipal --role 'Key Vault Secrets User' --scope $kvScope | Out-Null
   for ($i=0; $i -lt 8; $i++) {   # RBAC propagation can take a few minutes
-    try { Az containerapp secret set -g $rg -n $app --secrets "tfe-token=keyvaultref:$kvUri,identityref:system" | Out-Null; break }
+    try { Invoke-AzCli containerapp secret set -g $rg -n $app --secrets "tfe-token=keyvaultref:$kvUri,identityref:system" | Out-Null; break }
     catch { if ($i -eq 7) { throw }; Start-Sleep 30 }
   }
 }
@@ -132,8 +142,8 @@ if ($UseKeyVault) {
 Write-Host '3/5 Entra app registrations (API + connector client)' -ForegroundColor Cyan
 $apiName = "$Prefix-api"; $cliName = "$Prefix-connector"
 $apiId = (az ad app list --display-name $apiName --query '[0].appId' -o tsv)
-if (-not $apiId) { $apiId = (Az ad app create --display-name $apiName --sign-in-audience AzureADMyOrg --query appId -o tsv).Trim() }
-$apiObj = (Az ad app show --id $apiId --query id -o tsv).Trim()
+if (-not $apiId) { $apiId = (Invoke-AzCli ad app create --display-name $apiName --sign-in-audience AzureADMyOrg --query appId -o tsv).Trim() }
+$apiObj = (Invoke-AzCli ad app show --id $apiId --query id -o tsv).Trim()
 $scopeId = [guid]::NewGuid().ToString()
 $existingScope = (az ad app show --id $apiId --query "api.oauth2PermissionScopes[?value=='access_as_user'].id | [0]" -o tsv)
 if ($existingScope) { $scopeId = $existingScope.Trim() }
@@ -144,38 +154,38 @@ $apiBody = @{ identifierUris = @("api://$apiId"); api = @{
     adminConsentDisplayName='Use Terraform MCP'; adminConsentDescription='Call the Terraform MCP server as the signed-in user'
     userConsentDisplayName='Use Terraform MCP'; userConsentDescription='Call the Terraform MCP server on your behalf' }) } } | ConvertTo-Json -Depth 6 -Compress
 $tmp = New-TemporaryFile; Set-Content $tmp $apiBody
-Az rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications/$apiObj" --headers 'Content-Type=application/json' --body "@$tmp" | Out-Null
+Invoke-AzCli rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications/$apiObj" --headers 'Content-Type=application/json' --body "@$tmp" | Out-Null
 Remove-Item $tmp
-if (-not (az ad sp show --id $apiId 2>$null)) { Az ad sp create --id $apiId | Out-Null }
+if (-not (az ad sp show --id $apiId 2>$null)) { Invoke-AzCli ad sp create --id $apiId | Out-Null }
 
 $cliId = (az ad app list --display-name $cliName --query '[0].appId' -o tsv)
-if (-not $cliId) { $cliId = (Az ad app create --display-name $cliName --sign-in-audience AzureADMyOrg `
+if (-not $cliId) { $cliId = (Invoke-AzCli ad app create --display-name $cliName --sign-in-audience AzureADMyOrg `
     --web-redirect-uris 'https://global.consent.azure-apim.net/redirect' --query appId -o tsv).Trim() }
-$cliSecret = (Az ad app credential reset --id $cliId --display-name 'copilot-studio' --years 1 --query password -o tsv).Trim()
-if (-not (az ad sp show --id $cliId 2>$null)) { Az ad sp create --id $cliId | Out-Null }
-Az ad app permission add --id $cliId --api $apiId --api-permissions "$scopeId=Scope" | Out-Null
-try { Az ad app permission grant --id $cliId --api $apiId --scope access_as_user | Out-Null }
+$cliSecret = (Invoke-AzCli ad app credential reset --id $cliId --display-name 'copilot-studio' --years 1 --query password -o tsv).Trim()
+if (-not (az ad sp show --id $cliId 2>$null)) { Invoke-AzCli ad sp create --id $cliId | Out-Null }
+Invoke-AzCli ad app permission add --id $cliId --api $apiId --api-permissions "$scopeId=Scope" | Out-Null
+try { Invoke-AzCli ad app permission grant --id $cliId --api $apiId --scope access_as_user | Out-Null }
 catch { Write-Warning 'Admin consent not granted automatically; ask a Global Admin to grant it in Entra.' }
 
 Write-Host '4/5 Container Apps authentication (reject anonymous calls)' -ForegroundColor Cyan
-Az containerapp auth microsoft update -g $rg -n $app --client-id $apiId `
+Invoke-AzCli containerapp auth microsoft update -g $rg -n $app --client-id $apiId `
   --tenant-id $tenantId --allowed-audiences "api://$apiId" --client-secret $cliSecret --yes | Out-Null
-Az containerapp auth update -g $rg -n $app --enabled true --unauthenticated-client-action Return401 --yes | Out-Null
+Invoke-AzCli containerapp auth update -g $rg -n $app --enabled true --unauthenticated-client-action Return401 --yes | Out-Null
 
 # --- optional hardening: group-only access + IP allow-list -------------------
 if ($SecurityGroupId) {
   Write-Host 'Restricting access to the Entra group (requires Entra ID P1)' -ForegroundColor Cyan
-  $apiSp = (Az ad sp show --id $apiId --query id -o tsv).Trim()
-  Az ad sp update --id $apiSp --set appRoleAssignmentRequired=true | Out-Null
+  $apiSp = (Invoke-AzCli ad sp show --id $apiId --query id -o tsv).Trim()
+  Invoke-AzCli ad sp update --id $apiSp --set appRoleAssignmentRequired=true | Out-Null
   $b = @{ principalId=$SecurityGroupId; resourceId=$apiSp; appRoleId='00000000-0000-0000-0000-000000000000' } | ConvertTo-Json -Compress
   $t = New-TemporaryFile; Set-Content $t $b
-  try { Az rest --method POST --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$apiSp/appRoleAssignedTo" --headers 'Content-Type=application/json' --body "@$t" | Out-Null }
+  try { Invoke-AzCli rest --method POST --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$apiSp/appRoleAssignedTo" --headers 'Content-Type=application/json' --body "@$t" | Out-Null }
   catch { Write-Warning "Group assignment skipped (maybe already assigned): $_" }
   Remove-Item $t
 }
 if ($AllowedCidrs) {
   $i = 0
-  foreach ($c in $AllowedCidrs) { $i++; Az containerapp ingress access-restriction set -g $rg -n $app --rule-name "allow$i" --ip-address $c --action Allow | Out-Null }
+  foreach ($c in $AllowedCidrs) { $i++; Invoke-AzCli containerapp ingress access-restriction set -g $rg -n $app --rule-name "allow$i" --ip-address $c --action Allow | Out-Null }
 }
 
 # --- Copilot Studio connector files -----------------------------------------

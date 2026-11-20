@@ -1,0 +1,18 @@
+{
+  "version": "1.0.0",
+  "title": "Hub-style virtual network with per-subnet firewalls",
+  "category": "network",
+  "description": "A virtual network where every subnet gets its own network security group that denies all inbound traffic except (optionally) traffic from inside the network. Azure-reserved subnets (GatewaySubnet, AzureFirewallSubnet, AzureBastionSubnet ...) are created without an NSG.",
+  "security_defaults": [
+    "Each subnet has its own NSG with an explicit deny-all-inbound rule",
+    "Subnets are private: default outbound internet access is off",
+    "Network policies are enforced for private endpoints"
+  ],
+  "variables": {
+    "address_space": { "type": "list", "items": { "type": "string", "format": "cidr" }, "min_items": 1, "max_items": 5, "default": ["10.0.0.0/16"], "description": "Address ranges of the network." },
+    "subnets": { "type": "map", "values": { "type": "string", "format": "cidr" }, "key_pattern": "[A-Za-z0-9][A-Za-z0-9_.-]{0,60}[A-Za-z0-9_]", "min_items": 1, "max_items": 12, "default": { "workloads": "10.0.1.0/24", "private-endpoints": "10.0.2.0/24" }, "description": "Subnet name -> CIDR." },
+    "dns_servers": { "type": "list", "items": { "type": "string", "pattern": "(\\d{1,3}\\.){3}\\d{1,3}" }, "max_items": 4, "default": [], "description": "Custom DNS server IPs (empty = Azure DNS)." },
+    "allow_intra_vnet_inbound": { "type": "boolean", "default": true, "description": "Allow traffic between resources inside the virtual network. Set false for full isolation and add rules with network-security-group." }
+  },
+  "outputs": { "vnet_id": "Virtual network resource ID", "subnet_ids": "Subnet name -> resource ID", "nsg_ids": "Subnet name -> NSG resource ID" }
+}

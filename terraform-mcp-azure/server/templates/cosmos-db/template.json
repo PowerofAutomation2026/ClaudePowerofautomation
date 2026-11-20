@@ -1,0 +1,22 @@
+{
+  "version": "1.0.0",
+  "title": "Cosmos DB (NoSQL)",
+  "category": "data",
+  "description": "Cosmos DB for NoSQL account with one database. Keys are disabled (Entra ID RBAC only), closed to the internet by default, TLS 1.2, continuous 7-day backup. Serverless or autoscale provisioned throughput.",
+  "security_defaults": [
+    "Key-based (local) authentication disabled: Entra ID data-plane RBAC only",
+    "Public network access off; TLS 1.2 minimum",
+    "Continuous backup (7-day point-in-time restore)"
+  ],
+  "variables": {
+    "capacity_mode": { "type": "string", "enum": ["Serverless", "Provisioned"], "default": "Serverless", "description": "Serverless (pay per request) or Provisioned (autoscale throughput on the database). Cannot be changed later." },
+    "max_throughput": { "type": "integer", "minimum": 1000, "maximum": 100000, "default": 1000, "description": "Provisioned only: autoscale maximum RU/s (multiples of 1000)." },
+    "consistency_level": { "type": "string", "enum": ["Session", "Eventual", "ConsistentPrefix", "Strong"], "default": "Session", "description": "Default consistency." },
+    "zone_redundant": { "type": "boolean", "default": false, "description": "Spread replicas across availability zones." },
+    "public_network_access_enabled": { "type": "boolean", "default": false, "description": "Reachable from the internet (through the IP firewall). Leave false and use a private endpoint (subresource 'Sql')." },
+    "allowed_ip_ranges": { "type": "list", "items": { "type": "string", "format": "ip_or_cidr" }, "max_items": 50, "default": [], "description": "Public IPs / CIDR ranges allowed when public access is on." },
+    "database_name": { "type": "string", "pattern": "[A-Za-z0-9][A-Za-z0-9_-]{0,62}", "default": "appdb", "description": "Database to create." }
+  },
+  "outputs": { "account_name": "Account name", "account_id": "Resource ID", "endpoint": "Document endpoint", "database_name": "Database name" },
+  "notes": ["Data access uses Cosmos DB's own data-plane role assignments (for example 'Cosmos DB Built-in Data Contributor'); grant them separately."]
+}

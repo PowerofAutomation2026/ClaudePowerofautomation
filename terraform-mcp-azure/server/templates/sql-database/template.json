@@ -1,0 +1,26 @@
+{
+  "version": "1.0.0",
+  "title": "Azure SQL database",
+  "category": "data",
+  "description": "Azure SQL logical server with one database. Entra ID is the only sign-in method (no SQL passwords exist), TLS 1.2, encryption at rest, closed to the internet by default, optional private endpoint.",
+  "security_defaults": [
+    "Entra ID-only authentication: no SQL administrator password is ever created",
+    "Public network access off; TLS 1.2 minimum; transparent data encryption on",
+    "Geo-redundant backups, 7-day point-in-time restore"
+  ],
+  "variables": {
+    "entra_admin_login": { "type": "string", "required": true, "min_length": 1, "max_length": 128, "description": "Display name or UPN of the Entra user or group that administers the server." },
+    "entra_admin_object_id": { "type": "string", "required": true, "format": "guid", "description": "Object ID of that Entra user or group." },
+    "database_name": { "type": "string", "pattern": "[A-Za-z][A-Za-z0-9_-]{0,62}", "default": "appdb", "description": "Database name." },
+    "sku_name": { "type": "string", "enum": ["Basic", "S0", "S1", "S2", "GP_S_Gen5_1", "GP_S_Gen5_2", "GP_S_Gen5_4", "GP_Gen5_2", "GP_Gen5_4", "BC_Gen5_2"], "default": "GP_S_Gen5_1", "description": "Size. GP_S_* is serverless (pauses when idle), GP_* provisioned general purpose, BC_* business critical." },
+    "max_size_gb": { "type": "integer", "minimum": 1, "maximum": 4096, "description": "Maximum data size in GB (omit for the SKU default; Basic allows 2 at most)." },
+    "auto_pause_minutes": { "type": "integer", "minimum": -1, "maximum": 10080, "default": 60, "description": "Serverless only: minutes of inactivity before pausing; -1 never pauses." },
+    "zone_redundant": { "type": "boolean", "default": false, "description": "Spread replicas across availability zones (not for Basic/Standard)." },
+    "backup_storage_redundancy": { "type": "string", "enum": ["Local", "Zone", "Geo"], "default": "Geo", "description": "Redundancy of backups." },
+    "backup_retention_days": { "type": "integer", "minimum": 1, "maximum": 35, "default": 7, "description": "Point-in-time restore window (Basic allows 7 at most)." },
+    "public_network_access_enabled": { "type": "boolean", "default": false, "description": "Reachable from the internet. Leave false and use a private endpoint." },
+    "private_endpoint_subnet_id": { "type": "string", "format": "azure_resource_id", "resource_type": "Microsoft.Network/virtualNetworks/subnets", "description": "Subnet for a private endpoint to the server." },
+    "private_dns_zone_id": { "type": "string", "format": "azure_resource_id", "resource_type": "Microsoft.Network/privateDnsZones", "description": "privatelink.database.windows.net zone for the private endpoint." }
+  },
+  "outputs": { "server_name": "Server name", "server_fqdn": "Server host name", "server_id": "Server resource ID", "database_name": "Database name" }
+}

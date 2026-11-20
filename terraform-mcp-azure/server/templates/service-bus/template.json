@@ -1,0 +1,20 @@
+{
+  "version": "1.0.0",
+  "title": "Service Bus namespace with queues",
+  "category": "integration",
+  "description": "Service Bus namespace with optional queues. SAS keys are disabled (Entra ID RBAC only), TLS 1.2. Premium adds private-only access.",
+  "security_defaults": [
+    "SAS / connection-string (local) authentication disabled: Entra ID RBAC only",
+    "TLS 1.2 minimum; dead-lettering on message expiry",
+    "Public access is ON by default because turning it off needs the Premium SKU; the strict (production) policy requires Premium with public access off"
+  ],
+  "variables": {
+    "sku": { "type": "string", "enum": ["Basic", "Standard", "Premium"], "default": "Standard", "description": "Tier. Premium gives dedicated capacity and private networking." },
+    "capacity": { "type": "integer", "enum": [1, 2, 4, 8, 16], "default": 1, "description": "Premium only: messaging units." },
+    "public_network_access_enabled": { "type": "boolean", "default": true, "description": "Reachable from the internet. false needs Premium." },
+    "queues": { "type": "list", "items": { "type": "string", "pattern": "[A-Za-z0-9]([A-Za-z0-9._/-]{0,48}[A-Za-z0-9])?" }, "max_items": 20, "default": [], "description": "Queues to create." },
+    "max_delivery_count": { "type": "integer", "minimum": 1, "maximum": 2000, "default": 10, "description": "Deliveries before a message is dead-lettered." }
+  },
+  "outputs": { "namespace_name": "Namespace name", "namespace_id": "Resource ID", "endpoint": "Namespace endpoint", "queue_names": "Queues created" },
+  "notes": ["Grant 'Azure Service Bus Data Sender / Receiver' roles separately; connection strings are disabled."]
+}

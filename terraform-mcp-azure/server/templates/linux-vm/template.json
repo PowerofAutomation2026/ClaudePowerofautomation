@@ -1,0 +1,29 @@
+{
+  "version": "1.0.0",
+  "title": "Linux virtual machine (private, Entra ID login)",
+  "category": "compute",
+  "description": "An Ubuntu LTS virtual machine with no public IP address, SSH keys only (passwords disabled), Entra ID SSH login, Trusted Launch (secure boot + vTPM), a managed identity and automatic OS patching.",
+  "security_defaults": [
+    "No public IP address: reach it through Bastion, a VPN or a jump host",
+    "Password sign-in disabled; SSH public key required; Entra ID login extension installed",
+    "Trusted Launch: secure boot and virtual TPM; automatic platform patching",
+    "System-assigned managed identity"
+  ],
+  "variables": {
+    "subnet_id": { "type": "string", "required": true, "format": "azure_resource_id", "resource_type": "Microsoft.Network/virtualNetworks/subnets", "description": "Subnet for the VM's private network interface." },
+    "admin_ssh_public_key": { "type": "string", "required": true, "format": "ssh_public_key", "description": "SSH PUBLIC key for the admin user (ssh-rsa ... or ssh-ed25519 ...). Never a private key." },
+    "admin_username": { "type": "string", "pattern": "[a-z_][a-z0-9_-]{0,30}", "default": "azureuser", "description": "Local admin user name (not root or admin)." },
+    "size": { "type": "string", "enum": ["Standard_B2s", "Standard_B2ms", "Standard_B4ms", "Standard_D2s_v5", "Standard_D4s_v5", "Standard_D8s_v5", "Standard_E2s_v5", "Standard_E4s_v5"], "default": "Standard_B2s", "description": "VM size." },
+    "image": { "type": "string", "enum": ["ubuntu-24.04", "ubuntu-22.04"], "default": "ubuntu-24.04", "description": "Operating system image." },
+    "os_disk_type": { "type": "string", "enum": ["Premium_LRS", "StandardSSD_LRS", "Premium_ZRS", "StandardSSD_ZRS"], "default": "Premium_LRS", "description": "OS disk type." },
+    "os_disk_size_gb": { "type": "integer", "minimum": 30, "maximum": 1024, "default": 64, "description": "OS disk size." },
+    "zone": { "type": "string", "enum": ["1", "2", "3"], "description": "Availability zone (omit for none). Cannot be changed later." },
+    "entra_login_enabled": { "type": "boolean", "default": true, "description": "Install the Entra ID SSH login extension." },
+    "encryption_at_host_enabled": { "type": "boolean", "default": false, "description": "Encrypt temp disks and caches on the host. Requires the EncryptionAtHost feature to be registered on the subscription." }
+  },
+  "outputs": { "vm_name": "VM name", "vm_id": "Resource ID", "private_ip_address": "Private IP", "identity_principal_id": "Managed identity object ID" },
+  "notes": [
+    "To sign in with Entra ID, a user needs the 'Virtual Machine Administrator Login' or 'Virtual Machine User Login' role; grant it separately.",
+    "If the subnet is in another resource group, the agent's identity needs permission to join it."
+  ]
+}

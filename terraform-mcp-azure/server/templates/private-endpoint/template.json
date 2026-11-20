@@ -1,0 +1,14 @@
+{
+  "version": "1.0.0",
+  "title": "Private endpoint",
+  "category": "network",
+  "description": "A private endpoint that gives an existing Azure resource (storage, Key Vault, SQL, PostgreSQL, Cosmos DB, registry, Service Bus, web app ...) a private IP address in a subnet, with optional private DNS registration.",
+  "security_defaults": ["Automatic approval only works for resources this identity manages; otherwise the connection is refused, never silently pending"],
+  "variables": {
+    "target_resource_id": { "type": "string", "required": true, "format": "azure_resource_id", "description": "Resource ID of the service to connect to (an output of another deployment)." },
+    "subresource": { "type": "string", "required": true, "enum": ["blob", "file", "queue", "table", "dfs", "web", "vault", "sqlServer", "postgresqlServer", "Sql", "MongoDB", "registry", "namespace", "sites", "configurationStores", "account", "searchService", "redisCache"], "description": "Which part of the service: blob/file/queue/table/dfs/web (storage), vault (Key Vault), sqlServer (Azure SQL), postgresqlServer, Sql (Cosmos DB NoSQL), registry (ACR), namespace (Service Bus / Event Hubs), sites (web app)." },
+    "subnet_id": { "type": "string", "required": true, "format": "azure_resource_id", "resource_type": "Microsoft.Network/virtualNetworks/subnets", "description": "Subnet that receives the private IP." },
+    "private_dns_zone_ids": { "type": "list", "items": { "type": "string", "format": "azure_resource_id", "resource_type": "Microsoft.Network/privateDnsZones" }, "max_items": 5, "default": [], "description": "Private DNS zones (privatelink.*) to register the endpoint in." }
+  },
+  "outputs": { "private_endpoint_id": "Resource ID", "private_ip_address": "Private IP assigned to the endpoint" }
+}

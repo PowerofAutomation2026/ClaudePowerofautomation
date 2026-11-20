@@ -1,140 +1,285 @@
-"""Terraform-on-Azure MCP server.
-Runs Terraform inside the container using the Container App's managed identity (no HCP Terraform needed).
-Guardrails: curated templates only, fixed resource group, plan-then-apply with a saved plan, apply/destroy off by default."""
-import json, os, pathlib, re, shutil, subprocess, tempfile, threading, time, uuid
-from azure.identity import DefaultAzureCredential
-from azure.storage.blob import BlobServiceClient
-from mcp.server.fastmcp import FastMCP
+"""Azure Terraform MCP server - entry point.
 
-SUB   = os.environ["SUBSCRIPTION_ID"]
-TENANT = os.environ.get("TENANT_ID", "")
-RG    = os.environ["WORKLOAD_RG"]
-SA    = os.environ["STATE_SA"]
-LOC_OK = [x.strip() for x in os.environ.get("ALLOWED_LOCATIONS", "eastus2").split(",") if x.strip()]
-APPLY_OK   = os.environ.get("ENABLE_APPLY", "false").lower() == "true"
-DESTROY_OK = os.environ.get("ENABLE_DESTROY", "false").lower() == "true"
-TEMPLATES = pathlib.Path(os.environ.get("TEMPLATE_DIR", "/app/templates"))
-PLAN_TTL = 3600
-NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,22}[a-z0-9]$")
+  python server.py                 serve MCP over streamable HTTP on :8080/mcp
+  python server.py job reaper      destroy expired time-boxed deployments (scheduled Container Apps Job)
+  python server.py job drift       drift-check every deployment            (scheduled Container Apps Job)
+  python server.py job recover     recover operations whose worker died    (also done by every replica)
 
-blobs = BlobServiceClient(f"https://{SA}.blob.core.windows.net", credential=DefaultAzureCredential())
-state_c, plans_c = blobs.get_container_client("tfstate"), blobs.get_container_client("plans")
-mcp = FastMCP("azure-terraform", host="0.0.0.0", port=8080, stateless_http=True, json_response=True)
-OPS: dict = {}
+All logic lives in the ``tfmcp`` package; this file only wires Azure, Terraform and MCP together.
+"""
+from __future__ import annotations
 
-def _templates():
-    return {p.name: json.loads((p / "template.json").read_text()) for p in sorted(TEMPLATES.iterdir())
-            if p.is_dir() and not p.name.startswith("_")}
+import functools
+import json
+import os
+import sys
+import time
 
-def _tf(args, cwd, timeout=3000):
-    env = {**os.environ, "ARM_USE_MSI": "true", "ARM_SUBSCRIPTION_ID": SUB, "ARM_TENANT_ID": TENANT}
-    r = subprocess.run(["terraform", *args, "-no-color"], cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
-    return r.returncode, (r.stdout + r.stderr)
+import anyio
 
-def _prepare(template, deployment, variables, workdir):
-    shutil.copytree(TEMPLATES / template, workdir, dirs_exist_ok=True)
-    shutil.copy(TEMPLATES / "_common" / "common.tf", workdir / "common.tf")
-    (workdir / "terraform.tfvars.json").write_text(json.dumps(variables))
-    code, out = _tf(["init", "-reconfigure", f"-backend-config=storage_account_name={SA}", "-backend-config=container_name=tfstate",
-                     f"-backend-config=key={deployment}.tfstate", "-backend-config=use_azuread_auth=true",
-                     "-backend-config=use_msi=true", f"-backend-config=subscription_id={SUB}"], workdir)
-    if code: raise RuntimeError("terraform init failed:\n" + out[-3000:])
+from tfmcp import __version__
+from tfmcp.audit import AuditLog
+from tfmcp.catalog import Catalog
+from tfmcp.config import Settings
+from tfmcp.cost import CostEstimator, PriceClient
+from tfmcp.identity import (Authenticator, IdentityMiddleware, JwtValidator, current_identity, reset_identity,
+                            set_identity, system_identity)
+from tfmcp.operations import OperationEngine
+from tfmcp.policy import PolicyEngine
+from tfmcp.service import Service, ToolError
+from tfmcp.storage import BlobStore, MemoryStore
+from tfmcp.terraform import TerraformRunner
 
-def _validate(template, deployment, variables):
-    tpls = _templates()
-    if template not in tpls: raise ValueError(f"Unknown template. Choose from: {list(tpls)}")
-    if not NAME_RE.match(deployment): raise ValueError("deployment_name must be 3-24 chars: lowercase letters, digits, hyphens")
-    allowed = set(tpls[template]["variables"]) | {"location"}
-    bad = set(variables) - allowed
-    if bad: raise ValueError(f"Unsupported variables {sorted(bad)}. Allowed: {sorted(allowed)}")
-    loc = variables.get("location", LOC_OK[0])
-    if loc not in LOC_OK: raise ValueError(f"location must be one of {LOC_OK}")
-    return {**variables, "location": loc, "subscription_id": SUB, "deployment_name": deployment, "resource_group_name": RG,
-            "tags": {"managedBy": "azure-terraform-mcp", "deployment": deployment}}
 
-def _run(op_id, fn, wait=75):
-    OPS[op_id] = {"operation_id": op_id, "status": "running", "started": time.time()}
-    def work():
-        try: OPS[op_id].update(status="succeeded", result=fn())
-        except Exception as e: OPS[op_id].update(status="failed", error=str(e)[-3000:])
-        plans_c.upload_blob(f"ops/{op_id}.json", json.dumps(OPS[op_id], default=str), overwrite=True)
-    t = threading.Thread(target=work, daemon=True); t.start(); t.join(wait)
-    return OPS[op_id] if OPS[op_id]["status"] != "running" else {**OPS[op_id], "note": "Still running - call get_operation with this operation_id in ~30s."}
+def build(settings: Settings, *, data=None, state=None, audit_store=None, tf=None, price_fetch=None):
+    """Wire the service. Stores / runner / price fetcher can be injected (tests, local runs)."""
+    tf_env = {"ARM_USE_MSI": "true", "ARM_SUBSCRIPTION_ID": settings.subscription_id, "ARM_TENANT_ID": settings.tenant_id}
+    if os.environ.get("AZURE_CLIENT_ID"):
+        tf_env["ARM_CLIENT_ID"] = os.environ["AZURE_CLIENT_ID"]   # user-assigned managed identity
+    audit_boot = AuditLog(None)
+    if data is None:
+        if settings.store_mode == "memory":
+            data, state, audit_store = MemoryStore(), MemoryStore(), MemoryStore()
+            audit_boot.emit({"type": "startup_warning", "message": "STORE_MODE=memory: nothing is persisted. Local testing only."})
+        else:
+            from azure.identity import DefaultAzureCredential
 
-def _plan_job(plan_id, template, deployment, variables, destroy):
-    def job():
-        with tempfile.TemporaryDirectory() as d:
-            wd = pathlib.Path(d); _prepare(template, deployment, variables, wd)
-            code, out = _tf(["plan", "-out=tfplan", "-detailed-exitcode"] + (["-destroy"] if destroy else []), wd)
-            if code == 1: raise RuntimeError(out[-3000:])
-            changes = code == 2
-            _, shown = _tf(["show", "tfplan"], wd)
-            if changes:
-                for n in ("tfplan",): plans_c.upload_blob(f"plans/{plan_id}/{n}", (wd / n).read_bytes(), overwrite=True)
-                plans_c.upload_blob(f"plans/{plan_id}/meta.json", json.dumps(dict(template=template, deployment=deployment,
-                    variables=variables, destroy=destroy, created=time.time())), overwrite=True)
-            return {"plan_id": plan_id if changes else None, "has_changes": changes, "destroy": destroy,
-                    "summary": shown[-6000:], "next": f"Show this to the user. To execute, call apply_plan('{plan_id}') after the user explicitly confirms." if changes else "No changes."}
-    return job
+            cred = DefaultAzureCredential()
+            data = BlobStore.from_account(settings.state_account, "plans", cred)
+            state = BlobStore.from_account(settings.state_account, "tfstate", cred)
+            audit_store = BlobStore.from_account(settings.state_account, "audit", cred)
+            mode = os.environ.get("TOKEN_BROKER", "auto").lower()
+            if mode == "on" or (mode == "auto" and os.environ.get("IDENTITY_ENDPOINT")):
+                from tfmcp.tokenbroker import TokenBroker
 
-@mcp.tool()
-def list_templates() -> dict:
-    """List the approved infrastructure templates and the variables each accepts."""
-    return {"resource_group": RG, "allowed_locations": LOC_OK, "apply_enabled": APPLY_OK, "destroy_enabled": DESTROY_OK, "templates": _templates()}
+                def get_token(scope: str):
+                    t = cred.get_token(scope)
+                    return t.token, t.expires_on
+                broker = TokenBroker(get_token, on_error=lambda m: audit_boot.emit({"type": "token_broker_error", "error": m}))
+                tf_env["ARM_MSI_ENDPOINT"] = broker.start()
+    audit = AuditLog(audit_store)
+    engine = OperationEngine(data, state_store=state, lease_seconds=settings.lease_seconds,
+                             heartbeat_seconds=settings.heartbeat_seconds, max_workers=settings.max_concurrent_ops,
+                             max_attempts=settings.max_plan_attempts, log=audit.emit)
+    notify = None
+    if settings.notify_webhook_url:
+        def notify(event: dict) -> None:
+            if event.get("text"):
+                import httpx
+                httpx.post(settings.notify_webhook_url, json={"text": event["text"], "event": event}, timeout=5.0)
+    service = Service(settings, data=data, state=state, audit=audit, catalog=Catalog(settings.template_dir),
+                      policy=PolicyEngine.from_file(settings.policy_file),
+                      cost=CostEstimator(PriceClient(cache=data, fetch=price_fetch, ttl_hours=settings.price_cache_hours),
+                                         enabled=settings.cost_enabled),
+                      tf=tf or TerraformRunner(os.environ.get("TERRAFORM_BIN", "terraform"), tf_env), engine=engine, notify=notify)
+    return service, engine, audit
 
-@mcp.tool()
-def plan_deployment(template: str, deployment_name: str, variables: dict | None = None) -> dict:
-    """Create (or update) an Azure deployment from an approved template: runs `terraform plan` and returns a plan_id. Nothing is changed until apply_plan."""
-    v = _validate(template, deployment_name, variables or {}); pid = uuid.uuid4().hex[:12]
-    return _run(pid, _plan_job(pid, template, deployment_name, v, False))
 
-@mcp.tool()
-def plan_destroy(deployment_name: str) -> dict:
-    """Plan the destruction of an existing deployment. Requires the destroy feature; nothing is deleted until apply_plan."""
-    if not DESTROY_OK: raise PermissionError("Destroy is disabled on this server (ENABLE_DESTROY=false).")
-    if not NAME_RE.match(deployment_name): raise ValueError("bad deployment_name")
-    if not any(b.name == f"{deployment_name}.tfstate" for b in state_c.list_blobs()): raise ValueError("No such deployment")
-    meta = json.loads(plans_c.download_blob(f"deployments/{deployment_name}.json").readall())
-    pid = uuid.uuid4().hex[:12]
-    return _run(pid, _plan_job(pid, meta["template"], deployment_name, meta["variables"], True))
+def create_mcp(svc: Service, audit: AuditLog, settings: Settings):
+    from mcp.server.fastmcp import FastMCP
 
-@mcp.tool()
-def apply_plan(plan_id: str) -> dict:
-    """Apply a previously created plan. ONLY call after the user has reviewed the plan summary and explicitly confirmed."""
-    if not re.fullmatch(r"[0-9a-f]{12}", plan_id): raise ValueError("bad plan_id")
-    meta = json.loads(plans_c.download_blob(f"plans/{plan_id}/meta.json").readall())
-    if meta["destroy"] and not DESTROY_OK: raise PermissionError("Destroy is disabled on this server.")
-    if not meta["destroy"] and not APPLY_OK: raise PermissionError("Apply is disabled on this server (ENABLE_APPLY=false). Plans are read-only.")
-    if time.time() - meta["created"] > PLAN_TTL: raise ValueError("Plan expired (1h). Run the plan again.")
-    def job():
-        with tempfile.TemporaryDirectory() as d:
-            wd = pathlib.Path(d); _prepare(meta["template"], meta["deployment"], meta["variables"], wd)
-            (wd / "tfplan").write_bytes(plans_c.download_blob(f"plans/{plan_id}/tfplan").readall())
-            code, out = _tf(["apply", "-auto-approve", "tfplan"], wd)
-            if code: raise RuntimeError(out[-3000:])
-            if meta["destroy"]: plans_c.delete_blob(f"deployments/{meta['deployment']}.json")
-            else: plans_c.upload_blob(f"deployments/{meta['deployment']}.json", json.dumps({"template": meta["template"], "variables": meta["variables"]}), overwrite=True)
-            for b in plans_c.list_blobs(name_starts_with=f"plans/{plan_id}/"): plans_c.delete_blob(b.name)
-            _, o = _tf(["output", "-json"], wd)
-            return {"applied": True, "destroyed": meta["destroy"], "outputs": o[-3000:], "log_tail": out[-1500:]}
-    return _run(uuid.uuid4().hex[:12], job)
+    mcp = FastMCP("azure-terraform", host=settings.host, port=settings.port, stateless_http=True, json_response=True,
+                  instructions=("Governed Terraform for Azure. Always plan first, read the plan's explanation.read_to_user to "
+                                "the user, and call apply_plan only after the user explicitly confirms. Long operations "
+                                "return an operation_id: poll get_operation."))
 
-@mcp.tool()
-def get_operation(operation_id: str) -> dict:
-    """Check a long-running plan/apply by operation_id."""
-    if not re.fullmatch(r"[0-9a-f]{12}", operation_id): raise ValueError("bad operation_id")
-    if operation_id in OPS: return OPS[operation_id]
-    return json.loads(plans_c.download_blob(f"ops/{operation_id}.json").readall())
+    def tool(fn):
+        """Register ``fn`` as an MCP tool: run it off the event loop, with identity and an audit record."""
+        @functools.wraps(fn)
+        async def wrapper(**kwargs):
+            identity = current_identity()
 
-@mcp.tool()
-def list_deployments() -> list:
-    """List deployments managed by this server and the Azure resources in each (from Terraform state)."""
-    out = []
-    for b in state_c.list_blobs():
-        if not b.name.endswith(".tfstate"): continue
-        s = json.loads(state_c.download_blob(b.name).readall() or b"{}")
-        out.append({"deployment": b.name[:-8], "resources": [f"{r['type']}.{r['name']}" for r in s.get("resources", [])]})
-    return out
+            def call():
+                token = set_identity(identity)
+                started = time.monotonic()
+                args = {k: v for k, v in kwargs.items() if v is not None}
+                try:
+                    result = fn(**kwargs)
+                except ToolError as e:
+                    audit.record(identity, fn.__name__, args, e.kind, error=str(e), duration_ms=(time.monotonic() - started) * 1000)
+                    raise
+                except Exception as e:  # noqa: BLE001
+                    event = audit.record(identity, fn.__name__, args, "error", error=f"{type(e).__name__}: {e}",
+                                         duration_ms=(time.monotonic() - started) * 1000)
+                    raise RuntimeError(f"Internal error. Give this reference to your platform team: {event['audit_id']}") from None
+                finally:
+                    reset_identity(token)
+                extra = {}
+                if isinstance(result, dict):
+                    for k in ("operation_id", "plan_id"):
+                        if isinstance(result.get(k), str):
+                            extra["result_" + k] = result[k]
+                    if isinstance(result.get("result"), dict) and isinstance(result["result"].get("plan_id"), str):
+                        extra["result_plan_id"] = result["result"]["plan_id"]
+                audit.record(identity, fn.__name__, args, "ok", duration_ms=(time.monotonic() - started) * 1000, extra=extra)
+                return result
+            return await anyio.to_thread.run_sync(call)
+        return mcp.tool()(wrapper)
+
+    @tool
+    def whoami() -> dict:
+        """Show which Entra ID user this session is acting as (used for audit and approvals)."""
+        return svc.whoami(current_identity())
+
+    @tool
+    def list_environments() -> dict:
+        """List the environments (for example dev, test, prod) with their rules: allowed regions, whether apply and
+        destroy are enabled, whether a second person must approve, budget cap, policy rules and time-box limits."""
+        return svc.list_environments()
+
+    @tool
+    def list_templates(environment: str | None = None, category: str | None = None) -> dict:
+        """List the approved infrastructure templates and a one-line signature of every variable. Only these
+        templates can be deployed. Call describe_template for the full schema of one template."""
+        return svc.list_templates(environment, category)
+
+    @tool
+    def describe_template(template: str, environment: str | None = None) -> dict:
+        """Full typed variable schema (types, allowed values, ranges, defaults, descriptions), security defaults and
+        outputs of one template. Use it before plan_deployment and never invent variables."""
+        return svc.describe_template(template, environment)
+
+    @tool
+    def plan_deployment(template: str, deployment_name: str, variables: dict | None = None, environment: str | None = None,
+                        location: str | None = None, tags: dict | None = None, ttl_hours: float | None = None) -> dict:
+        """Plan creating or updating a deployment from an approved template. Nothing is changed. Returns an operation
+        whose result holds the plan_id, a plain-English explanation (explanation.read_to_user), risk level, policy
+        results, a monthly cost estimate and whether approval is needed. ttl_hours makes a NEW deployment time-boxed:
+        it is destroyed automatically after that many hours (only where the environment allows it)."""
+        return svc.plan_deployment(current_identity(), template, deployment_name, variables, environment, location, tags, ttl_hours)
+
+    @tool
+    def plan_destroy(deployment_name: str, environment: str | None = None) -> dict:
+        """Plan the complete removal of a deployment. Nothing is deleted until apply_plan. Irreversible once applied."""
+        return svc.plan_destroy(current_identity(), deployment_name, environment)
+
+    @tool
+    def plan_rollback(deployment_name: str, environment: str | None = None) -> dict:
+        """Plan a return to the inputs of the previous successful apply of this deployment (an 'undo' of the last
+        change). Nothing is changed until apply_plan."""
+        return svc.plan_rollback(current_identity(), deployment_name, environment)
+
+    @tool
+    def explain_plan(plan_id: str) -> dict:
+        """Explain a saved plan in plain English: what will be created, changed and destroyed, the risk level and why,
+        the cost change, policy results, approval status and what has to happen next. Read explanation.read_to_user
+        to the user."""
+        return svc.explain_plan(plan_id)
+
+    @tool
+    def request_approval(plan_id: str, justification: str) -> dict:
+        """Ask for a second person's approval of a plan in an environment that requires it (for example prod).
+        Give a justification: what changes and why."""
+        return svc.request_approval(current_identity(), plan_id, justification)
+
+    @tool
+    def approve_plan(plan_id: str, comment: str | None = None) -> dict:
+        """Approve a pending plan as the signed-in user. The person who created or requested the plan cannot approve it
+        (two-person rule). Review it with explain_plan first."""
+        return svc.approve_plan(current_identity(), plan_id, comment or "")
+
+    @tool
+    def reject_plan(plan_id: str, reason: str | None = None) -> dict:
+        """Reject a pending plan (or withdraw your own request)."""
+        return svc.reject_plan(current_identity(), plan_id, reason or "")
+
+    @tool
+    def list_pending_approvals(environment: str | None = None) -> dict:
+        """List plans that are waiting for approval."""
+        return svc.list_pending_approvals(environment)
+
+    @tool
+    def apply_plan(plan_id: str) -> dict:
+        """Apply a saved plan. ONLY call after the user has seen the explanation and explicitly confirmed. Refused if
+        the plan violates policy, is over budget, has expired, or lacks a required approval."""
+        return svc.apply_plan(current_identity(), plan_id)
+
+    @tool
+    def get_operation(operation_id: str) -> dict:
+        """Check a long-running plan, apply or drift check. Poll about every 20 seconds until status is succeeded,
+        failed or interrupted."""
+        return svc.get_operation(operation_id)
+
+    @tool
+    def list_deployments(environment: str | None = None) -> dict:
+        """List what has been deployed: template, owner, status, cost estimate, drift status and - for time-boxed
+        deployments - when they expire."""
+        return svc.list_deployments(environment)
+
+    @tool
+    def get_deployment(deployment_name: str, environment: str | None = None) -> dict:
+        """Details of one deployment: inputs, outputs, Azure resources, change history (who planned, approved and
+        applied each change) and the last drift result."""
+        return svc.get_deployment(deployment_name, environment)
+
+    @tool
+    def detect_drift(deployment_name: str | None = None, environment: str | None = None) -> dict:
+        """Check whether Azure still matches what was deployed (someone changed or deleted a resource outside
+        Terraform). Read-only. Omit deployment_name to check every deployment in the environment."""
+        return svc.detect_drift(current_identity(), deployment_name, environment)
+
+    @tool
+    def extend_ttl(deployment_name: str, hours: float, environment: str | None = None) -> dict:
+        """Keep a time-boxed deployment alive longer by the given number of hours (within the environment's limit)."""
+        return svc.extend_ttl(current_identity(), deployment_name, hours, environment)
+
+    return mcp
+
+
+def create_app(svc: Service, audit: AuditLog, settings: Settings):
+    mcp = create_mcp(svc, audit, settings)
+    validator = None
+    if settings.auth_mode == "jwt":
+        validator = JwtValidator(settings.tenant_id, settings.api_audiences)
+    auth = Authenticator(settings.auth_mode, validator)
+    return IdentityMiddleware(mcp.streamable_http_app(), auth,
+                              on_reject=lambda path, why: audit.emit({"type": "auth_rejected", "path": path, "reason": why}))
+
+
+def run_job(name: str, svc: Service, engine: OperationEngine) -> int:
+    engine.tick()   # recover anything a dead worker left behind before doing new work
+    if name == "reaper":
+        token = set_identity(system_identity("ttl-reaper"))
+        report = svc.run_reaper(system_identity("ttl-reaper"))
+    elif name == "drift":
+        token = set_identity(system_identity("drift-scan"))
+        report = svc.run_drift_scan(system_identity("drift-scan"))
+    elif name == "recover":
+        token = set_identity(system_identity("recover"))
+        report = engine.tick()
+    else:
+        print("unknown job; use: reaper | drift | recover", file=sys.stderr)
+        return 2
+    reset_identity(token)
+    print(json.dumps({"type": "job_report", "job": name, "report": report}, default=str), flush=True)
+    return 1 if isinstance(report, dict) and report.get("failed") else 0
+
+
+def main(argv: list[str]) -> int:
+    settings = Settings.from_env()
+    svc, engine, audit = build(settings)
+    if len(argv) >= 2 and argv[0] == "job":
+        return run_job(argv[1], svc, engine)
+    import uvicorn
+
+    app = create_app(svc, audit, settings)
+    engine.start()
+    audit.emit({"type": "startup", "version": __version__, "auth_mode": settings.auth_mode, "worker": engine.owner,
+                "environments": sorted(settings.environments), "templates": len(svc.catalog.names())})
+    # uvicorn handles SIGTERM/SIGINT itself and then RE-RAISES the signal with the previous handler. Install
+    # no-op handlers first, otherwise the process dies before the graceful Terraform shutdown below runs.
+    import signal
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda signum, frame: None)
+    try:
+        uvicorn.run(app, host=settings.host, port=settings.port, log_level="warning", access_log=False)
+    finally:
+        # SIGTERM (scale-in, new revision): stop Terraform gracefully so state is written and unlocked
+        engine.shutdown(grace_seconds=float(os.environ.get("SHUTDOWN_GRACE_SECONDS", "100")))
+        audit.emit({"type": "shutdown", "worker": engine.owner})
+    return 0
+
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http")
+    sys.exit(main(sys.argv[1:]))
