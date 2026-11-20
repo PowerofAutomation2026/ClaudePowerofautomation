@@ -1,0 +1,16 @@
+// Who called the MCP server, and how often (Log Analytics > Logs). Container Apps console + system logs.
+ContainerAppConsoleLogs_CL
+| where ContainerAppName_s == "ca-tfmcp"
+| summarize calls=count() by bin(TimeGenerated, 1h)
+| order by TimeGenerated desc;
+
+// Auth failures (401/403) in the last 24h
+ContainerAppSystemLogs_CL
+| where TimeGenerated > ago(24h) and Log_s has_any ("401","403")
+| project TimeGenerated, Log_s;
+
+// Terraform apply/destroy attempts requested through the server
+ContainerAppConsoleLogs_CL
+| where Log_s has_any ("create_run","apply","destroy")
+| project TimeGenerated, Log_s
+| order by TimeGenerated desc

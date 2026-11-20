@@ -23,6 +23,9 @@ param(
   [string] $TfeAddress = 'https://app.terraform.io',
   [SecureString] $TfeToken,                                     # or set $env:TFE_TOKEN
   [switch] $EnableOperations,
+  [switch] $UseKeyVault,                 # keep the HCP token in Key Vault (managed identity), not in the app
+  [string] $SecurityGroupId,             # Entra group object id: only members may call the MCP server
+  [string[]] $AllowedCidrs,              # optional ingress IP allow-list, e.g. 203.0.113.0/24
   [switch] $Destroy
 )
 $ErrorActionPreference = 'Stop'
@@ -94,13 +97,36 @@ $appExists = az containerapp show -g $rg -n $app 2>$null
 if (-not $appExists) {
   Az containerapp create -g $rg -n $app --environment $envName --image $Image `
     --target-port 8080 --ingress external --transport http `
-    --min-replicas 1 --max-replicas 2 --cpu 0.5 --memory 1Gi `
+    --min-replicas 1 --max-replicas 5 --cpu 0.5 --memory 1Gi `
+    --scale-rule-name http --scale-rule-type http --scale-rule-http-concurrency 20 `
     --secrets "tfe-token=$tfePlain" --env-vars $envVars | Out-Null
 } else {
   Az containerapp secret set -g $rg -n $app --secrets "tfe-token=$tfePlain" | Out-Null
   Az containerapp update -g $rg -n $app --image $Image --set-env-vars $envVars | Out-Null
 }
 $fqdn = (Az containerapp show -g $rg -n $app --query properties.configuration.ingress.fqdn -o tsv).Trim()
+
+# --- optional: Key Vault for the HCP Terraform token -------------------------
+if ($UseKeyVault) {
+  Write-Host '2b/5 Key Vault + managed identity for the HCP token' -ForegroundColor Cyan
+  $kv = ("kv-$Prefix-" + (Az account show --query id -o tsv).Trim().Substring(0,6)).ToLower()
+  if (-not (az keyvault show -n $kv 2>$null)) {
+    Az keyvault create -g $rg -n $kv -l $Location --enable-rbac-authorization true --enable-purge-protection true | Out-Null
+  }
+  $kvScope = (Az keyvault show -n $kv --query id -o tsv).Trim()
+  $me = (Az ad signed-in-user show --query id -o tsv).Trim()
+  Az role assignment create --assignee-object-id $me --assignee-principal-type User --role 'Key Vault Secrets Officer' --scope $kvScope 2>$null | Out-Null
+  Start-Sleep 20
+  Az keyvault secret set --vault-name $kv --name tfe-token --value $tfePlain | Out-Null
+  $kvUri = (Az keyvault secret show --vault-name $kv --name tfe-token --query id -o tsv).Trim() -replace '/[0-9a-f]{32}$',''
+  Az containerapp identity assign -g $rg -n $app --system-assigned | Out-Null
+  $miPrincipal = (Az containerapp show -g $rg -n $app --query identity.principalId -o tsv).Trim()
+  Az role assignment create --assignee-object-id $miPrincipal --assignee-principal-type ServicePrincipal --role 'Key Vault Secrets User' --scope $kvScope | Out-Null
+  for ($i=0; $i -lt 8; $i++) {   # RBAC propagation can take a few minutes
+    try { Az containerapp secret set -g $rg -n $app --secrets "tfe-token=keyvaultref:$kvUri,identityref:system" | Out-Null; break }
+    catch { if ($i -eq 7) { throw }; Start-Sleep 30 }
+  }
+}
 
 # --- Entra ID ----------------------------------------------------------------
 Write-Host '3/5 Entra app registrations (API + connector client)' -ForegroundColor Cyan
@@ -134,6 +160,22 @@ Write-Host '4/5 Container Apps authentication (reject anonymous calls)' -Foregro
 Az containerapp auth microsoft update -g $rg -n $app --client-id $apiId `
   --tenant-id $tenantId --allowed-audiences "api://$apiId" --client-secret $cliSecret --yes | Out-Null
 Az containerapp auth update -g $rg -n $app --enabled true --unauthenticated-client-action Return401 --yes | Out-Null
+
+# --- optional hardening: group-only access + IP allow-list -------------------
+if ($SecurityGroupId) {
+  Write-Host 'Restricting access to the Entra group (requires Entra ID P1)' -ForegroundColor Cyan
+  $apiSp = (Az ad sp show --id $apiId --query id -o tsv).Trim()
+  Az ad sp update --id $apiSp --set appRoleAssignmentRequired=true | Out-Null
+  $b = @{ principalId=$SecurityGroupId; resourceId=$apiSp; appRoleId='00000000-0000-0000-0000-000000000000' } | ConvertTo-Json -Compress
+  $t = New-TemporaryFile; Set-Content $t $b
+  try { Az rest --method POST --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$apiSp/appRoleAssignedTo" --headers 'Content-Type=application/json' --body "@$t" | Out-Null }
+  catch { Write-Warning "Group assignment skipped (maybe already assigned): $_" }
+  Remove-Item $t
+}
+if ($AllowedCidrs) {
+  $i = 0
+  foreach ($c in $AllowedCidrs) { $i++; Az containerapp ingress access-restriction set -g $rg -n $app --rule-name "allow$i" --ip-address $c --action Allow | Out-Null }
+}
 
 # --- Copilot Studio connector files -----------------------------------------
 Write-Host '5/5 Generating Copilot Studio custom connector files' -ForegroundColor Cyan
@@ -208,6 +250,8 @@ if (Get-Command pac -ErrorAction SilentlyContinue) {
 MCP endpoint      : https://$fqdn/mcp
 Entra API app     : $apiId   (scope api://$apiId/access_as_user)
 Connector client  : $cliId   (secret saved to out/connector-client-secret.txt)
+Key Vault token     : $($UseKeyVault.IsPresent)   Group-restricted: $([bool]$SecurityGroupId)   IP allow-list: $([bool]$AllowedCidrs)
+Smoke test        : ./Test-TerraformMcp.ps1 -SubscriptionId $SubscriptionId -Prefix $Prefix
 Operations (apply/destroy via HCP Terraform runs): $ops
 
 Next, in Copilot Studio (easiest path, ~1 minute):
