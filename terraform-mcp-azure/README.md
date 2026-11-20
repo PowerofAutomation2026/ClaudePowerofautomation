@@ -19,6 +19,14 @@ $env:TFE_TOKEN = '<HCP Terraform team token>'
 ```
 Re-running is safe (updates image/env/secret in place). Output goes to `out/` (git-ignored; contains the connector secret).
 
+## Copilot Studio sign-in experience
+Entra ID doesn't publish a dynamic client registration (RFC 7591) endpoint, so the wizard's
+**Dynamic discovery** option can't self-register against it. Instead the script pre-creates the Entra app,
+pre-grants admin consent (users never see a consent screen) and writes `out/copilot-studio-wizard-values.md`:
+paste once in the MCP wizard (OAuth 2.0 > Manual), then each user just clicks **Sign in** once.
+If your tenant has the discovery wizard enabled and you want zero fields, put a DCR shim / gateway
+(e.g. Azure API Management) in front that serves `/.well-known/oauth-protected-resource` and returns the pre-registered client.
+
 ## How "provision / update / delete Azure infrastructure" actually works
 The Terraform MCP server does **not** call Azure itself. The agent drives **HCP Terraform workspaces**
 (create workspace, set variables, queue plan/apply/destroy run); HCP Terraform runs use their own Azure

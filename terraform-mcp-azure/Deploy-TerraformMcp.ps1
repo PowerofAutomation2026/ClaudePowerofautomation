@@ -167,6 +167,35 @@ $props | ConvertTo-Json -Depth 12 | Set-Content (Join-Path $outDir 'apiPropertie
 # client secret goes to a git-ignored file, never the swagger
 Set-Content (Join-Path $outDir 'connector-client-secret.txt') $cliSecret
 
+# Paste-ready values for the Copilot Studio MCP wizard (OAuth 2.0 > Manual).
+# Entra ID has no dynamic client registration, so "Dynamic discovery" cannot self-register here;
+# the app is pre-created and pre-consented instead, so makers only paste these values once.
+$authUrl  = "https://login.microsoftonline.com/$tenantId/oauth2/v2.0/authorize"
+$tokenUrl = "https://login.microsoftonline.com/$tenantId/oauth2/v2.0/token"
+@"
+# Copilot Studio - add Terraform MCP (copy/paste)
+
+Agent > Tools > Add a tool > New tool > Model Context Protocol
+
+| Field | Value |
+|---|---|
+| Server name | Terraform MCP |
+| Server description | Manage Terraform registry lookups and HCP Terraform workspaces/runs |
+| Server URL | https://$fqdn/mcp |
+| Authentication | OAuth 2.0 > Manual |
+| Client ID | $cliId |
+| Client secret | (out/connector-client-secret.txt) |
+| Authorization URL | $authUrl |
+| Token URL template | $tokenUrl |
+| Refresh URL | $tokenUrl |
+| Scopes | api://$apiId/access_as_user offline_access |
+
+Then Create > copy the Redirect URL shown. If it is not
+https://global.consent.azure-apim.net/redirect, add it to app $cliName in Entra
+(Authentication > Web > Redirect URIs). Then Create new connection > sign in > Add to agent.
+Admin consent is already granted, so users get no consent prompt.
+"@ | Set-Content (Join-Path $outDir 'copilot-studio-wizard-values.md')
+
 if (Get-Command pac -ErrorAction SilentlyContinue) {
   Write-Host 'pac found: creating the connector (select your Power Platform environment first with `pac auth`)' -ForegroundColor Cyan
   pac connector create --api-definition-file (Join-Path $outDir 'terraform-mcp.swagger.json') `
@@ -181,9 +210,10 @@ Entra API app     : $apiId   (scope api://$apiId/access_as_user)
 Connector client  : $cliId   (secret saved to out/connector-client-secret.txt)
 Operations (apply/destroy via HCP Terraform runs): $ops
 
-Next, in Copilot Studio:
-  Agent > Tools > Add a tool > Model Context Protocol > pick "Terraform MCP"
-  (or import out/terraform-mcp.swagger.json + out/apiProperties.json as a custom connector,
+Next, in Copilot Studio (easiest path, ~1 minute):
+  open out/copilot-studio-wizard-values.md and paste its values into
+  Agent > Tools > Add a tool > New tool > Model Context Protocol.
+  Alternative: pick "Terraform MCP" if pac created the connector, or import out/terraform-mcp.swagger.json + out/apiProperties.json as a custom connector,
    paste the client secret on the Security tab, then create the connection).
 Test:  curl -i https://$fqdn/mcp   -> must return 401 (anonymous calls blocked)
 "@ | Write-Host
