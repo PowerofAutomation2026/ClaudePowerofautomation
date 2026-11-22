@@ -57,6 +57,16 @@ class Meter:
     quantity: float = 1.0
 
 
+def _is_price_api(url: str) -> bool:
+    from urllib.parse import urlsplit
+    try:
+        u = urlsplit(url)
+    except ValueError:
+        return False
+    return u.scheme == "https" and u.hostname == "prices.azure.com" and u.port in (None, 443) \
+        and u.username is None and u.path == "/api/retail/prices"
+
+
 class PriceClient:
     """Fetches and caches price rows. ``fetch(url, params) -> dict`` is injectable for tests."""
 
@@ -108,8 +118,8 @@ class PriceClient:
             for _ in range(self.max_pages):
                 items.extend(page.get("Items") or [])
                 nxt = page.get("NextPageLink")
-                if not nxt or not str(nxt).startswith(API_URL):
-                    break
+                if not nxt or not _is_price_api(str(nxt)):
+                    break       # never follow a link anywhere else (SSRF guard); redirects are off as well
                 page = self._fetch(nxt, {})
         except Exception:
             self._down_until = now + 300

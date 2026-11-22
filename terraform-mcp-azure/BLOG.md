@@ -61,7 +61,7 @@ charges only, labelled as an estimate, with each line marked as priced, usage-ba
 still changes the conversation - "that's about 730 dollars a month, shall I continue?" is a better question
 than none.
 
-**Production needs two people.** In an approval environment the person who planned a change cannot approve
+**Production needs two people.** (v2.1 moved approval out of the chat entirely - see below.) In an approval environment the person who planned a change cannot approve
 it. The server knows who is who because every user signs in to the connector with their own Entra account,
 and the server validates that token itself. Approvals are tied to the checksum of the exact plan. The agent
 cannot approve "on behalf of" anyone, however nicely it is asked.
@@ -113,6 +113,57 @@ The server therefore runs a tiny loopback token broker that speaks the metadata 
 through the Azure SDK; Terraform is pointed at it with `ARM_MSI_ENDPOINT`. We verified that the real
 Terraform 1.9.8 backend and the real azurerm 4.81.0 provider both request and accept tokens from it.
 
+## v2.1: assume the agent has been hijacked
+
+The first version made one honest admission: outside production, "the user confirmed" was only an instruction
+to the agent. That is exactly the gap a prompt injection walks through. So we redesigned around a blunt
+assumption - **the agent is hostile**, it can call every tool as the signed-in user and lie about what the
+user said - and moved every decision that matters out of its reach.
+
+```
+ agent ─ token for the MCP audience ─> front-end: can READ Azure, plan, queue.  Cannot approve. Cannot apply.
+ human ─ fresh sign-in, token for the APPROVAL audience ─> approval page ─> executor: the only identity that can write
+```
+
+* **Approval left the chat.** There is no approve tool. `request_approval` returns a link; the decision is
+  made on a separate page, with a token for a different Entra application, after a fresh sign-in. The approval
+  is tied to the checksum of the plan file and to a digest of the changes the approver was shown, lasts 30
+  minutes and works once. Production needs a second person; dev may allow self-approval - on that page.
+* **The process the agent talks to cannot change Azure.** It runs with a read-only role. Applies run in a
+  second service with its own identity, which trusts nothing the first one wrote: it re-reads the approval
+  from a store the front-end can only read, asks Terraform what the plan file really does, compares that with
+  what the approver saw, re-runs policy, and only then applies.
+* **The platform says no even if our code is wrong.** Custom roles without any `Microsoft.Authorization`
+  rights, resource locks on production and on the MCP itself, an optional deny-delete policy, protected
+  deployments, WORM audit storage, state versioning.
+* **A kill switch that trips itself.** Too many denied calls, repeated destroy attempts or a burst of plans
+  freeze the server; an admin lifts the freeze out of band. Plus per-user limits and a daily deletion quota.
+* **Tool output is treated as hostile input to the model**: control characters, secret-shaped strings and
+  instruction-shaped phrases are stripped from anything that came from Azure before it goes back.
+
+We wrote tests for the attacks rather than for the features: a forged approval record, a swapped plan file, a
+plan summary that lies about the file, a replayed approval, a stale sign-in, the connector's token presented
+to the approval API. They all fail closed. What we cannot test away: a person approving something they should
+not, two insiders colluding, and everything that only a live tenant can confirm (THREAT-MODEL.md lists it).
+
+## v2.1: stop paying for tokens nobody reads
+
+Every tool definition is sent to the model in every conversation, and every result is read by it. Version 2.0
+had 18 tools and friendly, verbose JSON. Measured with a simple characters/4 estimate:
+
+| | v2.0 | v2.1 |
+|---|---|---|
+| tool definitions | ~2117 tokens, 18 tools | ~902 tokens, 8 tools |
+| template catalog | ~4981 | ~300 |
+| plan result | ~906 | ~277 |
+| one poll while Terraform runs | ~238 | ~26 (or ~21 with an etag) |
+| agent instructions | ~952 | ~231 |
+
+How: tools merged behind an `action` argument, one-sentence descriptions, compact JSON with empty fields
+dropped, a single text block instead of text plus a structured duplicate, one-line catalog entries with detail
+on demand, paging and field selection, hard caps with an explicit `truncated` marker. The instructions shrank
+because the rules moved into the server - which is where they had to go anyway. A test enforces the budgets.
+
 ## How it compares
 
 | | Plain Terraform MCP server (CLI wrapper) | HashiCorp Terraform MCP + HCP Terraform | This package |
@@ -121,7 +172,8 @@ Terraform 1.9.8 backend and the real azurerm 4.81.0 provider both request and ac
 | What the agent may deploy | Whatever configuration it is given | Whatever the workspaces/modules allow | Only shipped templates, schema-validated inputs |
 | Policy on the plan | Not built in | Sentinel / OPA policy sets in HCP Terraform (limits depend on plan) | Built-in JSON rules, per environment profile, re-checked at apply |
 | Cost before apply | Not built in | HCP Terraform cost estimation | Azure list-price estimate + budget cap (best effort) |
-| Approval | Not built in | Run approval per workspace | Two-person rule with Entra identity, enforced by the server |
+| Approval | Not built in | Run approval per workspace (in the HCP UI/API) | Out-of-band page, separate Entra audience, fresh sign-in, bound to the plan; no approve tool exists |
+| Identity that can change Azure | The server's | The workspace's | A separate executor; the agent-facing process is read-only |
 | Per-user identity in the audit | Depends on hosting | HCP audit trail; runs started through a shared API token carry that token's identity | Entra user of the chat, on every tool call |
 | Time-boxed environments | No | Ephemeral workspaces / auto-destroy (plan dependent) | `ttl_hours`, notice, auto-destroy |
 | Plain-English plan explanation | Model improvises | Model improvises | Generated by the server from the plan |
@@ -136,12 +188,14 @@ Azure-native alternative in which the guardrails are part of the tool surface th
 
 ## Honest limitations
 
-* Built and tested without an Azure tenant. 176 automated tests, `terraform validate` on every template, the
+* Built and tested without an Azure tenant. 237 automated tests, `terraform validate` on every template, the
   deploy script executed end-to-end against a fake `az`, and the token broker checked against the real
   Terraform binaries - but **no plan or apply has run against Azure, and no real Copilot Studio agent has
   called it**. Expect to fix small things on first contact.
-* In environments without approval, "the user confirmed" is an instruction to the agent, not something the
-  server can verify. That is why plan-only is the default and approval exists.
+* A human can still approve the wrong thing; two insiders can collude; the time-box reaper destroys what was
+  agreed to be temporary without asking again.
+* The approval page's browser sign-in flow and all Entra/Azure behaviour (claims, custom roles, locks) are
+  unverified until you run it in a tenant.
 * The cost estimate covers fixed charges of common resource types. It is a prompt for a conversation, not a bill.
 * The identity is Contributor on resource groups and cannot assign roles, so data-plane access (who may read
   the Key Vault) stays a human task.
@@ -151,14 +205,15 @@ Azure-native alternative in which the guardrails are part of the tool surface th
 
 ```powershell
 az login
-./Deploy-AzureTerraformMcp.ps1 -SubscriptionId <guid>                      # plan-only sandbox
+./Deploy-AzureTerraformMcp.ps1 -SubscriptionId <guid> -RequesterGroupId <g> -ApproverGroupId <g> -AdminGroupId <g>   # plan-only sandbox
 ./Test-TerraformMcp.ps1 -SubscriptionId <guid> -Prefix aztfmcp
 # then paste out/copilot-studio-wizard-values.md into Copilot Studio and agent-instructions.md into the agent
 ```
 When you trust it:
 ```powershell
 ./Deploy-AzureTerraformMcp.ps1 -SubscriptionId <guid> -Environments dev,test,prod -EnableApply -EnableDestroy `
-    -ApproverGroupId <group> -EnableScheduledJobs -EnableMonitoring -AlertEmail ops@contoso.com
+    -RequesterGroupId <g> -ApproverGroupId <g> -ViewerGroupId <g> -AdminGroupId <g> -EnableDenyDeletePolicy `
+    -EnableScheduledJobs -EnableMonitoring -AlertEmail ops@contoso.com
 ```
 Details are in `DEPLOY-AZURE-NATIVE.md`; the security reasoning is in `THREAT-MODEL.md`.
 

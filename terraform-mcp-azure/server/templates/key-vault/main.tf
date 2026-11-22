@@ -2,10 +2,6 @@ variable "sku_name" {
   type    = string
   default = "standard"
 }
-variable "purge_protection_enabled" {
-  type    = bool
-  default = true
-}
 variable "soft_delete_retention_days" {
   type    = number
   default = 90
@@ -41,7 +37,7 @@ resource "azurerm_key_vault" "this" {
   tenant_id                     = var.tenant_id
   sku_name                      = var.sku_name
   rbac_authorization_enabled    = true
-  purge_protection_enabled      = var.purge_protection_enabled
+  purge_protection_enabled      = true # not configurable: deleted vaults and secrets stay recoverable
   soft_delete_retention_days    = var.soft_delete_retention_days
   public_network_access_enabled = var.public_network_access_enabled
   tags                          = var.tags

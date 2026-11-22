@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-  "contentVersion": "2.0.0.0",
+  "contentVersion": "2.1.0.0",
   "metadata": {
     "description": "Azure Terraform MCP monitoring: an audit workbook, an e-mail action group and log alert rules on the server's structured logs. Deployed by Deploy-AzureTerraformMcp.ps1 -EnableMonitoring. Not validated against a live tenant."
   },
@@ -21,6 +21,13 @@
     "location": {
       "type": "string",
       "defaultValue": "[resourceGroup().location]"
+    },
+    "subscriptionScope": {
+      "type": "string",
+      "defaultValue": "[subscription().id]",
+      "metadata": {
+        "description": "Subscription to watch for lock / role / policy changes (Activity Log)."
+      }
     }
   },
   "variables": {
@@ -552,12 +559,481 @@
           ]
         }
       }
+    },
+    {
+      "type": "Microsoft.Insights/scheduledQueryRules",
+      "apiVersion": "2021-08-01",
+      "name": "[concat(parameters('prefix'), '-freeze')]",
+      "location": "[parameters('location')]",
+      "kind": "LogAlert",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+      ],
+      "properties": {
+        "displayName": "[concat('Azure Terraform MCP (', parameters('prefix'), '): KILL SWITCH: the server was frozen')]",
+        "description": "Anomaly detection or an administrator froze the server. No changes are possible until an admin lifts the freeze on the approval service.",
+        "severity": 0,
+        "enabled": true,
+        "evaluationFrequency": "PT5M",
+        "windowSize": "PT5M",
+        "scopes": [
+          "[parameters('workspaceResourceId')]"
+        ],
+        "skipQueryValidation": true,
+        "autoMitigate": false,
+        "criteria": {
+          "allOf": [
+            {
+              "query": "ContainerAppConsoleLogs_CL | where Log_s has \"azure-terraform-mcp\" | extend e = parse_json(Log_s) | where tostring(e.app) == \"azure-terraform-mcp\" | where tostring(e.type) in (\"freeze_tripped\", \"freeze_set\")",
+              "timeAggregation": "Count",
+              "operator": "GreaterThan",
+              "threshold": 0,
+              "failingPeriods": {
+                "numberOfEvaluationPeriods": 1,
+                "minFailingPeriodsToAlert": 1
+              }
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/scheduledQueryRules",
+      "apiVersion": "2021-08-01",
+      "name": "[concat(parameters('prefix'), '-destroy-requested')]",
+      "location": "[parameters('location')]",
+      "kind": "LogAlert",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+      ],
+      "properties": {
+        "displayName": "[concat('Azure Terraform MCP (', parameters('prefix'), '): a destroy was requested for approval')]",
+        "description": "Someone asked for approval of a destroy plan.",
+        "severity": 2,
+        "enabled": true,
+        "evaluationFrequency": "PT5M",
+        "windowSize": "PT5M",
+        "scopes": [
+          "[parameters('workspaceResourceId')]"
+        ],
+        "skipQueryValidation": true,
+        "autoMitigate": false,
+        "criteria": {
+          "allOf": [
+            {
+              "query": "ContainerAppConsoleLogs_CL | where Log_s has \"azure-terraform-mcp\" | extend e = parse_json(Log_s) | where tostring(e.app) == \"azure-terraform-mcp\" | where tostring(e.type) == \"approval_requested\" and tobool(e.destroy) == true",
+              "timeAggregation": "Count",
+              "operator": "GreaterThan",
+              "threshold": 0,
+              "failingPeriods": {
+                "numberOfEvaluationPeriods": 1,
+                "minFailingPeriodsToAlert": 1
+              }
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/scheduledQueryRules",
+      "apiVersion": "2021-08-01",
+      "name": "[concat(parameters('prefix'), '-destroy-approved')]",
+      "location": "[parameters('location')]",
+      "kind": "LogAlert",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+      ],
+      "properties": {
+        "displayName": "[concat('Azure Terraform MCP (', parameters('prefix'), '): a destroy was approved')]",
+        "description": "A destroy plan was approved on the approval page.",
+        "severity": 1,
+        "enabled": true,
+        "evaluationFrequency": "PT5M",
+        "windowSize": "PT5M",
+        "scopes": [
+          "[parameters('workspaceResourceId')]"
+        ],
+        "skipQueryValidation": true,
+        "autoMitigate": false,
+        "criteria": {
+          "allOf": [
+            {
+              "query": "ContainerAppConsoleLogs_CL | where Log_s has \"azure-terraform-mcp\" | extend e = parse_json(Log_s) | where tostring(e.app) == \"azure-terraform-mcp\" | where tostring(e.type) == \"approval_decided\" and tobool(e.destroy) == true and tostring(e.decision) == \"approved\"",
+              "timeAggregation": "Count",
+              "operator": "GreaterThan",
+              "threshold": 0,
+              "failingPeriods": {
+                "numberOfEvaluationPeriods": 1,
+                "minFailingPeriodsToAlert": 1
+              }
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/scheduledQueryRules",
+      "apiVersion": "2021-08-01",
+      "name": "[concat(parameters('prefix'), '-destroy-applied')]",
+      "location": "[parameters('location')]",
+      "kind": "LogAlert",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+      ],
+      "properties": {
+        "displayName": "[concat('Azure Terraform MCP (', parameters('prefix'), '): resources were destroyed')]",
+        "description": "An applied plan deleted or replaced resources.",
+        "severity": 1,
+        "enabled": true,
+        "evaluationFrequency": "PT5M",
+        "windowSize": "PT5M",
+        "scopes": [
+          "[parameters('workspaceResourceId')]"
+        ],
+        "skipQueryValidation": true,
+        "autoMitigate": false,
+        "criteria": {
+          "allOf": [
+            {
+              "query": "ContainerAppConsoleLogs_CL | where Log_s has \"azure-terraform-mcp\" | extend e = parse_json(Log_s) | where tostring(e.app) == \"azure-terraform-mcp\" | where tostring(e.type) == \"apply\" and (tobool(e.destroy) == true or toint(e.deleted) > 0)",
+              "timeAggregation": "Count",
+              "operator": "GreaterThan",
+              "threshold": 0,
+              "failingPeriods": {
+                "numberOfEvaluationPeriods": 1,
+                "minFailingPeriodsToAlert": 1
+              }
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/scheduledQueryRules",
+      "apiVersion": "2021-08-01",
+      "name": "[concat(parameters('prefix'), '-apply-refused')]",
+      "location": "[parameters('location')]",
+      "kind": "LogAlert",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+      ],
+      "properties": {
+        "displayName": "[concat('Azure Terraform MCP (', parameters('prefix'), '): the executor refused an apply')]",
+        "description": "The privileged executor refused to apply a queued plan (no or mismatching approval, quota, freeze, policy). Possible attempt to bypass the approval flow.",
+        "severity": 1,
+        "enabled": true,
+        "evaluationFrequency": "PT5M",
+        "windowSize": "PT5M",
+        "scopes": [
+          "[parameters('workspaceResourceId')]"
+        ],
+        "skipQueryValidation": true,
+        "autoMitigate": false,
+        "criteria": {
+          "allOf": [
+            {
+              "query": "ContainerAppConsoleLogs_CL | where Log_s has \"azure-terraform-mcp\" | extend e = parse_json(Log_s) | where tostring(e.app) == \"azure-terraform-mcp\" | where tostring(e.type) == \"apply_refused\"",
+              "timeAggregation": "Count",
+              "operator": "GreaterThan",
+              "threshold": 0,
+              "failingPeriods": {
+                "numberOfEvaluationPeriods": 1,
+                "minFailingPeriodsToAlert": 1
+              }
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/scheduledQueryRules",
+      "apiVersion": "2021-08-01",
+      "name": "[concat(parameters('prefix'), '-approval-odd')]",
+      "location": "[parameters('location')]",
+      "kind": "LogAlert",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+      ],
+      "properties": {
+        "displayName": "[concat('Azure Terraform MCP (', parameters('prefix'), '): approval outside office hours or self-approval')]",
+        "description": "An approval was given between 20:00 and 06:00 UTC, or by the requester (self-approval environments). Review it.",
+        "severity": 3,
+        "enabled": true,
+        "evaluationFrequency": "PT15M",
+        "windowSize": "PT15M",
+        "scopes": [
+          "[parameters('workspaceResourceId')]"
+        ],
+        "skipQueryValidation": true,
+        "autoMitigate": false,
+        "criteria": {
+          "allOf": [
+            {
+              "query": "ContainerAppConsoleLogs_CL | where Log_s has \"azure-terraform-mcp\" | extend e = parse_json(Log_s) | where tostring(e.app) == \"azure-terraform-mcp\" | where tostring(e.type) == \"approval_decided\" and tostring(e.decision) == \"approved\" and (toint(e.hour_utc) >= 20 or toint(e.hour_utc) < 6 or tobool(e.self_approved) == true)",
+              "timeAggregation": "Count",
+              "operator": "GreaterThan",
+              "threshold": 0,
+              "failingPeriods": {
+                "numberOfEvaluationPeriods": 1,
+                "minFailingPeriodsToAlert": 1
+              }
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/scheduledQueryRules",
+      "apiVersion": "2021-08-01",
+      "name": "[concat(parameters('prefix'), '-approval-refused')]",
+      "location": "[parameters('location')]",
+      "kind": "LogAlert",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+      ],
+      "properties": {
+        "displayName": "[concat('Azure Terraform MCP (', parameters('prefix'), '): someone tried to approve without the right')]",
+        "description": "An approval attempt was refused (two-person rule or missing role).",
+        "severity": 2,
+        "enabled": true,
+        "evaluationFrequency": "PT15M",
+        "windowSize": "PT15M",
+        "scopes": [
+          "[parameters('workspaceResourceId')]"
+        ],
+        "skipQueryValidation": true,
+        "autoMitigate": false,
+        "criteria": {
+          "allOf": [
+            {
+              "query": "ContainerAppConsoleLogs_CL | where Log_s has \"azure-terraform-mcp\" | extend e = parse_json(Log_s) | where tostring(e.app) == \"azure-terraform-mcp\" | where tostring(e.type) == \"approval_refused\"",
+              "timeAggregation": "Count",
+              "operator": "GreaterThan",
+              "threshold": 0,
+              "failingPeriods": {
+                "numberOfEvaluationPeriods": 1,
+                "minFailingPeriodsToAlert": 1
+              }
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/activityLogAlerts",
+      "apiVersion": "2020-10-01",
+      "name": "[concat(parameters('prefix'), '-lock-deleted')]",
+      "location": "Global",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+      ],
+      "properties": {
+        "enabled": true,
+        "scopes": [
+          "[parameters('subscriptionScope')]"
+        ],
+        "description": "A resource lock was deleted in the subscription.",
+        "condition": {
+          "allOf": [
+            {
+              "field": "category",
+              "equals": "Administrative"
+            },
+            {
+              "field": "operationName",
+              "equals": "Microsoft.Authorization/locks/delete"
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            {
+              "actionGroupId": "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/activityLogAlerts",
+      "apiVersion": "2020-10-01",
+      "name": "[concat(parameters('prefix'), '-role-assigned')]",
+      "location": "Global",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+      ],
+      "properties": {
+        "enabled": true,
+        "scopes": [
+          "[parameters('subscriptionScope')]"
+        ],
+        "description": "A role assignment was created in the subscription.",
+        "condition": {
+          "allOf": [
+            {
+              "field": "category",
+              "equals": "Administrative"
+            },
+            {
+              "field": "operationName",
+              "equals": "Microsoft.Authorization/roleAssignments/write"
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            {
+              "actionGroupId": "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/activityLogAlerts",
+      "apiVersion": "2020-10-01",
+      "name": "[concat(parameters('prefix'), '-role-definition-changed')]",
+      "location": "Global",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+      ],
+      "properties": {
+        "enabled": true,
+        "scopes": [
+          "[parameters('subscriptionScope')]"
+        ],
+        "description": "A role definition was created or changed.",
+        "condition": {
+          "allOf": [
+            {
+              "field": "category",
+              "equals": "Administrative"
+            },
+            {
+              "field": "operationName",
+              "equals": "Microsoft.Authorization/roleDefinitions/write"
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            {
+              "actionGroupId": "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/activityLogAlerts",
+      "apiVersion": "2020-10-01",
+      "name": "[concat(parameters('prefix'), '-policy-assignment-deleted')]",
+      "location": "Global",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+      ],
+      "properties": {
+        "enabled": true,
+        "scopes": [
+          "[parameters('subscriptionScope')]"
+        ],
+        "description": "A policy assignment was deleted.",
+        "condition": {
+          "allOf": [
+            {
+              "field": "category",
+              "equals": "Administrative"
+            },
+            {
+              "field": "operationName",
+              "equals": "Microsoft.Authorization/policyAssignments/delete"
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            {
+              "actionGroupId": "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/activityLogAlerts",
+      "apiVersion": "2020-10-01",
+      "name": "[concat(parameters('prefix'), '-policy-exemption')]",
+      "location": "Global",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+      ],
+      "properties": {
+        "enabled": true,
+        "scopes": [
+          "[parameters('subscriptionScope')]"
+        ],
+        "description": "A policy exemption was created.",
+        "condition": {
+          "allOf": [
+            {
+              "field": "category",
+              "equals": "Administrative"
+            },
+            {
+              "field": "operationName",
+              "equals": "Microsoft.Authorization/policyExemptions/write"
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            {
+              "actionGroupId": "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+            }
+          ]
+        }
+      }
     }
   ],
   "outputs": {
     "alertRules": {
       "type": "int",
-      "value": 8
+      "value": 20
     }
   }
 }

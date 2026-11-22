@@ -1,6 +1,8 @@
 # Azure Terraform MCP server. Terraform and the exact provider builds the templates were validated
 # against are baked into the image (checksums verified), so nothing is downloaded at run time.
-FROM python:3.12-slim
+# Base image pinned by digest (python:3.12-slim as of 2026-11-22). Refresh deliberately:
+#   docker buildx imagetools inspect python:3.12-slim   -> copy the new index digest here, rebuild, re-test.
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 
 ARG TF_VERSION=1.9.8
 ARG TF_SHA256=186e0145f5e5f2eb97cbd785bc78f21bae4ef15119349f6ad4fa535b83b10df8
@@ -30,10 +32,12 @@ RUN set -eux; \
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY terraformrc server.py ./
+COPY terraformrc server.py integrity.json ./
 COPY tfmcp ./tfmcp
 COPY policies ./policies
 COPY templates ./templates
+# Fail the build if templates or policies differ from the reviewed manifest (checked again at every start).
+RUN python -m tfmcp.integrity verify
 
 RUN useradd --create-home --uid 10001 app && chown -R app /app
 USER app

@@ -26,7 +26,9 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r server/requirements-dev.txt
-      - name: Unit tests (validation, policy, cost, approvals, TTL reaper, durability, MCP over HTTP)
+      - name: Templates and policies match the reviewed integrity manifest
+        run: cd server && python -m tfmcp.integrity verify
+      - name: Unit tests (security controls, token budgets, policy, cost, durability, both HTTP channels)
         run: cd server && python -m pytest
       - uses: actions/setup-node@v4
         with:
@@ -66,6 +68,6 @@ jobs:
       - name: The image starts and serves /healthz
         run: |
           docker run -d --name mcp -p 8080:8080 -e SUBSCRIPTION_ID=11111111-1111-1111-1111-111111111111 \
-            -e WORKLOAD_RG=rg-ci -e STATE_SA=stci -e AUTH_MODE=none -e STORE_MODE=memory azure-terraform-mcp:ci
+            -e WORKLOAD_RG=rg-ci -e STATE_SA=stci -e AUTH_MODE=none -e RBAC=off -e STORE_MODE=memory azure-terraform-mcp:ci
           for i in $(seq 1 20); do curl -fsS http://127.0.0.1:8080/healthz && exit 0; sleep 1; done
           docker logs mcp; exit 1

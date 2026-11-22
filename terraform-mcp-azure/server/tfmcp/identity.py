@@ -36,6 +36,18 @@ class Identity:
     authenticated: bool = True
     source: str = "jwt"
     app_id: str = ""
+    scopes: tuple[str, ...] = ()
+    issued_at: float = 0.0       # iat of the access token
+    auth_time: float = 0.0       # when the user last signed in interactively (optional claim)
+    amr: tuple[str, ...] = ()    # authentication methods (v1 tokens) / "acrs" auth contexts
+
+    def has_role(self, *names: str) -> bool:
+        mine = {r.lower() for r in self.roles}
+        return any(n in mine for n in names)
+
+    def with_roles(self, extra) -> "Identity":
+        import dataclasses
+        return dataclasses.replace(self, roles=tuple(sorted({r.lower() for r in self.roles} | set(extra))))
 
     def public(self) -> dict:
         return {"oid": self.oid, "name": self.name}
@@ -109,9 +121,12 @@ class JwtValidator:
     """Validates Entra ID access tokens (v1 and v2 issuers) for one tenant and a set of audiences."""
 
     def __init__(self, tenant_id: str, audiences: list[str], fetch_jwks: Callable[[], dict] | None = None,
-                 clock: Callable[[], float] = time.time, jwks_ttl: float = 12 * 3600) -> None:
+                 clock: Callable[[], float] = time.time, jwks_ttl: float = 12 * 3600,
+                 allowed_client_ids: list[str] | None = None, required_scope: str = "") -> None:
         self.tenant_id = tenant_id.lower()
         self.audiences = list(audiences)
+        self.allowed_client_ids = {c.lower() for c in (allowed_client_ids or [])}
+        self.required_scope = required_scope
         self.issuers = [f"https://login.microsoftonline.com/{self.tenant_id}/v2.0",
                         f"https://sts.windows.net/{self.tenant_id}/"]
         self._fetch = fetch_jwks or self._download_jwks
@@ -175,9 +190,18 @@ class JwtValidator:
         app_id = str(claims.get("azp") or claims.get("appid") or "")
         if not name:  # app-only token (client credentials): no user
             name = f"app:{app_id or oid}"
+        scopes = tuple(str(claims.get("scp") or "").split())
+        # Only the expected client application (the Copilot Studio connector, or the approval page) may call.
+        if self.allowed_client_ids and app_id.lower() not in self.allowed_client_ids:
+            raise AuthError("token was issued to a client application that is not allowed here")
+        # Delegated (user) tokens only: an app-only token has no scp claim.
+        if self.required_scope and self.required_scope not in scopes:
+            raise AuthError(f"token lacks the required scope '{self.required_scope}'")
         groups = tuple(claims.get("groups") or ())
-        roles = tuple(claims.get("roles") or ())
-        return Identity(oid=oid, name=name, groups=groups, roles=roles, source="jwt", app_id=app_id)
+        roles = tuple(str(r).lower() for r in (claims.get("roles") or ()))
+        amr = tuple(claims.get("amr") or ()) + tuple(claims.get("acrs") or ())
+        return Identity(oid=oid, name=name, groups=groups, roles=roles, source="jwt", app_id=app_id, scopes=scopes,
+                        issued_at=float(claims.get("iat") or 0), auth_time=float(claims.get("auth_time") or 0), amr=amr)
 
 
 @dataclass

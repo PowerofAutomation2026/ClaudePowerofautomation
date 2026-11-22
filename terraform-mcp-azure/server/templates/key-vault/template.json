@@ -1,23 +1,63 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "title": "Key Vault",
   "category": "security",
   "description": "Key Vault using Azure RBAC (no access policies), with soft delete and purge protection, closed to the internet by default, and an optional private endpoint.",
   "security_defaults": [
     "Azure RBAC authorization (no legacy access policies)",
-    "Purge protection on, soft delete 90 days",
+    "Purge protection always on (not configurable), soft delete 90 days",
     "Public network access off; firewall default action Deny"
   ],
   "variables": {
-    "sku_name": { "type": "string", "enum": ["standard", "premium"], "default": "standard", "description": "premium adds HSM-backed keys." },
-    "purge_protection_enabled": { "type": "boolean", "default": true, "description": "Prevent permanent deletion during the retention period. Cannot be turned off once on." },
-    "soft_delete_retention_days": { "type": "integer", "minimum": 7, "maximum": 90, "default": 90, "description": "Days a deleted vault or secret can be recovered. Cannot be changed later." },
-    "public_network_access_enabled": { "type": "boolean", "default": false, "description": "Allow access from the internet (through the IP firewall)." },
-    "allowed_ip_ranges": { "type": "list", "items": { "type": "string", "format": "ip_or_cidr" }, "max_items": 50, "default": [], "description": "Public IPs / CIDR ranges allowed when public access is on." },
-    "private_endpoint_subnet_id": { "type": "string", "format": "azure_resource_id", "resource_type": "Microsoft.Network/virtualNetworks/subnets", "description": "Subnet for a private endpoint to the vault." },
-    "private_dns_zone_id": { "type": "string", "format": "azure_resource_id", "resource_type": "Microsoft.Network/privateDnsZones", "description": "privatelink.vaultcore.azure.net zone to register the private endpoint in." }
+    "sku_name": {
+      "type": "string",
+      "enum": [
+        "standard",
+        "premium"
+      ],
+      "default": "standard",
+      "description": "premium adds HSM-backed keys."
+    },
+    "soft_delete_retention_days": {
+      "type": "integer",
+      "minimum": 7,
+      "maximum": 90,
+      "default": 90,
+      "description": "Days a deleted vault or secret can be recovered. Cannot be changed later."
+    },
+    "public_network_access_enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Allow access from the internet (through the IP firewall)."
+    },
+    "allowed_ip_ranges": {
+      "type": "list",
+      "items": {
+        "type": "string",
+        "format": "ip_or_cidr"
+      },
+      "max_items": 50,
+      "default": [],
+      "description": "Public IPs / CIDR ranges allowed when public access is on."
+    },
+    "private_endpoint_subnet_id": {
+      "type": "string",
+      "format": "azure_resource_id",
+      "resource_type": "Microsoft.Network/virtualNetworks/subnets",
+      "description": "Subnet for a private endpoint to the vault."
+    },
+    "private_dns_zone_id": {
+      "type": "string",
+      "format": "azure_resource_id",
+      "resource_type": "Microsoft.Network/privateDnsZones",
+      "description": "privatelink.vaultcore.azure.net zone to register the private endpoint in."
+    }
   },
-  "outputs": { "key_vault_name": "Vault name", "key_vault_id": "Resource ID", "vault_uri": "Vault URI" },
+  "outputs": {
+    "key_vault_name": "Vault name",
+    "key_vault_id": "Resource ID",
+    "vault_uri": "Vault URI"
+  },
   "notes": [
     "Nobody has data access after creation. Grant roles such as Key Vault Secrets Officer with Azure RBAC; the agent's identity cannot assign roles.",
     "Because of purge protection, a destroyed vault stays recoverable (and its name reserved) for the retention period."

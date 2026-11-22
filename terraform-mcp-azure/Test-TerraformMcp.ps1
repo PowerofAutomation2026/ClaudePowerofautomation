@@ -2,7 +2,9 @@
 .SYNOPSIS
   Smoke test for a deployed Terraform MCP server (both variants): an anonymous call must get 401; an
   authenticated MCP initialize + tools/list must succeed; on the Azure-native server it also calls
-  whoami, list_environments and list_templates (read-only tools).
+  whoami and catalog (read-only tools) and checks that no approval tool is exposed.
+  The Azure CLI token only works if the server was deployed with -AllowAzureCliClient (the connector's
+  client id is the only one accepted otherwise) and your account has a role (viewer / requester / admin).
 
 .EXAMPLE
   ./Test-TerraformMcp.ps1 -SubscriptionId <guid> -Prefix aztfmcp
@@ -17,6 +19,7 @@ param(
   [string] $Prefix = 'aztfmcp',
   [string] $Url,
   [string] $Token,
+  [string] $ApprovalUrl,
   [hashtable] $ExtraHeaders = @{}
 )
 $ErrorActionPreference = 'Stop'
@@ -33,6 +36,11 @@ if (-not $Url) {
   if (-not $fqdn) { throw "Container app ca-$Prefix not found in rg-$Prefix." }
   $Url = "https://$("$fqdn".Trim())/mcp"
 }
+# (PowerShell variable names are case-insensitive: do not reuse the -ApprovalUrl parameter name here)
+if ($SubscriptionId -and -not $ApprovalUrl) {
+  $afqdn = "$(az containerapp show -g "rg-$Prefix" -n "ca-$Prefix-approval" --query properties.configuration.ingress.fqdn -o tsv 2>$null)".Trim()
+  if ($afqdn) { $ApprovalUrl = "https://$afqdn" }
+}
 if (-not $Token -and $SubscriptionId) {
   $apiId = "$(az ad app list --display-name "$Prefix-api" --query '[0].appId' -o tsv)".Trim()
   $Token = "$(az account get-access-token --resource "api://$apiId" --query accessToken -o tsv)".Trim()
@@ -41,6 +49,16 @@ if (-not $Token -and $SubscriptionId) {
 # 1. anonymous calls are rejected
 $anon = try { [int](Invoke-WebRequest $Url -Method Post -Body '{}' -ContentType 'application/json' -SkipHttpErrorCheck).StatusCode } catch { 0 }
 Show 'anonymous POST is rejected' ($anon -eq 401) "(HTTP $anon, expected 401)"
+
+if ($ApprovalUrl) {
+  $base = $ApprovalUrl.TrimEnd('/')
+  $a1 = try { [int](Invoke-WebRequest "$base/api/pending" -SkipHttpErrorCheck).StatusCode } catch { 0 }
+  Show 'approval API rejects anonymous calls' ($a1 -eq 401) "(HTTP $a1, expected 401)"
+  if ($Token) {
+    $a2 = try { [int](Invoke-WebRequest "$base/api/pending" -Headers @{ Authorization = "Bearer $Token" } -SkipHttpErrorCheck).StatusCode } catch { 0 }
+    Show 'approval API rejects the MCP token (wrong audience)' ($a2 -eq 401) "(HTTP $a2, expected 401)"
+  }
+}
 
 # 2. authenticated MCP session
 $headers = @{ Accept = 'application/json, text/event-stream' }
@@ -71,13 +89,17 @@ try {
   Show 'initialize' $true "(server: $($init.serverInfo.name))"
   $tools = @((Invoke-Mcp 'tools/list').tools | ForEach-Object { $_.name })
   Show 'tools/list' ($tools.Count -gt 0) "($($tools.Count) tools)"
+  Show 'no approval / admin tools are exposed to the agent' (-not ($tools | Where-Object { $_ -match 'approve|reject|freeze|admin' })) "($($tools -join ', '))"
   if ($tools -contains 'whoami') {
     $me = Invoke-Tool 'whoami'
-    Show 'whoami returns the signed-in user' ([bool]$me.name) "($($me.name))"
-    $envs = Invoke-Tool 'list_environments'
-    Show 'list_environments' (@($envs.environments).Count -gt 0) "($((@($envs.environments) | ForEach-Object { $_.name }) -join ', '))"
-    $templates = Invoke-Tool 'list_templates'
-    Show 'list_templates' (@($templates.templates).Count -gt 0) "($(@($templates.templates).Count) templates)"
+    Show 'whoami returns the signed-in user' ([bool]$me.name) "($($me.name); roles: $(@($me.roles) -join ', '))"
+    if (-not $me.roles) { Write-Host '      note: this account has no role yet (viewer/requester/admin); catalog calls will be refused' -ForegroundColor Yellow }
+    else {
+      $envs = Invoke-Tool 'catalog' @{ what = 'environments' }
+      Show 'catalog environments' ([bool]$envs.envs) "($(@($envs.envs.PSObject.Properties.Name) -join ', '))"
+      $templates = Invoke-Tool 'catalog' @{ what = 'templates' }
+      Show 'catalog templates' ([bool]$templates.templates) "($(@($templates.templates.PSObject.Properties.Name).Count) templates)"
+    }
   }
 } catch {
   Show 'authenticated MCP session' $false "$_"

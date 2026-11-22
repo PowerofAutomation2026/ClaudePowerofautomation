@@ -81,6 +81,8 @@ if noun == "ad sp" and verb == "show":
         sys.stderr.write("ERROR: service principal not found\n")
         sys.exit(1)
     answer(guid("sp" + name))
+if verb == "list":
+    answer("" if query else "[]")
 if verb in ("create", "assign", "add", "set", "update", "register", "build", "grant", "login", "reset"):
     if verb == "create":
         state[key] = True
@@ -100,7 +102,7 @@ if verb == "show" or verb == "get-shared-keys":
         sys.exit(3)
     if not query:
         answer(json.dumps({"name": name}))
-    if "oauth2PermissionScopes" in query:
+    if "oauth2PermissionScopes" in query or "appRoles" in query or "infrastructureSubnetId" in query:
         answer("")
     last = query.replace("]", "").split(".")[-1]
     if last == "fqdn":

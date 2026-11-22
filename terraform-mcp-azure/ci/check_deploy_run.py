@@ -59,22 +59,58 @@ image_tags = [build[0][i + 1] for i, a in enumerate(build[0]) if a == "-t"]
 expect(len(image_tags) == 2 and image_tags[1] == "azure-terraform-mcp:latest", f"image tags {image_tags}")
 
 creates, updates = find("containerapp", "create"), [c for c in find("containerapp", "update") if "--image" in c]
+by_name = lambda cs: {opt(c, "-n"): c for c in cs}  # noqa: E731
+FRONT, BACK = f"ca-{'custom1' if scenario == 'file' else 'aztfmcp'}", f"ca-{'custom1' if scenario == 'file' else 'aztfmcp'}-approval"
 if scenario == "rerun":
-    expect(not creates and len(updates) == 1, "second run must update in place, not create")
+    expect(not creates and set(by_name(updates)) == {FRONT, BACK}, "second run must update both apps in place, not create")
     expect(find("containerapp", "identity", "assign") and find("containerapp", "registry", "set"), "identity/registry re-set on upgrade")
-    app_call, flag = updates[0], "--replace-env-vars"
+    app_call, back_call, flag = by_name(updates)[FRONT], by_name(updates)[BACK], "--replace-env-vars"
     expect(not find("ad", "app", "credential", "reset"), "connector secret must NOT be rotated on a re-run")
     expect((work / "out" / "connector-client-secret.txt").read_text() == (work / "secret.before").read_text(), "secret file unchanged")
     expect(not find("storage", "account", "create") and not find("containerapp", "env", "create"), "existing resources are not re-created")
 else:
-    expect(len(creates) == 1 and not updates, "first run creates the app")
-    app_call, flag = creates[0], "--env-vars"
-    expect(containers == {"tfstate", "plans", "audit"}, f"containers {containers}")
+    expect(set(by_name(creates)) == {FRONT, BACK} and not updates, "first run creates the front-end and the approval app")
+    app_call, back_call, flag = by_name(creates)[FRONT], by_name(creates)[BACK], "--env-vars"
+    expect(containers == {"tfstate", "plans", "audit", "control"}, f"containers {containers}")
+    expect(opt(app_call, "--user-assigned") != opt(back_call, "--user-assigned"), "front-end and executor use DIFFERENT identities")
     expect("--user-assigned" in app_call and "--registry-identity" in app_call, "user-assigned identity on the app")
     expect(len(find("ad", "app", "credential", "reset")) == 1, "connector secret created once")
     expect(opt(find("storage", "account", "create")[0], "--allow-shared-key-access") == "false", "shared key access off")
 env = env_vars(app_call, flag)
+back_env = env_vars(back_call, flag)
 envs = json.loads(base64.b64decode(env["ENVIRONMENTS_B64"]))
+expect(env["TFMCP_ROLE"] == "frontend" and back_env["TFMCP_ROLE"] == "approval", "process roles")
+expect(env["AZURE_CLIENT_ID"] != back_env["AZURE_CLIENT_ID"], "different managed identity client ids")
+expect(env["REQUIRED_SCOPE"] == "access_as_user" and len(env["ALLOWED_CLIENT_IDS"].split(",")[0]) == 36, "client allow-list")
+expect(env["APPROVAL_BASE_URL"].startswith("https://") and BACK in env["APPROVAL_BASE_URL"], "front-end knows the approval page URL")
+appr_id = back_env["APPROVAL_CLIENT_IDS"]
+expect(back_env["APPROVAL_AUDIENCES"] == f"{appr_id},api://{appr_id}" and appr_id != env["API_AUDIENCES"].split(",")[0], "approval uses a separate Entra app / audience")
+# ---- identities and least privilege
+plan_role = [r for r in roles if r[0].startswith("Azure Terraform MCP Plan")]
+apply_role = [r for r in roles if r[0].startswith("Azure Terraform MCP Apply")]
+assignee = {(opt(c, "--role"), opt(c, "--scope")): opt(c, "--assignee-object-id") for c in find("role", "assignment", "create")}
+plan_pid = assignee[plan_role[0]]
+apply_pid = assignee[apply_role[0]]
+expect(plan_pid != apply_pid, "two principals")
+plan_roles = {(r, sc.rsplit("/", 1)[-1]) for (r, sc), pid in assignee.items() if pid == plan_pid}
+expect(not any(r in ("Contributor", "Owner") or r.startswith("Azure Terraform MCP Apply") for r, _ in plan_roles), f"front-end identity has no write role: {plan_roles}")
+expect(("Storage Blob Data Reader", "tfstate") in plan_roles and ("Storage Blob Data Reader", "control") in plan_roles, "front-end: read-only on state and control")
+expect(("Storage Blob Data Contributor", "plans") in plan_roles and ("Storage Blob Data Contributor", "control") not in plan_roles, "front-end cannot write approvals")
+expect(not any(r[0] in ("Contributor", "Owner", "User Access Administrator") for r in roles), "built-in Contributor/Owner are not used at all")
+for kind in ("plan", "apply", "applyProtected"):
+    d = json.loads((work / "out" / f"role-{kind}.json").read_text())
+    expect(d["IsCustom"] is True and all(sc.startswith("/subscriptions/") for sc in d["AssignableScopes"]), f"role file {kind}")
+plan_def = json.loads((work / "out" / "role-plan.json").read_text())
+apply_def = json.loads((work / "out" / "role-apply.json").read_text())
+prot_def = json.loads((work / "out" / "role-applyProtected.json").read_text())
+expect(plan_def["Actions"] == ["*/read"] and plan_def["NotActions"] == [], "plan role is read-only")
+for needed in ("Microsoft.Authorization/*/Write", "Microsoft.Authorization/*/Delete", "Microsoft.Resources/subscriptions/resourceGroups/delete"):
+    expect(needed in apply_def["NotActions"] and needed in prot_def["NotActions"], f"apply roles exclude {needed}")
+expect("Microsoft.Sql/servers/databases/delete" in prot_def["NotActions"] and "Microsoft.Sql/servers/databases/delete" not in apply_def["NotActions"], "protected role blocks data deletes")
+locks = find("lock", "create")
+expect(any(opt(c, "--resource-group") == f"rg-{'custom1' if scenario == 'file' else 'aztfmcp'}" and opt(c, "--lock-type") == "CanNotDelete" for c in locks), "MCP resource group is locked")
+graph_patches = [c for c in find("rest") if "PATCH" in c]
+expect(len(graph_patches) == 3, "API app + approval app (twice: before and after its URL is known)")
 expect(env["AUTH_MODE"] == "jwt" and env["SUBSCRIPTION_ID"] == SUB and env["TENANT_ID"].count("-") == 4, f"env vars {sorted(env)}")
 api_id = env["API_AUDIENCES"].split(",")[0]
 expect(env["API_AUDIENCES"] == f"{api_id},api://{api_id}" and len(api_id) == 36, "API audiences")
@@ -85,10 +121,10 @@ expect(opt(auth, "--client-id") == api_id and opt(auth, "--allowed-audiences") =
 expect(opt(find("containerapp", "auth", "update")[0], "--unauthenticated-client-action") == "Return401", "anonymous -> 401")
 for name, cfg in envs.items():
     scope = f"/subscriptions/{cfg['subscription_id']}/resourceGroups/{cfg['resource_group']}"
-    expect(("Contributor", scope) in roles, f"Contributor on {scope}")
+    expect(any(r == (plan_role[0][0], scope) for r in roles) and any(r[1] == scope for r in apply_role), f"plan + apply roles on {scope}")
     expect(any(opt(c, "-n") == cfg["resource_group"] and opt(c, "--subscription") == cfg["subscription_id"] for c in find("group", "create") if "--subscription" in c), f"resource group for {name}")
-expect(all(r[0] != "Owner" and not (r[0] == "Contributor" and r[1].count("/") < 4) for r in roles), "no subscription-wide or Owner role assignments")
-expect(sum(1 for r in roles if r[0] == "Contributor") == len(envs), "Contributor only on the environment resource groups")
+expect(all(r[1].count("/") >= 4 for r in roles), "no subscription-wide role assignments")
+expect(len([r for r in apply_role]) == len(envs), "apply role only on the environment resource groups")
 
 swagger = json.loads((work / "out" / "terraform-mcp.swagger.json").read_text())
 post = swagger["paths"]["/mcp"]["post"]
@@ -103,26 +139,37 @@ wizard = (work / "out" / "copilot-studio-wizard-values.md").read_text()
 expect(secret and secret not in wizard and secret not in json.dumps(swagger) + json.dumps(props) and secret not in out, "client secret only in its own file")
 expect(all(secret not in " ".join(c) for c in calls), "client secret never passed back to az / app settings")
 expect(f"https://{swagger['host']}/mcp" in wizard and "OAuth 2.0 > Manual" in wizard, "wizard values")
-graph = [c for c in find("rest") if "PATCH" in c][0]
+graph = graph_patches[0]
 expect(opt(graph, "--body").startswith("@"), "Graph body passed as a file")
 
 if scenario == "default":
     expect(list(envs) == ["dev"] and envs["dev"] == {"resource_group": "rg-aztfmcp-dev", "subscription_id": SUB, "allowed_locations": ["eastus2"],
                                                      "policy_profile": "standard", "enable_apply": False, "enable_destroy": False,
-                                                     "require_approval": False, "allow_ephemeral": True}, f"default environments {envs}")
+                                                     "require_approval": False, "allow_ephemeral": True, "allow_self_approval": True}, f"default environments {envs}")
+    expect("04b07795" not in env["ALLOWED_CLIENT_IDS"] and not find("policy", "assignment", "create"), "Azure CLI client and deny policy are opt-in")
+    expect(len(locks) == 1, "only the MCP resource group is locked when there is no prod environment")
     expect(not find("containerapp", "job", "create") and not find("deployment", "group", "create") and not find("network", "vnet", "create"), "optional parts are off by default")
     expect(opt(app_call, "--ingress") == "external" and opt(app_call, "--min-replicas") == "1" and opt(app_call, "--max-replicas") == "3", "ingress/replicas")
     expect("--infrastructure-subnet-resource-id" not in find("containerapp", "env", "create")[0], "no VNet by default")
 if scenario == "full":
     expect(list(envs) == ["dev", "test", "prod"], "three environments")
     expect(envs["prod"]["require_approval"] is True and envs["prod"]["policy_profile"] == "strict" and envs["prod"]["allow_ephemeral"] is False, "prod guardrails")
-    expect(envs["prod"]["approver_group_ids"] == ["99999999-0000-0000-0000-000000000009"] and "approver_group_ids" not in envs["dev"], "approver group only on prod")
+    prod_scope = f"/subscriptions/{SUB}/resourceGroups/rg-aztfmcp-prod"
+    expect(("Azure Terraform MCP Apply protected (aztfmcp)", prod_scope) in roles and ("Azure Terraform MCP Apply (aztfmcp)", prod_scope) not in roles, "prod gets the protected apply role")
+    expect(any(opt(c, "--resource-group") == "rg-aztfmcp-prod" for c in locks) and len(locks) == 2, "prod resource group is locked")
+    expect(len(find("policy", "assignment", "create")) == 3, "deny-delete policy assigned per environment")
+    role_posts = [json.dumps(c) for c in find("rest") if "POST" in c and "appRoleAssignedTo" in opt(c, "--uri")]
+    expect(len(role_posts) == 6, f"group -> app role assignments (3 on the API app, 2 on the approval app, 1 access group): {len(role_posts)}")
+    expect("04b07795-8ddb-461a-bbee-02f9e1bf7b46" in env["ALLOWED_CLIENT_IDS"] and back_env["APPROVAL_REQUIRE_AMR"] == "mfa", "opt-in switches")
+    expect("--secrets" in back_call and back_env["NOTIFY_WEBHOOK_URL"] == "secretref:notify-webhook" and "hooks.example" not in json.dumps(back_env), "webhook URL is a secret, not an env value")
+    expect(find("storage", "container", "immutability-policy", "create"), "audit WORM policy")
     expect(envs["dev"]["enable_apply"] is True and envs["dev"]["monthly_budget_usd"] == 2000 and envs["dev"]["allow_ephemeral"] is True, "dev settings")
     jobs = find("containerapp", "job", "create")
     expect([opt(j, "-n") for j in jobs] == ["caj-aztfmcp-reaper", "caj-aztfmcp-drift"], "two scheduled jobs")
     expect(opt(jobs[0], "--cron-expression") == "*/15 * * * *" and opt(jobs[1], "--cron-expression") == "0 3 * * *", "cron expressions survive quoting")
     expect(multi(jobs[0], "--args") == ["server.py", "job", "reaper"] and multi(jobs[1], "--args") == ["server.py", "job", "drift"], "job commands")
-    expect(env_vars(jobs[0], "--env-vars") == env and "--mi-user-assigned" in jobs[0], "jobs share the server's configuration and identity")
+    expect(env_vars(jobs[0], "--env-vars")["TFMCP_ROLE"] == "approval" and env_vars(jobs[1], "--env-vars")["TFMCP_ROLE"] == "frontend", "reaper is privileged, drift scan is read-only")
+    expect(opt(jobs[0], "--mi-user-assigned") == opt(back_call, "--user-assigned") and opt(jobs[1], "--mi-user-assigned") == opt(app_call, "--user-assigned"), "job identities")
     mon = find("deployment", "group", "create")[0]
     expect("alertEmail=ops@contoso.com" in mon and any(a.startswith("workspaceResourceId=/subscriptions/") for a in mon), "monitoring deployment parameters")
     env_create = find("containerapp", "env", "create")[0]
@@ -130,10 +177,11 @@ if scenario == "full":
     expect(find("network", "private-endpoint", "create") and opt(find("network", "private-endpoint", "create")[0], "--group-id") == "blob", "storage private endpoint")
     upd = [c for c in find("storage", "account", "update") if "--public-network-access" in c]
     expect(upd and opt(upd[0], "--public-network-access") == "Disabled", "state storage closed to the internet")
-    expect([opt(c, "--ip-address") for c in find("containerapp", "ingress", "access-restriction", "set")] == ["203.0.113.0/24", "198.51.100.7/32"], "IP allow-list")
+    acl = find("containerapp", "ingress", "access-restriction", "set")
+    expect([opt(c, "--ip-address") for c in acl if opt(c, "-n") == FRONT] == ["203.0.113.0/24", "198.51.100.7/32"], "IP allow-list (MCP)")
+    expect([opt(c, "--ip-address") for c in acl if opt(c, "-n") == BACK] == ["203.0.113.0/24"], "IP allow-list (approval page)")
     expect(opt(app_call, "--max-replicas") == "4", "max replicas")
-    body_patch = [c for c in find("rest") if "POST" in c]
-    expect(len(body_patch) == 1 and "appRoleAssignedTo" in opt(body_patch[0], "--uri"), "group restriction")
+
 if scenario == "rerun":
     expect(list(envs) == ["dev", "prod"] and "NOTIFY_WEBHOOK_URL" not in env, "re-run replaces the environment configuration")
 if scenario == "file":
@@ -144,6 +192,7 @@ if scenario == "file":
 # the server must accept exactly what the script generated
 sys.path.insert(0, str(work / "server"))
 from tfmcp.config import Settings  # noqa: E402
-settings = Settings.from_env(env)
-expect(sorted(settings.environments) == sorted(envs), "server parses the generated configuration")
+for e in (env, back_env):
+    settings = Settings.from_env({**e, "NOTIFY_WEBHOOK_URL": "https://x"})
+    expect(sorted(settings.environments) == sorted(envs), "server parses the generated configuration")
 print(f"OK   {scenario}: {len(calls)} az calls verified")

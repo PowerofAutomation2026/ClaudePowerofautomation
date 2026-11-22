@@ -1,60 +1,114 @@
-# Threat model (STRIDE-lite) - Azure Terraform MCP v2
+# Threat model - Azure Terraform MCP v2.1
 
-Scope: the Azure-native server (`server/`), its deploy script and the Copilot Studio integration.
-This is a design review by the authors, not a penetration test, and nothing here was verified on a live tenant.
+Design review by the authors. Not a penetration test; nothing here was exercised on a live tenant.
+No system is unhackable: this document says which control stops which attack, and what remains.
 
-## What we protect
-1. **The Azure environments** the identity can change (the environment resource groups).
-2. **Terraform state** (may contain secrets such as access keys) and saved plans.
-3. **The integrity of the decision trail**: who planned, who approved, who applied.
+## Assumptions
+* **The agent is hostile.** The LLM / Copilot Studio agent may be prompt-injected or jailbroken. It can call
+  every MCP tool with any arguments, as whichever user is signed in, and it can lie about what the user said.
+  Agent instructions are not a control.
+* **A user's MCP bearer token may be stolen** and replayed from anywhere until it expires.
+* Entra ID, the Azure control plane, and the people who are Owner of the subscriptions are trusted.
+
+## Assets
+1. The Azure environments (especially production data resources). 2. Terraform state (contains whatever the
+provider stores, including some secrets). 3. The decision trail (who planned, approved, applied).
+4. Availability of the service.
 
 ## Trust boundaries
 ```
- user --(chat)--> Copilot Studio agent (LLM: untrusted decision maker)
-                     | OAuth access token of the signed-in user
-                     v
- [internet] --> Container Apps ingress + Easy Auth --> server --> terraform --> Azure Resource Manager
-                                                        |                         (managed identity)
-                                                        +--> blob storage (state, plans, operations, audit)
-                                                        +--> prices.azure.com (read-only, public)
+ user ─ chat ─> AGENT (untrusted) ─ token aud=MCP ─> [ MCP front-end ]  read-only identity
+                                                         │ can write: plans, operations, its own audit lines
+                                                         │ can read : state, control (approvals, freeze, quotas)
+                                                         ▼ queue
+ approver ─ browser, fresh sign-in, token aud=APPROVAL ─> [ approval service + executor ]  write identity
+                                                         │ only writer of: control container, Azure resources
+                                                         ▼
+                                        Azure Resource Manager  ◄─ locks, policy, custom-role exclusions
 ```
-The LLM is treated as **untrusted**: it may be wrong or manipulated (prompt injection through a document or
-a user). Therefore every control that matters is enforced by the server, not by the agent's instructions -
-with one stated exception (T2).
+The two services share an image and a storage account but not an identity, not a token audience, and not the
+`control` container's write permission.
 
-## Threats and mitigations
+## Attacker scenarios
 
-| # | STRIDE | Threat | Mitigation | Residual risk |
-|---|---|---|---|---|
-| S1 | Spoofing | Anonymous or cross-tenant caller | Easy Auth returns 401 before the app; the server validates the bearer token again (signature via tenant JWKS, audience, issuer, tenant, expiry) in `AUTH_MODE=jwt`. Optional `-SecurityGroupId`, `-AllowedCidrs`. | Without `-SecurityGroupId` every user in the tenant who can sign in can call the tools (still bound by all guardrails). |
-| S2 | Spoofing | Forged `X-MS-CLIENT-PRINCIPAL-*` headers to impersonate an approver | In `jwt` mode identity comes only from the validated token; those headers are ignored. | In `easyauth` mode the server trusts the platform to overwrite the headers. Prefer `jwt`. |
-| S3 | Spoofing | One shared Copilot Studio connection makes every user the same identity | Documented requirement: end-user authentication. App-only tokens are flagged and cannot approve or apply in approval environments. | Configuration error on the Copilot Studio side cannot be detected by the server if a real user's connection is shared. |
-| T1 | Tampering | Malicious input reaches Terraform (HCL injection, path tricks) | Only curated templates; inputs go in as JSON variable values (data, never code) after schema validation: types, enums, ranges, patterns, resource-ID formats. Injected variables (subscription, resource group, tags) cannot be overridden. IDs are strictly validated before use as blob keys. | A template with a flaw is a flaw for everyone: review templates like code. |
-| T2 | Tampering | Agent applies without the user really confirming (prompt injection, over-eager model) | Apply needs a saved plan; policy, budget and expiry are enforced server-side; in approval environments a **second human** is enforced server-side. | In environments **without** approval, "the user confirmed" is an agent instruction, not a server control. Use plan-only or approval for anything that matters. |
-| T3 | Tampering | Someone with write access to the storage account edits a plan, approval or operation record | Plan file checksum is verified at apply; policy is re-evaluated at apply; approval is bound to the plan checksum and approver != requester is re-checked. Shared-key access is disabled; only the server identity gets a data role; optional private endpoint. | A principal with blob write access can forge a consistent plan + record and thereby act with the server identity's rights. Treat data-plane access to this account as equivalent to Contributor on the environments. |
-| T4 | Tampering | Compromised provider or Terraform binary | Exact versions pinned; SHA-256 verified at image build; providers served only from the image (`terraformrc` blocks the registry at run time). | Trust in HashiCorp's published checksums and the base image; no image signing or SBOM yet. |
-| T5 | Tampering | Changes made outside Terraform (portal) | `detect_drift`, scheduled drift scan, alert rule. | Detection, not prevention. Add resource locks / Azure Policy for prevention. |
-| R1 | Repudiation | "I never asked for that" | Every tool call is logged with Entra object id, UPN, tool, argument hash, outcome; plan/apply/approval events link planner, approver and applier; deployment history keeps the same. Two sinks: Log Analytics and blob. | Neither sink is immutable by default (add an immutability policy on the `audit` container; restrict Log Analytics delete rights). Argument *values* are deliberately not logged, only their hash plus safe fields. |
-| I1 | Information disclosure | Secrets leak to the agent/chat | Templates use Entra-only auth (no passwords generated); sensitive plan values are masked before the plan JSON is stored or returned; sensitive outputs are masked; internal errors return only a reference id. | Terraform error text is passed through (trimmed) and could contain a value. State blobs contain whatever the provider stores (for example storage keys): protect the `tfstate` container. |
-| I2 | Information disclosure | A user sees deployments of other teams | None: all authenticated users see all deployments and plans of the server. | By design in v2 (single platform team model). Run one server per trust domain if that is not acceptable. |
-| D1 | Denial of service | Flood of plans (each starts Terraform) | Per-replica concurrency limit, one operation per deployment, quick return with polling, Easy Auth in front. | No per-user rate limit or quota. |
-| D2 | Denial of service | Replica dies mid-operation and leaves locks | Leases with expiry; any replica recovers; orphaned state-blob lease is broken; graceful SIGTERM handling. | An apply interrupted mid-way leaves partially created resources until someone re-plans. |
-| D3 | Denial of service / cost | Runaway spend | Budget cap on the estimate, approved SKU lists, blast-radius limit, time-boxed deployments. | The estimate is best-effort and covers fixed charges only; usage-based costs are not capped. |
-| E1 | Elevation of privilege | Server identity used to reach beyond its environments | Contributor on the environment resource groups only; cannot assign roles; `resource_provider_registrations = "none"`; resource group and subscription are injected, never user-supplied. | Contributor can read keys of resources in those groups (listKeys). Templates that accept external IDs (subnets, private endpoint targets) can attach to resources elsewhere **if** the identity was granted rights there. |
-| E2 | Elevation of privilege | Self-approval or approval by automation | Approver must differ from planner and requester; must be a signed-in person (no app-only, system or anonymous identity); optional approver group; approval bound to the exact plan. | Two colluding users. Without `-ApproverGroupId`, any second user qualifies. |
-| E3 | Elevation of privilege | TTL reaper as a destroy backdoor | Acts only on deployments created with `ttl_hours`; the bypass of `enable_destroy` works only for the reaper identity on plans it created itself; policy still applies; never in approval environments. | The reaper intentionally ignores `enable_destroy=false` for those deployments. |
-| E4 | Elevation of privilege | Local token broker abused | Loopback only, requires the `Metadata: true` header, hands out the same tokens any process in the container can already get from the platform. | Code execution inside the container equals the identity (as with any managed identity). |
+### A. Prompt-injected / jailbroken agent
+| Goal | What stops it | Residual |
+|---|---|---|
+| Apply or destroy without consent | No MCP tool can approve. `apply` is refused unless the trusted control store holds an unused, unexpired approval for that exact plan file, created on the approval channel with a different token audience. "The user said yes" is not an input anywhere. | The agent can *ask* a human to approve something misleading (social engineering). The approval page shows the server's own summary, risk, cost and policy result, not the agent's words. |
+| Destroy infrastructure | Destroy plans need owner/admin + the same out-of-band approval; protected deployments are refused at plan, approval and execution; quota on deletions per day; in locked environments the apply role cannot delete data resources and the resource group has a CanNotDelete lock. | A human approver who approves a real destroy of an unprotected deployment in an unlocked environment. |
+| Deploy something dangerous | Curated templates, typed/pattern-validated inputs, policy gate at plan, at approval and on the real plan file at execution; budget cap; approved SKU/region lists. | Whatever the templates and policy allow, an approver can approve. |
+| Flood / exhaust | Per-user call and plan limits, global apply quota, anomaly auto-freeze. | It can trip the auto-freeze on purpose: a denial of service that needs an admin to lift. Chosen deliberately: fail closed. |
+| Read other teams' data | Per-user visibility; only viewers/admins see everything. | Users with the viewer role see all deployments and outputs (outputs marked sensitive are masked). |
+| Inject instructions through tool results | Resource names, tags, errors and comments are stripped of control characters, secret-like values and instruction-like phrases and are length-capped before they go back. | Pattern-based; a determined injection can evade a filter. It does not matter for integrity because no tool result can grant an approval. |
 
-## Not covered
-* Compromise of the Entra tenant, the Power Platform environment or a tenant administrator.
-* Content safety of the agent's conversation; data residency of Copilot Studio.
-* Vulnerabilities in Terraform, providers, Python dependencies beyond version pinning.
-* Multi-tenant isolation between teams inside one server (see I2).
+### B. Stolen MCP user token
+| Goal | What stops it | Residual |
+|---|---|---|
+| Use it against the approval channel | Wrong audience, wrong client id, wrong scope: rejected (tested). | - |
+| Use it against MCP | Works until it expires for reads and plans as that user (their role, their deployments). Writes need a token younger than 75 minutes. `azp` allow-list: only tokens issued to the connector app. Optional IP allow-list / Conditional Access (documented). | The thief can read what the user can read, create plans and approval requests. Nothing is applied without a human on the approval page. |
 
-## Recommended hardening checklist
-1. `-SecurityGroupId` and `-ApproverGroupId`; end-user authentication in Copilot Studio.
-2. Keep prod `require_approval: true`, `enable_destroy: false`; start every environment plan-only.
-3. `-PrivateNetworking`; restrict who has any data role on the state storage account; add an immutability
-   policy on the `audit` container.
-4. `-EnableMonitoring`; review the workbook weekly; run query 4 in `audit-queries.kql` (two-person check).
-5. Review `server/policies/default.json` against your own standards before enabling apply.
+### C. Stolen approver session / approval token
+Needs a token for the approval audience from a sign-in in the last 10 minutes (`auth_time`), optionally with
+an MFA claim; Conditional Access on the approval app (recommended: MFA + sign-in frequency "every time",
+compliant device) is the real control. Two-person rule still requires a *different* requester. Approvals expire
+in 30 minutes and are single use. **Residual:** an attacker who controls both an approver's fresh session and a
+requester can change what policy, quotas, locks and custom-role exclusions allow - not more.
+
+### D. Malicious template variable / parameter tampering
+Values are validated against the template schema (types, enums, ranges, regex, resource-id formats) and passed
+as JSON variable values - never interpolated into HCL, a shell or a file path. Terraform is started without a
+shell (argument vector). Deployment, plan, operation and template names are strictly validated before being
+used in blob keys or the state key. Injected variables (subscription, resource group, tags) cannot be
+overridden. Tested with traversal, shell, HCL and type-confusion payloads. **Residual:** a logic flaw in a
+template.
+
+### E. Compromised MCP front-end container (code execution)
+It holds a read-only Azure identity: it cannot create, change or delete resources. It can write the `plans`
+container, so it can forge plan metadata, queue applies and tamper deployment records - therefore the executor
+trusts none of that: it reads approvals only from `control` (front-end: read-only), recomputes the changes from
+the binary plan with `terraform show`, compares them with the digest the approver saw, re-runs policy, and
+checks protection and quotas in `control`. Tested: forged approval, swapped plan file, plan JSON that lies.
+**Residual:** it can read Terraform state (secrets the providers store there) and everything the read-only role
+can read; it can delete its own auto-freeze flag (not the admin freeze), corrupt its own records (availability,
+misleading listings) and stop writing audit lines. It could show a misleading summary to the *requester*, but
+not to the approver, whose page is rendered by the other service.
+
+### F. Compromised approval/executor container
+This is the crown jewel: it can write approvals and holds the apply identity. Limits that do not depend on our
+code: custom role (no Microsoft.Authorization writes, so no role assignments, no lock removal, no policy
+exemptions; no resource-group delete; in locked environments no deletion of data resource types), CanNotDelete
+locks, deny-delete policy, scope limited to the environment resource groups. Smaller surface: no MCP endpoint,
+no agent input except plan data, optional IP allow-list. **Residual:** within those limits it can create and
+modify resources and delete non-protected ones in unlocked environments.
+
+### G. Insider (requester or approver)
+Two-person rule, role separation (requester vs approver are different app roles on different apps), immutable
+audit, alerts on destroy requested/approved/applied, on odd-hour and self approvals, on refused approval
+attempts, on lock / role / policy changes in the Activity Log. **Residual:** collusion of two insiders; an
+Owner of the subscription can do anything (outside this system's scope).
+
+### H. Supply chain
+Base image pinned by digest; Terraform and provider archives verified against published SHA-256; provider lock
+file enforced read-only; providers served only from the image; Python dependencies exact-pinned; templates and
+policies verified against `integrity.json` at build and at every start. **Residual:** trust in upstream
+publishers at pin time; no image signing/SBOM/scanning in this package; the approval page loads MSAL from
+Microsoft's CDN (pinned version, no subresource-integrity hash).
+
+## STRIDE summary
+| | Main controls |
+|---|---|
+| Spoofing | JWT validation per channel (audience, issuer, tenant, signature, expiry), client-app allow-list, required scope, fresh sign-in for approval, app-only tokens refused |
+| Tampering | Out-of-band approval bound to file hash + change digest, trusted control store, executor re-derivation, integrity manifest, state versioning |
+| Repudiation | Per-call audit with Entra identity on both channels, WORM audit container, Log Analytics, deployment history |
+| Information disclosure | Per-user visibility, output/plan redaction, secret scrubbing in results and logs, no secrets in settings |
+| Denial of service | Rate limits, quotas, concurrency limits, kill switch (which is itself a DoS lever by design) |
+| Elevation of privilege | Split identities, custom roles without authorization rights, locks, deny policy, RBAC per tool, protected deployments |
+
+## Known residual risks (short list)
+1. A person approves something they should not. The system can inform and slow them, not replace judgement.
+2. Terraform state is readable by the front-end identity.
+3. The time-box reaper destroys without a fresh approval (agreed at creation, shown on the approval page then).
+4. Self-approval environments are one stolen approval-audience session away from an apply (use only for dev).
+5. Output filtering against prompt injection is heuristic.
+6. Controls were verified with emulators and fakes only; real Entra claims, role and lock behaviour must be
+   confirmed in a sandbox before relying on them.

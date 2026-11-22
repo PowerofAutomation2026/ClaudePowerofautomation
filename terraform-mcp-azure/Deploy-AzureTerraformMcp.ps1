@@ -42,7 +42,19 @@ param(
   [switch] $EnableApply,                          # simple mode: allow create/update after a confirmed plan
   [switch] $EnableDestroy,                        # simple mode: allow destroy plans to be applied
   [string[]] $ApprovalEnvironments = @('prod'),   # simple mode: environments that need two-person approval (strict policy)
-  [string] $ApproverGroupId,                      # Entra group whose members may approve (optional)
+  [string] $ApproverGroupId,                      # Entra group -> app role "approver" on the approval app
+  [string] $RequesterGroupId,                     # Entra group -> app role "requester" (may plan / request / apply their own)
+  [string] $ViewerGroupId,                        # Entra group -> app role "viewer" (read everything)
+  [string] $AdminGroupId,                         # Entra group -> app role "admin" (both apps: all deployments, kill switch)
+  [string[]] $SelfApprovalEnvironments = @(),     # simple mode: non-approval environments where self-approval is NOT wanted are all others
+  [string[]] $LockEnvironments = @('prod'),       # CanNotDelete lock on these environments' resource groups + protected apply role
+  [switch] $NoResourceLocks,                      # do not lock the MCP's own resource group
+  [switch] $EnableDenyDeletePolicy,               # Azure Policy (denyAction) blocking deletion of resources tagged protected=true
+  [string] $ApprovalRequireAmr,                   # e.g. 'mfa' (v1 tokens) or an authentication-context id; see docs
+  [string[]] $ApprovalAllowedCidrs,               # IP allow-list for the approval page (e.g. corporate egress)
+  [int] $AuditRetentionDays = 365,                # time-based immutability (WORM) on the audit container
+  [string[]] $PlanRoleExtraActions = @(),         # extra actions for the read-only plan role if a refresh needs them
+  [switch] $AllowAzureCliClient,                  # also accept tokens issued to the Azure CLI (needed by Test-TerraformMcp.ps1)
   [double] $MonthlyBudgetUsd = 0,                 # simple mode: per-deployment monthly cap (0 = none)
 
   # --- runtime --------------------------------------------------------------
@@ -109,10 +121,14 @@ function Write-JsonFile([string] $Path, $Value, [int] $Depth = 12) {
 # Accept both PowerShell arrays (-Environments dev,prod) and one comma-separated string (pwsh -File ... "dev,prod")
 function Split-List($Values) { @($Values | Where-Object { $_ } | ForEach-Object { "$_" -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
 $Environments = Split-List $Environments
+$LockEnvironments = Split-List $LockEnvironments
+$ApprovalAllowedCidrs = Split-List $ApprovalAllowedCidrs
+$PlanRoleExtraActions = Split-List $PlanRoleExtraActions
 $ApprovalEnvironments = Split-List $ApprovalEnvironments
 $AllowedCidrs = Split-List $AllowedCidrs
 
-$rg = "rg-$Prefix"; $envName = "cae-$Prefix"; $app = "ca-$Prefix"; $law = "log-$Prefix"; $identityName = "id-$Prefix"
+$rg = "rg-$Prefix"; $envName = "cae-$Prefix"; $app = "ca-$Prefix"; $approvalApp = "ca-$Prefix-approval"; $law = "log-$Prefix"
+$planIdentityName = "id-$Prefix-plan"; $applyIdentityName = "id-$Prefix-apply"; $lockName = 'tfmcp-do-not-delete' 
 $outDir = Join-Path $PSScriptRoot 'out'
 $retrySeconds = if ($env:AZTFMCP_RETRY_SECONDS) { [int]$env:AZTFMCP_RETRY_SECONDS } else { 30 }   # tests set this to 0
 
@@ -129,8 +145,10 @@ $tenantId = Invoke-AzCli account show --query tenantId -o tsv
 
 if ($Destroy) {
   Write-Host "Deleting $rg (MCP, state storage, logs) and the app registrations. Workload resource groups are NOT deleted." -ForegroundColor Yellow
+  if (Test-AzCli lock show --name $lockName --resource-group $rg) { Invoke-AzCli lock delete --name $lockName --resource-group $rg | Out-Null }
   Invoke-AzCli group delete -n $rg --yes --no-wait | Out-Null
-  foreach ($n in "$Prefix-api", "$Prefix-connector") {
+  Write-Host 'Not removed: locks/policies on workload resource groups and the custom role definitions (remove them deliberately).' -ForegroundColor Yellow
+  foreach ($n in "$Prefix-api", "$Prefix-connector", "$Prefix-approval") {
     $id = Invoke-AzCli ad app list --display-name $n --query '[0].appId' -o tsv
     if ($id) { Invoke-AzCli ad app delete --id $id | Out-Null }
   }
@@ -157,8 +175,8 @@ if ($EnvironmentsFile) {
       enable_destroy    = [bool]$EnableDestroy
       require_approval  = [bool]$needsApproval
       allow_ephemeral   = -not $needsApproval          # time-boxed deployments only where no approval is needed
+      allow_self_approval = -not $needsApproval        # still only on the approval page, never through the agent
     }
-    if ($needsApproval -and $ApproverGroupId) { $cfg.approver_group_ids = @($ApproverGroupId) }
     if ($MonthlyBudgetUsd -gt 0) { $cfg.monthly_budget_usd = $MonthlyBudgetUsd }
     $envConfig[$e] = $cfg
   }
@@ -189,7 +207,7 @@ if (-not (Test-AzCli storage account show -g $rg -n $sa)) {
 }
 $saId = Invoke-AzCli storage account show -g $rg -n $sa --query id -o tsv
 # containers are created through ARM (no data-plane role or firewall opening needed for the person deploying)
-foreach ($c in 'tfstate', 'plans', 'audit') {
+foreach ($c in 'tfstate', 'plans', 'audit', 'control') {
   if (-not (Test-AzCli storage container-rm show --storage-account $sa -g $rg -n $c)) {
     Invoke-AzCli storage container-rm create --storage-account $sa -g $rg -n $c | Out-Null
   }
@@ -198,7 +216,7 @@ foreach ($c in 'tfstate', 'plans', 'audit') {
 Invoke-AzCli storage account blob-service-properties update -g $rg --account-name $sa --enable-versioning true `
   --enable-delete-retention true --delete-retention-days 30 --enable-container-delete-retention true --container-delete-retention-days 30 | Out-Null
 $lifecycle = @{ rules = @(@{ enabled = $true; name = 'expire-working-data'; type = 'Lifecycle'; definition = @{
-        filters = @{ blobTypes = @('blockBlob'); prefixMatch = @('plans/plans/', 'plans/ops/', 'plans/cache/') }
+        filters = @{ blobTypes = @('blockBlob'); prefixMatch = @('plans/plans/', 'plans/ops/', 'plans/cache/', 'plans/limits/') }
         actions = @{ baseBlob = @{ delete = @{ daysAfterModificationGreaterThan = 30 } }; version = @{ delete = @{ daysAfterCreationGreaterThan = 30 } } } } }) }
 $tmpPolicy = New-TemporaryFile
 Write-JsonFile $tmpPolicy.FullName $lifecycle
@@ -209,10 +227,22 @@ finally { Remove-Item $tmpPolicy -ErrorAction SilentlyContinue }
 if (-not (Test-AzCli acr show -g $rg -n $acr)) { Invoke-AzCli acr create -g $rg -n $acr -l $Location --sku Basic --admin-enabled false | Out-Null }
 $acrId = Invoke-AzCli acr show -g $rg -n $acr --query id -o tsv
 
-if (-not (Test-AzCli identity show -g $rg -n $identityName)) { Invoke-AzCli identity create -g $rg -n $identityName -l $Location | Out-Null }
-$miId = Invoke-AzCli identity show -g $rg -n $identityName --query id -o tsv
-$miClientId = Invoke-AzCli identity show -g $rg -n $identityName --query clientId -o tsv
-$miPrincipal = Invoke-AzCli identity show -g $rg -n $identityName --query principalId -o tsv
+# WORM for the audit trail: records can be added, not changed or deleted, for the retention period.
+try {
+  Invoke-AzCli storage container immutability-policy create -g $rg --account-name $sa --container-name audit `
+    --period $AuditRetentionDays --allow-protected-append-writes false | Out-Null
+} catch { Write-Warning "Audit immutability policy not set: $(("$_" -split "`n")[0])" }
+
+# Two identities: the MCP front-end can only READ Azure; only the approval/executor service can change it.
+foreach ($n in $planIdentityName, $applyIdentityName) {
+  if (-not (Test-AzCli identity show -g $rg -n $n)) { Invoke-AzCli identity create -g $rg -n $n -l $Location | Out-Null }
+}
+$planMi = @{ id = (Invoke-AzCli identity show -g $rg -n $planIdentityName --query id -o tsv)
+  clientId = (Invoke-AzCli identity show -g $rg -n $planIdentityName --query clientId -o tsv)
+  principalId = (Invoke-AzCli identity show -g $rg -n $planIdentityName --query principalId -o tsv) }
+$applyMi = @{ id = (Invoke-AzCli identity show -g $rg -n $applyIdentityName --query id -o tsv)
+  clientId = (Invoke-AzCli identity show -g $rg -n $applyIdentityName --query clientId -o tsv)
+  principalId = (Invoke-AzCli identity show -g $rg -n $applyIdentityName --query principalId -o tsv) }
 
 Invoke-AzCli monitor log-analytics workspace create -g $rg -n $law -l $Location | Out-Null   # idempotent
 $lawCustomerId = Invoke-AzCli monitor log-analytics workspace show -g $rg -n $law --query customerId -o tsv
@@ -221,13 +251,56 @@ $lawKey = Invoke-AzCli monitor log-analytics workspace get-shared-keys -g $rg -n
 
 # --- 2. role assignments (least privilege) ---------------------------------------------------
 Write-Host '2/9 Environments: resource groups and least-privilege role assignments' -ForegroundColor Cyan
-function Grant-Role([string] $Role, [string] $Scope) {
+function Grant-Role([string] $PrincipalId, [string] $Role, [string] $Scope) {
   Invoke-WithRetry -What "role $Role" -DelaySeconds $retrySeconds -Action {
-    Invoke-AzCli role assignment create --assignee-object-id $miPrincipal --assignee-principal-type ServicePrincipal --role $Role --scope $Scope | Out-Null
+    Invoke-AzCli role assignment create --assignee-object-id $PrincipalId --assignee-principal-type ServicePrincipal --role $Role --scope $Scope | Out-Null
   }
 }
-Grant-Role 'AcrPull' $acrId
-Grant-Role 'Storage Blob Data Contributor' $saId
+# ---- custom role definitions (exact JSON is also written to out/role-*.json) --------------------------------
+$allSubs = @(@($envConfig.Values | ForEach-Object { $_.subscription_id }) + $SubscriptionId | Sort-Object -Unique)
+$scopes = @($allSubs | ForEach-Object { "/subscriptions/$_" })
+# Never grantable to the apply identity: anything under Microsoft.Authorization (role assignments, locks, policy
+# assignments and exemptions), elevation, blueprints, deny settings, and deleting whole resource groups.
+$neverActions = @('Microsoft.Authorization/*/Delete', 'Microsoft.Authorization/*/Write', 'Microsoft.Authorization/elevateAccess/Action',
+  'Microsoft.Blueprint/blueprintAssignments/write', 'Microsoft.Blueprint/blueprintAssignments/delete', 'Microsoft.Compute/galleries/share/action',
+  'Microsoft.Purview/consents/write', 'Microsoft.Purview/consents/delete', 'Microsoft.Resources/deploymentStacks/manageDenySetting/action',
+  'Microsoft.Resources/subscriptions/resourceGroups/delete', 'Microsoft.KeyVault/locations/deletedVaults/purge/action')
+# Additionally removed in locked (production) environments: deleting data-bearing resource types.
+$protectedDeletes = @('Microsoft.KeyVault/vaults/delete', 'Microsoft.Sql/servers/delete', 'Microsoft.Sql/servers/databases/delete',
+  'Microsoft.DBforPostgreSQL/flexibleServers/delete', 'Microsoft.DocumentDB/databaseAccounts/delete', 'Microsoft.Storage/storageAccounts/delete',
+  'Microsoft.ContainerService/managedClusters/delete', 'Microsoft.OperationalInsights/workspaces/delete', 'Microsoft.ServiceBus/namespaces/delete',
+  'Microsoft.ContainerRegistry/registries/delete')
+$roleDefinitions = [ordered]@{
+  plan = @{ Name = "Azure Terraform MCP Plan ($Prefix)"; IsCustom = $true; AssignableScopes = $scopes
+    Description = 'Read-only: lets the MCP front-end run terraform plan / refresh. No write, delete or action permissions.'
+    Actions = @('*/read') + $PlanRoleExtraActions; NotActions = @(); DataActions = @(); NotDataActions = @() }
+  apply = @{ Name = "Azure Terraform MCP Apply ($Prefix)"; IsCustom = $true; AssignableScopes = $scopes
+    Description = 'Contributor-like for approved applies, without Microsoft.Authorization writes (roles, locks, policy) and without resource group deletion.'
+    Actions = @('*'); NotActions = $neverActions; DataActions = @(); NotDataActions = @() }
+  applyProtected = @{ Name = "Azure Terraform MCP Apply protected ($Prefix)"; IsCustom = $true; AssignableScopes = $scopes
+    Description = 'As the Apply role, and additionally cannot delete data-bearing resource types. Used for locked (production) environments.'
+    Actions = @('*'); NotActions = $neverActions + $protectedDeletes; DataActions = @(); NotDataActions = @() }
+}
+New-Item -ItemType Directory -Force $outDir | Out-Null
+foreach ($k in @($roleDefinitions.Keys)) {
+  $def = $roleDefinitions[$k]
+  $file = Join-Path $outDir "role-$k.json"
+  Write-JsonFile $file $def 5
+  $existing = Invoke-AzCli role definition list --name $def.Name --query '[0].name' -o tsv
+  if ($existing) {
+    try { Invoke-AzCli role definition update --role-definition "@$file" | Out-Null }
+    catch { Write-Warning "Could not update role '$($def.Name)' (keeping the existing definition): $(("$_" -split "`n")[0])" }
+  } else { Invoke-AzCli role definition create --role-definition "@$file" | Out-Null }
+}
+# ---- registry + storage data plane, per container ---------------------------------------------------------
+$containerScope = { param($c) "$saId/blobServices/default/containers/$c" }
+Grant-Role $planMi.principalId 'AcrPull' $acrId
+Grant-Role $applyMi.principalId 'AcrPull' $acrId
+Grant-Role $planMi.principalId 'Storage Blob Data Reader' (& $containerScope 'tfstate')        # plans never lock or write state
+Grant-Role $planMi.principalId 'Storage Blob Data Reader' (& $containerScope 'control')        # approvals, freeze, quotas: read-only
+Grant-Role $planMi.principalId 'Storage Blob Data Contributor' (& $containerScope 'plans')
+Grant-Role $planMi.principalId 'Storage Blob Data Contributor' (& $containerScope 'audit')
+Grant-Role $applyMi.principalId 'Storage Blob Data Contributor' $saId
 $workloadProviders = 'Microsoft.Storage', 'Microsoft.Network', 'Microsoft.KeyVault', 'Microsoft.Web', 'Microsoft.Sql', 'Microsoft.DBforPostgreSQL',
   'Microsoft.ContainerService', 'Microsoft.ContainerRegistry', 'Microsoft.Compute', 'Microsoft.DocumentDB', 'Microsoft.ServiceBus', 'Microsoft.OperationalInsights'
 $registeredSubs = @{}
@@ -241,9 +314,28 @@ foreach ($e in @($envConfig.Keys)) {
     $registeredSubs[$envSub] = $true
   }
   Invoke-AzCli group create -n $cfg.resource_group -l $envLocation --subscription $envSub --tags "managedBy=azure-terraform-mcp" "environment=$e" | Out-Null
-  Grant-Role 'Contributor' "/subscriptions/$envSub/resourceGroups/$($cfg.resource_group)"
+  $envScope = "/subscriptions/$envSub/resourceGroups/$($cfg.resource_group)"
+  $locked = $LockEnvironments -contains $e
+  Grant-Role $planMi.principalId $roleDefinitions.plan.Name $envScope
+  Grant-Role $applyMi.principalId $(if ($locked) { $roleDefinitions.applyProtected.Name } else { $roleDefinitions.apply.Name }) $envScope
+  if ($locked) {
+    # Platform-level: nothing in this resource group can be deleted by anyone until an Owner removes the lock.
+    # (Terraform changes that need to replace a resource will fail here - that is the point.)
+    Invoke-AzCli lock create --name $lockName --lock-type CanNotDelete --resource-group $cfg.resource_group --subscription $envSub `
+      --notes 'Azure Terraform MCP: production resources cannot be deleted through automation.' | Out-Null
+  }
+  if ($EnableDenyDeletePolicy) {
+    $policyFile = Join-Path $outDir 'policy-deny-delete-protected.json'
+    Write-JsonFile $policyFile @{ if = @{ field = 'tags[protected]'; equals = 'true' }; then = @{ effect = 'denyAction'; details = @{ actionNames = @('delete') } } }
+    try {
+      Invoke-AzCli policy definition create --name 'tfmcp-deny-delete-protected' --display-name 'Deny deletion of resources tagged protected=true' `
+        --mode Indexed --rules "@$policyFile" --subscription $envSub | Out-Null
+      Invoke-AzCli policy assignment create --name "tfmcp-deny-delete-$e" --policy 'tfmcp-deny-delete-protected' --scope $envScope --subscription $envSub | Out-Null
+    } catch { Write-Warning "Deny-delete policy not assigned for '$e': $(("$_" -split "`n")[0])" }
+  }
   Write-Host ("   {0,-6} -> {1} (subscription {2}) apply={3} destroy={4} approval={5} policy={6}" -f $e, $cfg.resource_group, $envSub,
       [bool]$cfg.enable_apply, [bool]$cfg.enable_destroy, [bool]$cfg.require_approval, $(if ($cfg.policy_profile) { $cfg.policy_profile } else { 'standard' }))
+  if ($locked) { Write-Host "          resource group locked (CanNotDelete) + protected apply role" -ForegroundColor DarkGray }
 }
 
 # --- 3. Entra ID -----------------------------------------------------------------------------
@@ -254,7 +346,29 @@ if (-not $apiId) { $apiId = Invoke-AzCli ad app create --display-name $apiName -
 $apiObj = Invoke-AzCli ad app show --id $apiId --query id -o tsv
 $scopeId = Invoke-AzCli ad app show --id $apiId --query "api.oauth2PermissionScopes[?value=='access_as_user'].id | [0]" -o tsv
 if (-not $scopeId) { $scopeId = [guid]::NewGuid().ToString() }
+function Get-AppRoles([string] $AppId, [string[]] $Names) {
+  # keep existing role ids stable across re-runs
+  $roles = @()
+  foreach ($n in $Names) {
+    $id = Invoke-AzCli ad app show --id $AppId --query "appRoles[?value=='$n'].id | [0]" -o tsv
+    if (-not $id) { $id = [guid]::NewGuid().ToString() }
+    $roles += @{ id = $id; value = $n; displayName = "Azure Terraform MCP $n"; description = "Azure Terraform MCP role: $n"
+      isEnabled = $true; allowedMemberTypes = @('User') }
+  }
+  , $roles
+}
+function Grant-AppRole([string] $ResourceAppId, [string] $GroupId, [string] $RoleId) {
+  if (-not $GroupId) { return }
+  $sp = Invoke-AzCli ad sp show --id $ResourceAppId --query id -o tsv
+  $tmp = New-TemporaryFile
+  Write-JsonFile $tmp.FullName @{ principalId = $GroupId; resourceId = $sp; appRoleId = $RoleId }
+  try { Invoke-AzCli rest --method POST --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$sp/appRoleAssignedTo" --headers 'Content-Type=application/json' --body "@$($tmp.FullName)" | Out-Null }
+  catch { Write-Host "   app role assignment skipped (probably exists already)" -ForegroundColor DarkGray }
+  finally { Remove-Item $tmp -ErrorAction SilentlyContinue }
+}
+$apiRoles = Get-AppRoles $apiId @('viewer', 'requester', 'admin')
 $apiBody = @{
+  appRoles = $apiRoles
   identifierUris = @("api://$apiId")
   api = @{
     requestedAccessTokenVersion = 2
@@ -265,13 +379,51 @@ $apiBody = @{
   }
 }
 # approver groups are checked against the "groups" claim of the caller's access token
-$needsGroups = @($envConfig.Values | Where-Object { $_.approver_group_ids }).Count -gt 0
-if ($needsGroups) { $apiBody.groupMembershipClaims = 'SecurityGroup' }
 $tmpBody = New-TemporaryFile
 Write-JsonFile $tmpBody.FullName $apiBody 6
 try { Invoke-AzCli rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications/$apiObj" --headers 'Content-Type=application/json' --body "@$($tmpBody.FullName)" | Out-Null }
 finally { Remove-Item $tmpBody -ErrorAction SilentlyContinue }
 if (-not (Test-AzCli ad sp show --id $apiId)) { Invoke-AzCli ad sp create --id $apiId | Out-Null }
+Grant-AppRole $apiId $ViewerGroupId ($apiRoles | Where-Object { $_.value -eq 'viewer' }).id
+Grant-AppRole $apiId $RequesterGroupId ($apiRoles | Where-Object { $_.value -eq 'requester' }).id
+Grant-AppRole $apiId $AdminGroupId ($apiRoles | Where-Object { $_.value -eq 'admin' }).id
+if (-not ($ViewerGroupId -or $RequesterGroupId -or $AdminGroupId)) {
+  Write-Warning 'No -RequesterGroupId / -ViewerGroupId / -AdminGroupId given: nobody has a role yet, so every tool call will be refused. Assign the app roles (viewer, requester, admin) of the API app in Entra ID > Enterprise applications, or re-run with the group parameters.'
+}
+
+# The approval page is a DIFFERENT application: its own audience, its own client id, its own scope. A token issued
+# for the MCP connector is useless here, and the other way round.
+$apprName = "$Prefix-approval"
+$apprId = Invoke-AzCli ad app list --display-name $apprName --query '[0].appId' -o tsv
+if (-not $apprId) { $apprId = Invoke-AzCli ad app create --display-name $apprName --sign-in-audience AzureADMyOrg --query appId -o tsv }
+$apprObj = Invoke-AzCli ad app show --id $apprId --query id -o tsv
+$apprScopeId = Invoke-AzCli ad app show --id $apprId --query "api.oauth2PermissionScopes[?value=='approve'].id | [0]" -o tsv
+if (-not $apprScopeId) { $apprScopeId = [guid]::NewGuid().ToString() }
+$apprRoles = Get-AppRoles $apprId @('approver', 'admin')
+function Set-ApprovalApp([string[]] $RedirectUris) {
+  $body = @{
+    appRoles = $apprRoles
+    identifierUris = @("api://$apprId")
+    spa = @{ redirectUris = $RedirectUris }
+    optionalClaims = @{ accessToken = @(@{ name = 'auth_time'; essential = $false }) }     # lets the server check sign-in freshness
+    api = @{
+      requestedAccessTokenVersion = 2
+      preAuthorizedApplications = @(@{ appId = $apprId; delegatedPermissionIds = @($apprScopeId) })
+      oauth2PermissionScopes = @(@{ id = $apprScopeId; value = 'approve'; type = 'User'; isEnabled = $true
+          adminConsentDisplayName = 'Approve infrastructure changes'; adminConsentDescription = 'Approve or reject Azure Terraform MCP plans as the signed-in user'
+          userConsentDisplayName = 'Approve infrastructure changes'; userConsentDescription = 'Approve or reject plans on your behalf' })
+    }
+  }
+  $tmp = New-TemporaryFile
+  Write-JsonFile $tmp.FullName $body 6
+  try { Invoke-AzCli rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications/$apprObj" --headers 'Content-Type=application/json' --body "@$($tmp.FullName)" | Out-Null }
+  finally { Remove-Item $tmp -ErrorAction SilentlyContinue }
+}
+Set-ApprovalApp @()
+if (-not (Test-AzCli ad sp show --id $apprId)) { Invoke-AzCli ad sp create --id $apprId | Out-Null }
+Grant-AppRole $apprId $ApproverGroupId ($apprRoles | Where-Object { $_.value -eq 'approver' }).id
+Grant-AppRole $apprId $AdminGroupId ($apprRoles | Where-Object { $_.value -eq 'admin' }).id
+if (-not $ApproverGroupId) { Write-Warning 'No -ApproverGroupId: nobody can approve in two-person environments until the "approver" app role of the approval app is assigned.' }
 
 New-Item -ItemType Directory -Force $outDir | Out-Null
 $secretFile = Join-Path $outDir 'connector-client-secret.txt'
@@ -340,32 +492,63 @@ if ($PrivateNetworking) {
 }
 
 # --- 6. the server ---------------------------------------------------------------------------
-Write-Host '6/9 Container App (server) with the user-assigned managed identity' -ForegroundColor Cyan
-$envVars = @(
-  "SUBSCRIPTION_ID=$SubscriptionId", "TENANT_ID=$tenantId", "STATE_SA=$sa", "AZURE_CLIENT_ID=$miClientId",
-  "ENVIRONMENTS_B64=$envB64", "DEFAULT_ENVIRONMENT=$defaultEnv", "AUTH_MODE=$AuthMode", "API_AUDIENCES=$apiId,api://$apiId",
+Write-Host '6/9 Container Apps: approval/executor service (write identity) and MCP front-end (read-only identity)' -ForegroundColor Cyan
+$ingress = if ($InternalIngress) { 'internal' } else { 'external' }
+$allowedClients = @($cliId); if ($AllowAzureCliClient) { $allowedClients += '04b07795-8ddb-461a-bbee-02f9e1bf7b46' }
+$commonVars = @(
+  "SUBSCRIPTION_ID=$SubscriptionId", "TENANT_ID=$tenantId", "STATE_SA=$sa", "ENVIRONMENTS_B64=$envB64", "DEFAULT_ENVIRONMENT=$defaultEnv",
+  "AUTH_MODE=$AuthMode", "API_AUDIENCES=$apiId,api://$apiId", "ALLOWED_CLIENT_IDS=$($allowedClients -join ',')", 'REQUIRED_SCOPE=access_as_user',
+  "APPROVAL_AUDIENCES=$apprId,api://$apprId", "APPROVAL_CLIENT_IDS=$apprId", 'APPROVAL_SCOPE=approve',
   'TOKEN_BROKER=auto', 'SHUTDOWN_GRACE_SECONDS=540'
 )
-if ($NotifyWebhookUrl) { $envVars += "NOTIFY_WEBHOOK_URL=$NotifyWebhookUrl" }
-$ingress = if ($InternalIngress) { 'internal' } else { 'external' }
-if (-not (Test-AzCli containerapp show -g $rg -n $app)) {
-  Invoke-WithRetry -What 'AcrPull role propagation' -DelaySeconds $retrySeconds -Action {
-    Invoke-AzCli containerapp create -g $rg -n $app --environment $envName --image $image --target-port 8080 --ingress $ingress --transport http `
-      --min-replicas $MinReplicas --max-replicas $MaxReplicas --cpu 1 --memory 2Gi --user-assigned $miId `
-      --registry-server "$acr.azurecr.io" --registry-identity $miId --env-vars @envVars | Out-Null
+if ($ApprovalRequireAmr) { $commonVars += "APPROVAL_REQUIRE_AMR=$ApprovalRequireAmr" }
+function Deploy-ContainerApp([string] $Name, [hashtable] $Identity, [string[]] $EnvVars, [int] $Min, [int] $Max, [string] $WebhookSecret) {
+  $vars = $EnvVars + "AZURE_CLIENT_ID=$($Identity.clientId)"
+  $secretArgs = @()
+  if ($WebhookSecret) {
+    # the webhook URL is a credential: stored as a Container Apps secret, referenced from the environment
+    $secretArgs = @('--secrets', "notify-webhook=$WebhookSecret")
+    $vars += 'NOTIFY_WEBHOOK_URL=secretref:notify-webhook'
   }
-} else {
-  # in-place upgrade (also from v1, which used a system-assigned identity)
-  Invoke-AzCli containerapp identity assign -g $rg -n $app --user-assigned $miId | Out-Null
-  Invoke-WithRetry -What 'AcrPull role propagation' -DelaySeconds $retrySeconds -Action {
-    Invoke-AzCli containerapp registry set -g $rg -n $app --server "$acr.azurecr.io" --identity $miId | Out-Null
+  if (-not (Test-AzCli containerapp show -g $rg -n $Name)) {
+    Invoke-WithRetry -What 'AcrPull role propagation' -DelaySeconds $retrySeconds -Action {
+      Invoke-AzCli containerapp create -g $rg -n $Name --environment $envName --image $image --target-port 8080 --ingress $ingress --transport http `
+        --min-replicas $Min --max-replicas $Max --cpu 1 --memory 2Gi --user-assigned $Identity.id `
+        --registry-server "$acr.azurecr.io" --registry-identity $Identity.id @secretArgs --env-vars @vars | Out-Null
+    }
+  } else {
+    Invoke-AzCli containerapp identity assign -g $rg -n $Name --user-assigned $Identity.id | Out-Null
+    Invoke-WithRetry -What 'AcrPull role propagation' -DelaySeconds $retrySeconds -Action {
+      Invoke-AzCli containerapp registry set -g $rg -n $Name --server "$acr.azurecr.io" --identity $Identity.id | Out-Null
+    }
+    if ($WebhookSecret) { Invoke-AzCli containerapp secret set -g $rg -n $Name @secretArgs | Out-Null }
+    Invoke-AzCli containerapp update -g $rg -n $Name --image $image --replace-env-vars @vars --min-replicas $Min --max-replicas $Max --cpu 1 --memory 2Gi | Out-Null
   }
-  Invoke-AzCli containerapp update -g $rg -n $app --image $image --replace-env-vars @envVars --min-replicas $MinReplicas --max-replicas $MaxReplicas --cpu 1 --memory 2Gi | Out-Null
+  # Give Terraform time to stop cleanly (write state, release its lock) when a replica is scaled in or replaced.
+  try { Invoke-AzCli containerapp update -g $rg -n $Name --termination-grace-period 600 | Out-Null }
+  catch { Write-Warning "Could not raise the termination grace period on $Name (needs a recent containerapp CLI extension): $(("$_" -split "`n")[0])" }
+  Invoke-AzCli containerapp show -g $rg -n $Name --query properties.configuration.ingress.fqdn -o tsv
 }
-# Give Terraform time to stop cleanly (write state, release its lock) when a replica is scaled in or replaced.
-try { Invoke-AzCli containerapp update -g $rg -n $app --termination-grace-period 600 | Out-Null }
-catch { Write-Warning "Could not raise the termination grace period (needs a recent containerapp CLI extension). Interrupted applies are still detected and reported: $(("$_" -split "`n")[0])" }
-$fqdn = Invoke-AzCli containerapp show -g $rg -n $app --query properties.configuration.ingress.fqdn -o tsv
+# 6a. approval page + privileged executor. No Easy Auth here: the page itself is public static HTML; every API call
+#     is authenticated by the service with a token for the approval audience and a fresh sign-in.
+$approvalVars = $commonVars + 'TFMCP_ROLE=approval'
+$approvalFqdn = Deploy-ContainerApp $approvalApp $applyMi $approvalVars 1 2 $NotifyWebhookUrl
+Set-ApprovalApp @("https://$approvalFqdn/")
+if ($ApprovalAllowedCidrs) {
+  $ruleNumber = 0
+  foreach ($cidr in $ApprovalAllowedCidrs) {
+    $ruleNumber++
+    Invoke-AzCli containerapp ingress access-restriction set -g $rg -n $approvalApp --rule-name "allow$ruleNumber" --ip-address $cidr --action Allow | Out-Null
+  }
+}
+# 6b. MCP front-end
+$frontVars = $commonVars + 'TFMCP_ROLE=frontend' + "APPROVAL_BASE_URL=https://$approvalFqdn"
+$fqdn = Deploy-ContainerApp $app $planMi $frontVars $MinReplicas $MaxReplicas $NotifyWebhookUrl
+if (-not $NoResourceLocks) {
+  # The MCP's own resource group (state storage, registry, logs, apps) cannot be deleted while this lock exists.
+  Invoke-AzCli lock create --name $lockName --lock-type CanNotDelete --resource-group $rg `
+    --notes 'Azure Terraform MCP: state, audit and registry must not be deleted. Remove this lock only to decommission.' | Out-Null
+}
 
 # --- 7. authentication -----------------------------------------------------------------------
 Write-Host '7/9 Container Apps authentication (anonymous calls get 401; the server validates the token again)' -ForegroundColor Cyan
@@ -393,19 +576,25 @@ if ($AllowedCidrs) {
 # --- 8. scheduled jobs + monitoring ----------------------------------------------------------
 Write-Host '8/9 Scheduled jobs and monitoring' -ForegroundColor Cyan
 if ($EnableScheduledJobs) {
-  $jobs = @(@{ name = "caj-$Prefix-reaper"; job = 'reaper'; cron = '*/15 * * * *' }, @{ name = "caj-$Prefix-drift"; job = 'drift'; cron = $DriftCron })
+  $jobs = @(
+    @{ name = "caj-$Prefix-reaper"; job = 'reaper'; cron = '*/15 * * * *'; mi = $applyMi; vars = $approvalVars + "AZURE_CLIENT_ID=$($applyMi.clientId)" },
+    @{ name = "caj-$Prefix-drift"; job = 'drift'; cron = $DriftCron; mi = $planMi; vars = $frontVars + "AZURE_CLIENT_ID=$($planMi.clientId)" })
   foreach ($j in $jobs) {
-    if (Test-AzCli containerapp job show -g $rg -n $j.name) { Invoke-AzCli containerapp job delete -g $rg -n $j.name --yes | Out-Null }
-    Invoke-AzCli containerapp job create -g $rg -n $j.name --environment $envName --trigger-type Schedule --cron-expression $j.cron `
-      --replica-timeout 7200 --replica-retry-limit 0 --parallelism 1 --replica-completion-count 1 --image $image --cpu 1 --memory 2Gi `
-      --mi-user-assigned $miId --registry-server "$acr.azurecr.io" --registry-identity $miId `
-      --command 'python' --args 'server.py' 'job' $j.job --env-vars @envVars | Out-Null
+    $jobVars = $j.vars
+    if (Test-AzCli containerapp job show -g $rg -n $j.name) {
+      Invoke-AzCli containerapp job update -g $rg -n $j.name --image $image --cron-expression $j.cron --replace-env-vars @jobVars | Out-Null
+    } else {
+      Invoke-AzCli containerapp job create -g $rg -n $j.name --environment $envName --trigger-type Schedule --cron-expression $j.cron `
+        --replica-timeout 7200 --replica-retry-limit 0 --parallelism 1 --replica-completion-count 1 --image $image --cpu 1 --memory 2Gi `
+        --mi-user-assigned $j.mi.id --registry-server "$acr.azurecr.io" --registry-identity $j.mi.id `
+        --command 'python' --args 'server.py' 'job' $j.job --env-vars @jobVars | Out-Null
+    }
     Write-Host "     job $($j.name): '$($j.cron)' (UTC)" -ForegroundColor DarkGray
   }
 } else { Write-Host '     scheduled jobs not requested (-EnableScheduledJobs): time-boxed deployments will NOT be destroyed automatically' -ForegroundColor Yellow }
 if ($EnableMonitoring) {
   Invoke-AzCli deployment group create -g $rg -n "monitoring-$tag" --template-file (Join-Path $PSScriptRoot 'monitoring' 'monitoring.json') `
-    --parameters "workspaceResourceId=$lawResourceId" "alertEmail=$AlertEmail" "prefix=$Prefix" | Out-Null
+    --parameters "workspaceResourceId=$lawResourceId" "alertEmail=$AlertEmail" "prefix=$Prefix" "subscriptionScope=/subscriptions/$SubscriptionId" | Out-Null
   Write-Host '     workbook "Azure Terraform MCP - audit" and alert rules deployed' -ForegroundColor DarkGray
 }
 
@@ -463,6 +652,9 @@ https://global.consent.azure-apim.net/redirect, add it to app $cliName in Entra
 Admin consent is already granted, so users get no consent prompt.
 
 Finally paste agent-instructions.md into the agent's Instructions.
+
+Approvals are NOT done in Copilot Studio. Approvers open https://$approvalFqdn/ and sign in again there.
+Kill switch (admins): POST https://$approvalFqdn/api/freeze {"frozen": true, "reason": "..."} with an approval-audience token.
 Each user signs in with their own account: approvals and the audit trail use that identity.
 "@ | Set-Content -Path (Join-Path $outDir 'copilot-studio-wizard-values.md') -Encoding utf8
 
@@ -475,11 +667,14 @@ $envSummary = (@($envConfig.Keys) | ForEach-Object { "$_ -> $($envConfig[$_].res
 @"
 
 ================ DONE ================
-MCP endpoint      : https://$fqdn/mcp   (ingress: $ingress)
+MCP endpoint      : https://$fqdn/mcp   (ingress: $ingress, read-only identity $planIdentityName)
+Approval page     : https://$approvalFqdn/   (separate Entra app $apprId, write identity $applyIdentityName)
 Environments      : $envSummary
 Entra API app     : $apiId   (scope api://$apiId/access_as_user)
 Connector client  : $cliId   (secret in out/connector-client-secret.txt - git-ignored)
 Replicas          : $MinReplicas-$MaxReplicas   Scheduled jobs: $([bool]$EnableScheduledJobs)   Monitoring: $([bool]$EnableMonitoring)
+Locks             : MCP resource group $(-not $NoResourceLocks); environments: $($LockEnvironments -join ', ')   Deny-delete policy: $([bool]$EnableDenyDeletePolicy)
+Roles             : custom role JSON in out/role-*.json; assign people via -RequesterGroupId / -ApproverGroupId / -ViewerGroupId / -AdminGroupId
 Private networking: $([bool]$PrivateNetworking)   Group-restricted: $([bool]$SecurityGroupId)   IP allow-list: $([bool]$AllowedCidrs)
 Smoke test        : ./Test-TerraformMcp.ps1 -SubscriptionId $SubscriptionId -Prefix $Prefix
 

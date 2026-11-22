@@ -1,8 +1,9 @@
 // Azure Terraform MCP (v2) - audit queries for the Log Analytics workspace log-<prefix>.
 // The server writes one structured JSON line per event to stdout; Container Apps stores it in
 // ContainerAppConsoleLogs_CL (column Log_s). Every query starts from the same base.
-// Event types: audit (one per tool call), plan, apply, operation, operation_recovered, drift,
-// approval_requested, approval_decided, ttl_notice, ttl_reaped, ttl_reap_failed, auth_rejected, startup, shutdown.
+// Event types: audit (one per tool call; channel=approval for the approval page), plan, apply, apply_refused, operation,
+// operation_recovered, drift, approval_requested, approval_decided, approval_refused, freeze_tripped, freeze_set, freeze_lifted,
+// ttl_notice, ttl_reaped, ttl_reap_failed, auth_rejected, startup, shutdown.
 
 // --- base (paste this first, or save it as a function named TfMcpEvents) --------------------------------
 let TfMcpEvents = ContainerAppConsoleLogs_CL
@@ -38,7 +39,7 @@ TfMcpEvents
 TfMcpEvents
 | where type == "apply" and tostring(e.environment) in ("prod")          // list your approval environments here
 | where tostring(e.origin) != "ttl-reaper"
-| where isempty(tostring(e.approved_by)) or tostring(e.approved_by) == tostring(e.planned_by)
+| where isempty(tostring(e.approved_by)) or tostring(e.approved_by) == tostring(e.planned_by) or tobool(e.self_approved) == true
 | project TimeGenerated, environment = tostring(e.environment), deployment = tostring(e.deployment), applied_by = user,
           planned_by = tostring(e.planned_by), approved_by = tostring(e.approved_by), plan_id = tostring(e.plan_id);
 
@@ -100,3 +101,50 @@ TfMcpEvents
 ContainerAppSystemLogs_CL
 | where TimeGenerated > ago(24h) and Log_s has_any ("401", "403")
 | project TimeGenerated, Log_s;
+
+// ---------------------------------------------------------------------------------------------------- v2.1
+// 14. Destroys end to end: requested -> approved -> applied (every destroy needs an out-of-band approval)
+TfMcpEvents
+| where (type in ("approval_requested", "approval_decided") and tobool(e.destroy) == true) or (type == "apply" and (tobool(e.destroy) == true or toint(e.deleted) > 0))
+| project TimeGenerated, type, environment = tostring(e.environment), deployment = tostring(e.deployment), by = user,
+          decision = tostring(e.decision), deleted = toint(e.deleted), plan_id = tostring(e.plan_id)
+| order by TimeGenerated desc;
+
+// 15. Kill switch history and what tripped it
+TfMcpEvents
+| where type in ("freeze_tripped", "freeze_set", "freeze_lifted")
+| project TimeGenerated, type, reason = tostring(e.reason), by = user
+| order by TimeGenerated desc;
+
+// 16. Applies the privileged executor REFUSED (no / wrong / reused approval, quota, freeze, policy) - investigate each one
+TfMcpEvents
+| where type == "apply_refused"
+| project TimeGenerated, user, environment = tostring(e.environment), deployment = tostring(e.deployment), destroy = tobool(e.destroy),
+          reason = tostring(e.reason), plan_id = tostring(e.plan_id);
+
+// 17. Approvals at odd hours (UTC), self-approvals, and refused approval attempts
+TfMcpEvents
+| where type in ("approval_decided", "approval_refused")
+| where type == "approval_refused" or toint(e.hour_utc) >= 20 or toint(e.hour_utc) < 6 or tobool(e.self_approved) == true
+| project TimeGenerated, type, user, decision = tostring(e.decision), self_approved = tobool(e.self_approved), hour_utc = toint(e.hour_utc),
+          environment = tostring(e.environment), deployment = tostring(e.deployment), reason = tostring(e.reason);
+
+// 18. Users being denied a lot (probing / a hijacked agent hammering the tools)
+TfMcpEvents
+| where type == "audit" and tostring(e.outcome) in ("denied", "limited", "frozen", "window", "quota")
+| summarize denied = count(), tools = make_set(tostring(e.tool)) by user, bin(TimeGenerated, 10m)
+| where denied >= 5
+| order by TimeGenerated desc;
+
+// 19. Token cost: average size of tool results per tool (characters / 4 ~ tokens)
+TfMcpEvents
+| where type == "audit" and tostring(e.outcome) == "ok" and isnotempty(e.result_chars)
+| summarize calls = count(), avg_tokens = round(avg(todouble(e.result_chars)) / 4), max_tokens = round(max(todouble(e.result_chars)) / 4) by tool = tostring(e.tool)
+| order by avg_tokens desc;
+
+// 20. Platform changes that weaken protection (Activity Log; needs the subscription's Activity Log in this workspace)
+AzureActivity
+| where OperationNameValue in~ ("Microsoft.Authorization/locks/delete", "Microsoft.Authorization/roleAssignments/write",
+      "Microsoft.Authorization/roleDefinitions/write", "Microsoft.Authorization/policyAssignments/delete", "Microsoft.Authorization/policyExemptions/write")
+| project TimeGenerated, OperationNameValue, Caller, ResourceGroup, ActivityStatusValue
+| order by TimeGenerated desc;

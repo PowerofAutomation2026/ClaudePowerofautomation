@@ -13,6 +13,8 @@ ENV_NAME_RE = re.compile(r"^[a-z][a-z0-9]{1,11}$")
 GUID_RE = re.compile(r"^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
 LOCATION_RE = re.compile(r"^[a-z0-9]{3,30}$")
 RG_RE = re.compile(r"^[-\w.()]{1,90}$")
+WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+ROLES = ("viewer", "requester", "approver", "admin")
 
 
 class ConfigError(ValueError):
@@ -50,6 +52,12 @@ class EnvironmentConfig:
     plan_ttl_minutes: int | None = None
     allowed_templates: list[str] | None = None
     default_tags: dict[str, str] = field(default_factory=dict)
+    # Every apply / destroy needs an OUT-OF-BAND approval. require_approval=True: by a different person.
+    # allow_self_approval=True (only without require_approval): the requester may approve their own plan,
+    # but still only on the approval page after a fresh sign-in - never through the agent.
+    allow_self_approval: bool | None = None
+    # Change windows (UTC). Empty = any time. Example: [{"days": ["mon","tue","wed","thu"], "start": "08:00", "end": "16:00"}]
+    change_windows: list[dict] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not ENV_NAME_RE.match(self.name):
@@ -64,6 +72,17 @@ class EnvironmentConfig:
             raise ConfigError(
                 f"environment '{self.name}': allow_ephemeral and require_approval cannot both be true "
                 "(the TTL reaper destroys without a human approval)")
+        if self.allow_self_approval is None:
+            self.allow_self_approval = not self.require_approval
+        if self.require_approval and self.allow_self_approval:
+            raise ConfigError(f"environment '{self.name}': require_approval (two-person) and allow_self_approval exclude each other")
+        for w in self.change_windows:
+            days = w.get("days") or list(WEEKDAYS)
+            if not isinstance(w, dict) or set(w) - {"days", "start", "end"} or not set(days) <= set(WEEKDAYS) \
+                    or not all(re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", str(w.get(k, ""))) for k in ("start", "end")) \
+                    or w["start"] >= w["end"]:
+                raise ConfigError(f"environment '{self.name}': invalid change window {w} "
+                                  '(use {"days": ["mon",...], "start": "08:00", "end": "17:00"}, UTC, start < end)')
         if self.plan_ttl_minutes is None:
             # approvals take time: give approval environments a longer plan lifetime
             self.plan_ttl_minutes = 480 if self.require_approval else 60
@@ -127,6 +146,31 @@ class Settings:
     store_mode: str = "blob"        # blob | memory
     host: str = "0.0.0.0"
     port: int = 8080
+    # --- process role: which half of the system this process is --------------------------------
+    process_role: str = "all"       # frontend (MCP, read-only identity) | approval (approval page + executor) | all (local)
+    # --- caller checks for the MCP endpoint ----------------------------------------------------
+    rbac: str = "enforce"           # enforce | off (off: every authenticated caller is requester+viewer; local testing)
+    role_groups: dict[str, list[str]] = field(default_factory=dict)   # role -> Entra group ids (alternative to app roles)
+    allowed_client_ids: list[str] = field(default_factory=list)       # azp/appid allow-list (the connector app)
+    required_scope: str = ""
+    write_max_token_age_minutes: float = 75.0
+    # --- out-of-band approval channel ----------------------------------------------------------
+    approval_audiences: list[str] = field(default_factory=list)
+    approval_client_ids: list[str] = field(default_factory=list)
+    approval_scope: str = "approve"
+    approval_max_auth_age_seconds: float = 600.0     # the approver must have signed in this recently
+    approval_valid_minutes: float = 30.0             # an approval must be used within this time
+    approval_require_amr: str = ""                   # e.g. "mfa" (v1 tokens) or an auth-context id such as "c1"
+    approval_base_url: str = ""
+    # --- limits, quotas, anomaly detection -----------------------------------------------------
+    user_calls_per_minute: int = 60
+    user_plans_per_hour: int = 30
+    global_applies_per_hour: int = 20
+    global_deletes_per_day: int = 25                 # resources deleted/replaced by applied plans, all users
+    anomaly_denied_per_10min: int = 15               # per user -> auto-freeze
+    anomaly_destroy_plans_per_hour: int = 6          # per user -> auto-freeze
+    anomaly_plans_per_10min: int = 80                # all users -> auto-freeze
+    integrity_check: bool = True
 
     def env(self, name: str | None) -> EnvironmentConfig:
         name = name or self.default_environment
@@ -174,8 +218,42 @@ class Settings:
         if auth_mode == "jwt" and (not audiences or not GUID_RE.match(tenant)):
             raise ConfigError("AUTH_MODE=jwt needs TENANT_ID and API_AUDIENCES (use AUTH_MODE=none only for local testing)")
 
+        def csv(name: str) -> list[str]:
+            return [a.strip() for a in env.get(name, "").split(",") if a.strip()]
+
+        role = env.get("TFMCP_ROLE", "all").lower()
+        if role not in ("frontend", "approval", "all"):
+            raise ConfigError("TFMCP_ROLE must be frontend, approval or all")
+        role_groups: dict[str, list[str]] = {}
+        if env.get("ROLE_GROUPS_B64"):
+            role_groups = json.loads(base64.b64decode(env["ROLE_GROUPS_B64"]).decode("utf-8-sig"))
+            if set(role_groups) - set(ROLES):
+                raise ConfigError(f"ROLE_GROUPS_B64: roles must be among {ROLES}")
+        if auth_mode == "jwt" and role in ("approval", "all") and env.get("APPROVAL_AUDIENCES") is None and role == "approval":
+            raise ConfigError("TFMCP_ROLE=approval needs APPROVAL_AUDIENCES")
         here = pathlib.Path(__file__).resolve().parent.parent
         return cls(
+            process_role=role,
+            rbac=env.get("RBAC", "enforce").lower(),
+            role_groups={k: [g.lower() for g in v] for k, v in role_groups.items()},
+            allowed_client_ids=csv("ALLOWED_CLIENT_IDS"),
+            required_scope=env.get("REQUIRED_SCOPE", ""),
+            write_max_token_age_minutes=float(env.get("WRITE_MAX_TOKEN_AGE_MINUTES", "75")),
+            approval_audiences=csv("APPROVAL_AUDIENCES"),
+            approval_client_ids=csv("APPROVAL_CLIENT_IDS"),
+            approval_scope=env.get("APPROVAL_SCOPE", "approve"),
+            approval_max_auth_age_seconds=float(env.get("APPROVAL_MAX_AUTH_AGE_SECONDS", "600")),
+            approval_valid_minutes=float(env.get("APPROVAL_VALID_MINUTES", "30")),
+            approval_require_amr=env.get("APPROVAL_REQUIRE_AMR", ""),
+            approval_base_url=env.get("APPROVAL_BASE_URL", "").rstrip("/"),
+            user_calls_per_minute=int(env.get("USER_CALLS_PER_MINUTE", "60")),
+            user_plans_per_hour=int(env.get("USER_PLANS_PER_HOUR", "30")),
+            global_applies_per_hour=int(env.get("GLOBAL_APPLIES_PER_HOUR", "20")),
+            global_deletes_per_day=int(env.get("GLOBAL_DELETES_PER_DAY", "25")),
+            anomaly_denied_per_10min=int(env.get("ANOMALY_DENIED_PER_10MIN", "15")),
+            anomaly_destroy_plans_per_hour=int(env.get("ANOMALY_DESTROY_PLANS_PER_HOUR", "6")),
+            anomaly_plans_per_10min=int(env.get("ANOMALY_PLANS_PER_10MIN", "80")),
+            integrity_check=_bool(env.get("INTEGRITY_CHECK", "true"), True),
             subscription_id=sub,
             tenant_id=tenant,
             state_account=env["STATE_SA"],

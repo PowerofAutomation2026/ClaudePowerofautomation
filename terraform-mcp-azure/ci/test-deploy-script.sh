@@ -8,6 +8,7 @@ PWSH="${PWSH:-pwsh}"
 export POWERSHELL_TELEMETRY_OPTOUT=1 POWERSHELL_UPDATECHECK=Off AZTFMCP_RETRY_SECONDS=0
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 cp -r "$root"/*.ps1 "$root/server" "$root/monitoring" "$work/" 2>/dev/null
+rm -rf "$work/server/tests"
 mkdir -p "$work/bin"; cp "$root/ci/fake-az/az" "$work/bin/az"; chmod +x "$work/bin/az"
 export PATH="$work/bin:$PATH"
 SUB=11111111-1111-1111-1111-111111111111
@@ -30,7 +31,10 @@ run default
 check "$work" default
 run full -Environments dev,test,prod -EnableApply -EnableDestroy -ApproverGroupId 99999999-0000-0000-0000-000000000009 \
     -MonthlyBudgetUsd 2000 -EnableScheduledJobs -EnableMonitoring -AlertEmail ops@contoso.com -PrivateNetworking \
-    -SecurityGroupId 88888888-0000-0000-0000-000000000008 -AllowedCidrs 203.0.113.0/24,198.51.100.7/32 -MaxReplicas 4
+    -SecurityGroupId 88888888-0000-0000-0000-000000000008 -AllowedCidrs 203.0.113.0/24,198.51.100.7/32 -MaxReplicas 4 \
+    -RequesterGroupId 77777777-0000-0000-0000-000000000007 -ViewerGroupId 66666666-0000-0000-0000-000000000006 \
+    -AdminGroupId 55555555-0000-0000-0000-000000000005 -EnableDenyDeletePolicy -AllowAzureCliClient -ApprovalRequireAmr mfa \
+    -NotifyWebhookUrl https://hooks.example/secret-path -ApprovalAllowedCidrs 203.0.113.0/24
 check "$work" full
 # second run on the same state = in-place upgrade path; the connector secret must be kept
 export FAKE_AZ_STATE="$work/full.state.json" FAKE_AZ_LOG="$work/rerun.log"

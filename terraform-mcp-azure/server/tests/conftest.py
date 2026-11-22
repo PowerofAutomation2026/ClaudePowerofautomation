@@ -13,7 +13,9 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tfmcp.approvals import ApprovalService  # noqa: E402
 from tfmcp.audit import AuditLog  # noqa: E402
+from tfmcp.guard import Guard  # noqa: E402
 from tfmcp.catalog import Catalog  # noqa: E402
 from tfmcp.config import Settings  # noqa: E402
 from tfmcp.cost import CostEstimator, PriceClient  # noqa: E402
@@ -26,10 +28,13 @@ from tfmcp.terraform import Cancelled  # noqa: E402
 
 SUB = "11111111-1111-1111-1111-111111111111"
 TENANT = "22222222-2222-2222-2222-222222222222"
-ALICE = Identity(oid="aaaaaaaa-0000-0000-0000-000000000001", name="alice@contoso.com", source="easyauth")
-BOB = Identity(oid="bbbbbbbb-0000-0000-0000-000000000002", name="bob@contoso.com", source="easyauth")
-CAROL = Identity(oid="cccccccc-0000-0000-0000-000000000003", name="carol@contoso.com", source="easyauth",
+ALICE = Identity(oid="aaaaaaaa-0000-0000-0000-000000000001", name="alice@contoso.com", source="easyauth", roles=("requester",))
+BOB = Identity(oid="bbbbbbbb-0000-0000-0000-000000000002", name="bob@contoso.com", source="easyauth", roles=("requester", "approver"))
+CAROL = Identity(oid="cccccccc-0000-0000-0000-000000000003", name="carol@contoso.com", source="easyauth", roles=("approver",),
                  groups=("99999999-0000-0000-0000-000000000009",))
+ADMIN = Identity(oid="dddddddd-0000-0000-0000-00000000000d", name="admin@contoso.com", source="easyauth", roles=("admin",))
+VIEWER = Identity(oid="eeeeeeee-0000-0000-0000-00000000000e", name="viewer@contoso.com", source="easyauth", roles=("viewer",))
+NOBODY = Identity(oid="ffffffff-0000-0000-0000-00000000000f", name="nobody@contoso.com", source="easyauth")
 
 ENVIRONMENTS = {
     "dev": {"resource_group": "rg-x-dev", "allowed_locations": ["eastus2", "westus2"], "enable_apply": True,
@@ -157,7 +162,7 @@ class World:
 
     def __init__(self, environments=None, price_fetch=None, **settings_over) -> None:
         self.clock = Clock()
-        self.data, self.state, self.audit_store = MemoryStore(), MemoryStore(), MemoryStore()
+        self.data, self.state, self.audit_store, self.control = MemoryStore(), MemoryStore(), MemoryStore(), MemoryStore()
         self.log = io.StringIO()
         self.audit = AuditLog(self.audit_store, stream=self.log, clock=self.clock)
         self.tf = FakeTerraform()
@@ -167,10 +172,19 @@ class World:
         self.engine = OperationEngine(self.data, state_store=self.state, clock=self.clock, lease_seconds=120,
                                       heartbeat_seconds=3600, max_workers=4, log=self.audit.emit, owner="worker-a")
         self.notifications: list[dict] = []
+        policy = PolicyEngine.from_file(self.settings.policy_file)
+        self.guard = Guard(self.settings, self.data, self.control, clock=self.clock, emit=self.audit.emit)
+
+        def announce(event):
+            self.audit.emit(event)
+            self.notifications.append(event)
+        self.approvals = ApprovalService(self.settings, data=self.data, control=self.control, policy=policy, guard=self.guard,
+                                         clock=self.clock, notify=announce)
         self.svc = Service(self.settings, data=self.data, state=self.state, audit=self.audit,
-                           catalog=Catalog(self.settings.template_dir), policy=PolicyEngine.from_file(self.settings.policy_file),
+                           catalog=Catalog(self.settings.template_dir), policy=policy,
                            cost=CostEstimator(PriceClient(cache=self.data, fetch=self._fetch, clock=self.clock)),
-                           tf=self.tf, engine=self.engine, clock=self.clock, notify=self.notifications.append)
+                           tf=self.tf, engine=self.engine, control=self.control, guard=self.guard, approvals=self.approvals,
+                           clock=self.clock, notify=self.notifications.append)
 
     def _fetch(self, url, params):
         self.price_calls.append(params)
@@ -189,7 +203,24 @@ class World:
         assert op["status"] == "succeeded", op
         return op["result"]
 
-    def apply(self, who, plan_id) -> dict:
+    def fresh(self, who: Identity, age: float = 30.0, **over) -> Identity:
+        """The same person as seen by the approval channel: a token for the approval audience, signed in just now."""
+        import dataclasses
+        return dataclasses.replace(who, source="jwt", issued_at=self.clock() - age, auth_time=self.clock() - age, **over)
+
+    def decide(self, who: Identity, plan_id: str, approve: bool = True, comment: str = "ok", digest: str | None = None) -> dict:
+        who = who if who.source == "jwt" else self.fresh(who)
+        if digest is None:
+            digest = self.approvals.view(who, plan_id)["changes_digest"]
+        return self.approvals.decide(who, plan_id, approve, comment, digest)
+
+    def approve(self, requester: Identity, plan_id: str, approver: Identity | None = None) -> dict:
+        """request_approval through the agent channel + decision on the out-of-band channel."""
+        self.svc.request_approval(requester, plan_id, "Needed for the test scenario, CHG-1")
+        return self.decide(approver or requester, plan_id)
+
+    def apply(self, who, plan_id, approver: Identity | None = None) -> dict:
+        self.approve(who, plan_id, approver)
         op = self.svc.apply_plan(who, plan_id)
         assert op["status"] == "succeeded", op
         return op["result"]
@@ -203,3 +234,39 @@ def world() -> World:
 @pytest.fixture
 def clock() -> Clock:
     return Clock()
+
+
+# ---------------------------------------------------------------- real signed tokens for the HTTP tests
+CONNECTOR = "c0c0c0c0-0000-0000-0000-00000000c0c0"       # the Copilot Studio connector app (client of the MCP API)
+APPROVAL_SPA = "a9a9a9a9-0000-0000-0000-00000000a9a9"    # the approval page's own client id
+MCP_AUD, APPROVAL_AUD = "api://mcp-api", "api://approval-api"
+_KEYS = {}
+
+
+def signing_key():
+    if not _KEYS:
+        import jwt
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key()))
+        jwk.update(kid="test-key", use="sig")
+        _KEYS.update(key=key, jwks={"keys": [jwk]})
+    return _KEYS["key"], _KEYS["jwks"]
+
+
+def mint(who: Identity, *, aud=MCP_AUD, azp=CONNECTOR, scp="access_as_user", age=10, auth_age=None, roles=None, **claims) -> str:
+    import time
+
+    import jwt
+    now = int(time.time())
+    body = {"aud": aud, "iss": f"https://login.microsoftonline.com/{TENANT}/v2.0", "tid": TENANT, "oid": who.oid,
+            "preferred_username": who.name, "azp": azp, "scp": scp, "iat": now - age, "nbf": now - age, "exp": now + 3600,
+            "roles": list(who.roles if roles is None else roles), "auth_time": now - (age if auth_age is None else auth_age)}
+    body.update(claims)
+    return jwt.encode({k: v for k, v in body.items() if v is not None}, signing_key()[0], algorithm="RS256", headers={"kid": "test-key"})
+
+
+def jwt_settings(environments=None, **over) -> Settings:
+    return make_settings(environments, AUTH_MODE="jwt", API_AUDIENCES=MCP_AUD, ALLOWED_CLIENT_IDS=CONNECTOR,
+                         REQUIRED_SCOPE="access_as_user", APPROVAL_AUDIENCES=APPROVAL_AUD, APPROVAL_CLIENT_IDS=APPROVAL_SPA,
+                         APPROVAL_BASE_URL="https://approve.example", **over)

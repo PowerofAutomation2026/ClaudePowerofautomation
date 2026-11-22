@@ -151,12 +151,13 @@ def test_shipped_example_and_monitoring_files_are_consistent():
         assert policy.has_profile(env.policy_profile) and set(env.allowed_templates or []) <= templates
     monitoring = json.loads((pkg / "monitoring" / "monitoring.json").read_text())
     rules = [r for r in monitoring["resources"] if r["type"].endswith("scheduledQueryRules")]
-    assert len(rules) == 8 and all(r["properties"]["skipQueryValidation"] for r in rules)
+    assert len(rules) == 15 and all(r["properties"]["skipQueryValidation"] for r in rules)
+    assert len([r for r in monitoring["resources"] if r["type"].endswith("activityLogAlerts")]) == 5
     # every event type an alert or the KQL file filters on is one the server really emits
     source = "".join(p.read_text() for p in (pkg / "server").rglob("*.py") if "tests" not in p.parts)
     kql = (pkg / "audit-queries.kql").read_text() + json.dumps(monitoring)
     import re
-    for event_type in set(re.findall(r'type\)? == \\?"([a-z_]+)\\?"', kql)) | {"ttl_notice", "ttl_reaped", "ttl_reap_failed", "approval_decided"}:
+    for event_type in set(re.findall(r'type\)? == \\?"([a-z_]+)\\?"', kql)) | {"ttl_notice", "ttl_reaped", "ttl_reap_failed", "approval_decided", "freeze_tripped", "freeze_set", "apply_refused", "approval_refused"}:
         assert f'"type": "{event_type}"' in source, f"monitoring refers to event type '{event_type}' that the server never emits"
 
 
@@ -192,3 +193,6 @@ def test_terraform_runner_runs_cancels_and_times_out(tmp_path):
     work.mkdir()
     prepare_workdir(work, template, common, {"a": 1})
     assert sorted(p.name for p in work.iterdir()) == ["common.tf", "main.tf", "terraform.tfvars.json"]
+    (tmp_path / "providers.lock.hcl").write_text("# lock")
+    prepare_workdir(work, template, common, {"a": 1})
+    assert (work / ".terraform.lock.hcl").read_text() == "# lock"

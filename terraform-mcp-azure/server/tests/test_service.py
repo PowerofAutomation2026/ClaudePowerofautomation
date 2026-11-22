@@ -4,7 +4,7 @@ import threading
 
 import pytest
 
-from conftest import ALICE, BOB, CAROL, ENVIRONMENTS, World, storage_plan
+from conftest import ADMIN, ALICE, BOB, CAROL, ENVIRONMENTS, NOBODY, VIEWER, World, storage_plan
 from tfmcp.config import ConfigError, Settings
 from tfmcp.identity import ANONYMOUS, Identity, system_identity
 from tfmcp.service import Denied, Invalid
@@ -92,13 +92,14 @@ def test_user_cannot_override_injected_tags_or_variables(world):
 
 def test_plan_result_has_explanation_policy_cost_and_next_step(world):
     plan = world.plan()
-    assert plan["has_changes"] and plan["can_apply"] and plan["policy"]["allowed"] and plan["blockers"] == []
+    assert plan["has_changes"] and plan["policy"]["allowed"] and plan["blockers"] == []
+    assert not plan["can_apply"] and plan["approval"]["status"] == "not_requested"      # nothing applies without a human approval
     exp = plan["explanation"]
     assert exp["counts"] == {"create": 2, "update": 0, "delete": 0, "replace": 0} and exp["risk_level"] == "low"
     assert "Create storage account 'stdemo123456' in eastus2" in exp["read_to_user"]
     assert "Deploy 'demo' (storage-account) in dev: 2 to create." == exp["headline"]
-    assert "explicitly confirm" in exp["next_step"] and plan["cost"]["disclaimer"].startswith("Estimate only")
-    assert plan["approval"] == {"required": False, "status": "not_required"} and plan["requested_by"] == "alice@contoso.com"
+    assert "approval page (not in this chat)" in exp["next_step"] and plan["cost"]["disclaimer"].startswith("Estimate only")
+    assert plan["approval"]["two_person"] is False and plan["requested_by"] == "alice@contoso.com"
     stored = world.data.get(f"plans/{plan['plan_id']}/tfplan")[0]
     meta = world.data.get_json(f"plans/{plan['plan_id']}/meta.json")
     assert hashlib.sha256(stored).hexdigest() == meta["tfplan_sha256"]
@@ -125,9 +126,9 @@ def test_terraform_failure_is_reported_cleanly(world):
     world.tf.fail["plan"] = "Insufficient quota for Standard_D2s_v5"
     op = world.svc.plan_deployment(ALICE, "storage-account", "demo", None, "dev")
     assert op["status"] == "failed" and "Insufficient quota" in op["error"] and "Traceback" not in op["error"]
-    assert world.svc.get_operation(op["operation_id"])["status"] == "failed"
+    assert world.svc.get_operation(ALICE, op["operation_id"])["status"] == "failed"
     with pytest.raises(Invalid):
-        world.svc.get_operation("../../etc/passwd")
+        world.svc.get_operation(ALICE, "../../etc/passwd")
 
 
 def test_policy_violation_blocks_apply_in_plain_language(world):
@@ -169,10 +170,10 @@ def test_apply_records_deployment_outputs_history_and_consumes_plan(world):
     result = world.apply(ALICE, plan["plan_id"])
     assert result["applied"] and result["outputs"] == {"storage_account_name": "stdemo", "secret": "(sensitive)"}
     assert result["resources"][0]["type"] == "azurerm_storage_account" and "primary_access_key" not in json.dumps(result)
-    dep = world.svc.get_deployment("demo", "dev")
+    dep = world.svc.get_deployment(ALICE, "demo", "dev")
     assert dep["status"] == "active" and dep["owner"] == "alice@contoso.com" and dep["applied_by"] == "alice@contoso.com"
     assert dep["history"][0]["action"] == "apply" and dep["history"][0]["plan_id"] == plan["plan_id"]
-    assert world.svc.list_deployments()["count"] == 1 and world.svc.list_deployments("prod")["count"] == 0
+    assert world.svc.list_deployments(ALICE)["count"] == 1 and world.svc.list_deployments(ALICE, "prod")["count"] == 0
     assert not world.data.exists(f"plans/{plan['plan_id']}/tfplan")              # plan file removed after use
     with pytest.raises(Denied, match="already used"):
         world.svc.apply_plan(ALICE, plan["plan_id"])
@@ -192,11 +193,12 @@ def test_plan_expires(world):
     world.clock.advance(61 * 60)
     with pytest.raises(Denied, match="expired"):
         world.svc.apply_plan(ALICE, plan["plan_id"])
-    assert world.svc.explain_plan(plan["plan_id"])["can_apply"] is False
+    assert world.svc.explain_plan(ALICE, plan["plan_id"])["can_apply"] is False
 
 
 def test_tampered_plan_file_is_refused(world):
     plan = world.plan()
+    world.approve(ALICE, plan["plan_id"])
     world.data.put(f"plans/{plan['plan_id']}/tfplan", b"malicious plan")
     op = world.svc.apply_plan(ALICE, plan["plan_id"])
     assert op["status"] == "failed" and "checksum" in op["error"] and "apply" not in world.tf.commands()
@@ -204,33 +206,35 @@ def test_tampered_plan_file_is_refused(world):
 
 def test_concurrent_apply_of_one_plan_runs_once(world):
     plan = world.plan()
+    world.approve(ALICE, plan["plan_id"])
     world.tf.block["apply"] = threading.Event()
     world.tf.entered["apply"] = threading.Event()
     first = world.svc.apply_plan(ALICE, plan["plan_id"], wait=0)
     assert world.tf.entered["apply"].wait(5)
     with pytest.raises(Denied, match="already used|busy"):
-        world.svc.apply_plan(BOB, plan["plan_id"], wait=0)
+        world.svc.apply_plan(ALICE, plan["plan_id"], wait=0)
     with pytest.raises(Denied, match="busy"):
         world.svc.plan_deployment(BOB, "storage-account", "demo", None, "dev")
     assert world.svc.get_deployment  # still responsive while the apply runs
     world.tf.block["apply"].set()
     for _ in range(500):
-        if world.svc.get_operation(first["operation_id"])["status"] == "succeeded":
+        if world.svc.get_operation(ALICE, first["operation_id"])["status"] == "succeeded":
             break
         threading.Event().wait(0.01)
-    assert world.svc.get_operation(first["operation_id"])["status"] == "succeeded"
+    assert world.svc.get_operation(ALICE, first["operation_id"])["status"] == "succeeded"
     assert world.tf.commands().count("apply") == 1
 
 
 def test_failed_apply_marks_deployment_for_attention(world):
     plan = world.plan()
+    world.approve(ALICE, plan["plan_id"])
     world.tf.fail["apply"] = "StorageAccountAlreadyTaken"
     op = world.svc.apply_plan(ALICE, plan["plan_id"])
     assert op["status"] == "failed" and "StorageAccountAlreadyTaken" in op["error"] and "run a new plan" in op["error"]
-    assert world.svc.get_deployment("demo", "dev")["status"] == "needs_attention"
+    assert world.svc.get_deployment(ALICE, "demo", "dev")["status"] == "needs_attention"
     world.tf.fail.clear()
     world.apply(ALICE, world.plan()["plan_id"])                       # re-plan and apply recovers it
-    assert world.svc.get_deployment("demo", "dev")["status"] == "active"
+    assert world.svc.get_deployment(ALICE, "demo", "dev")["status"] == "active"
 
 
 def test_name_reuse_with_other_template_or_region_is_refused(world):
@@ -243,7 +247,7 @@ def test_name_reuse_with_other_template_or_region_is_refused(world):
 
 def test_update_shows_what_changed_since_last_apply(world):
     world.apply(ALICE, world.plan(variables={"replication_type": "LRS"})["plan_id"])
-    plan = world.plan(BOB, variables={"replication_type": "GRS"})
+    plan = world.plan(ADMIN, variables={"replication_type": "GRS"})
     since = plan["explanation"]["since_last_apply"]
     assert since["inputs_changed"] == {"replication_type": {"from": "LRS", "to": "GRS"}}
     assert since["last_applied_by"] == "alice@contoso.com" and "replication_type ('LRS' -> 'GRS')" in plan["explanation"]["read_to_user"]
@@ -260,7 +264,7 @@ def test_rollback_plans_previous_inputs(world):
     world.clock.advance(60)
     world.apply(ALICE, world.plan(variables={"replication_type": "GRS"})["plan_id"])
     world.clock.advance(60)
-    op = world.svc.plan_rollback(BOB, "demo", "dev")
+    op = world.svc.plan_rollback(ADMIN, "demo", "dev")
     meta = world.data.get_json(f"plans/{op['result']['plan_id']}/meta.json")
     assert meta["tfvars"]["replication_type"] == "LRS" and meta["origin"] == "rollback" and op["rollback_to"]["applied_by"] == "alice@contoso.com"
 
@@ -275,10 +279,10 @@ def test_destroy_flow_and_flag(world):
     assert plan["explanation"]["risk_level"] in ("medium", "high") and "DELETE storage account" in plan["explanation"]["read_to_user"]
     assert plan["policy"]["warnings"][0]["rule"] == "protected-resources"   # standard profile: warning only
     result = world.apply(ALICE, plan["plan_id"])
-    assert result["destroyed"] and world.svc.list_deployments()["count"] == 0
+    assert result["destroyed"] and world.svc.list_deployments(ALICE)["count"] == 0
     assert not world.state.exists("dev/demo.tfstate")
     with pytest.raises(Invalid, match="No deployment named"):
-        world.svc.get_deployment("demo", "dev")
+        world.svc.get_deployment(ALICE, "demo", "dev")
     world.apply(ALICE, world.plan()["plan_id"])                             # the name can be used again
 
 
@@ -297,115 +301,7 @@ def test_destroy_disabled_and_protected_in_prod():
         w.svc.apply_plan(ALICE, plan["plan_id"])
 
 
-# ------------------------------------------------------------------ two-person approval
-def prod_plan(world, who=ALICE):
-    return world.plan(who, environment="prod", tags=PROD_TAGS)
-
-
-def test_prod_apply_needs_approval_by_a_different_person(world):
-    plan = prod_plan(world)
-    assert plan["approval"] == {"required": True, "status": "not_requested"} and not plan["can_apply"]
-    assert "request_approval" in plan["explanation"]["next_step"]
-    with pytest.raises(Denied, match="second person's approval"):
-        world.svc.apply_plan(ALICE, plan["plan_id"])
-    with pytest.raises(Invalid, match="justification"):
-        world.svc.request_approval(ALICE, plan["plan_id"], "pls")
-    req = world.svc.request_approval(ALICE, plan["plan_id"], "New storage for the payments service, ticket CHG-1234")
-    assert req["approval"]["status"] == "pending" and req["approval"]["requested_by"] == "alice@contoso.com"
-    assert [p["plan_id"] for p in world.svc.list_pending_approvals("prod")["pending"]] == [plan["plan_id"]]
-    assert world.notifications[-1]["type"] == "approval_requested"
-    with pytest.raises(Denied, match="Two-person rule"):
-        world.svc.approve_plan(ALICE, plan["plan_id"], "lgtm")           # requester cannot approve their own plan
-    with pytest.raises(Denied, match="second person's approval"):
-        world.svc.apply_plan(ALICE, plan["plan_id"])
-    ok = world.svc.approve_plan(BOB, plan["plan_id"], "reviewed")
-    assert ok["approval"]["status"] == "approved" and ok["approval"]["decided_by"] == "bob@contoso.com"
-    assert world.svc.list_pending_approvals()["pending"] == []
-    assert world.svc.explain_plan(plan["plan_id"])["can_apply"] is True
-    world.apply(ALICE, plan["plan_id"])
-    entry = world.svc.get_deployment("demo", "prod")["history"][0]
-    assert entry["planned_by"] == "alice@contoso.com" and entry["approved_by"] == "bob@contoso.com"
-    apply_event = world.events("apply")[0]
-    assert apply_event["approved_by"] == "bob@contoso.com" and apply_event["user_oid"] == ALICE.oid
-    with pytest.raises(Invalid, match="no pending approval"):
-        world.svc.approve_plan(CAROL, plan["plan_id"])
-
-
-def test_approval_requested_by_someone_else_still_excludes_planner_and_requester(world):
-    plan = prod_plan(world, ALICE)
-    world.svc.request_approval(BOB, plan["plan_id"], "Requesting on behalf of Alice, CHG-99")
-    for person in (ALICE, BOB):
-        with pytest.raises(Denied, match="Two-person rule"):
-            world.svc.approve_plan(person, plan["plan_id"])
-    world.svc.approve_plan(CAROL, plan["plan_id"])
-
-
-def test_anonymous_system_and_app_identities_cannot_approve_or_apply_in_prod(world):
-    plan = prod_plan(world)
-    world.svc.request_approval(ALICE, plan["plan_id"], "A real justification here")
-    app = Identity(oid="dddddddd-0000-0000-0000-000000000004", name="app:some-client", source="jwt")
-    for nobody in (ANONYMOUS, REAPER, app):
-        with pytest.raises(Denied, match="Only a signed-in person"):
-            world.svc.approve_plan(nobody, plan["plan_id"])
-    world.svc.approve_plan(BOB, plan["plan_id"])
-    with pytest.raises(Denied, match="Only a signed-in person"):
-        world.svc.apply_plan(ANONYMOUS, plan["plan_id"])
-
-
-def test_rejection_and_withdrawal(world):
-    plan = prod_plan(world)
-    world.svc.request_approval(ALICE, plan["plan_id"], "A real justification here")
-    out = world.svc.reject_plan(BOB, plan["plan_id"], "wrong region")
-    assert out["approval"]["status"] == "rejected"
-    with pytest.raises(Denied, match="status: rejected"):
-        world.svc.apply_plan(ALICE, plan["plan_id"])
-    second = prod_plan(world)
-    world.svc.request_approval(ALICE, second["plan_id"], "A real justification here")
-    assert world.svc.reject_plan(ALICE, second["plan_id"], "changed my mind")["approval"]["status"] == "rejected"   # withdraw own
-
-
-def test_approver_allow_list_by_group_or_object_id():
-    envs = json.loads(json.dumps(ENVIRONMENTS))
-    envs["prod"]["approver_group_ids"] = ["99999999-0000-0000-0000-000000000009"]
-    w = World(envs)
-    plan = prod_plan(w)
-    w.svc.request_approval(ALICE, plan["plan_id"], "A real justification here")
-    with pytest.raises(Denied, match="not in the approver list"):
-        w.svc.approve_plan(BOB, plan["plan_id"])
-    with pytest.raises(Denied, match="not in the approver list"):
-        w.svc.reject_plan(BOB, plan["plan_id"])
-    assert w.svc.approve_plan(CAROL, plan["plan_id"])["approval"]["status"] == "approved"   # Carol is in the group
-
-
-def test_approval_cannot_be_requested_for_blocked_expired_or_dev_plans(world):
-    with pytest.raises(Invalid, match="does not need approval"):
-        world.svc.request_approval(ALICE, world.plan()["plan_id"], "A real justification here")
-    world.tf.plan_builder = lambda tfvars, destroy: storage_plan(tfvars, destroy, public_network_access_enabled=True)
-    blocked = prod_plan(world)
-    with pytest.raises(Denied, match="blocked by policy"):
-        world.svc.request_approval(ALICE, blocked["plan_id"], "A real justification here")
-    world.tf.plan_builder = storage_plan
-    plan = prod_plan(world)
-    world.svc.request_approval(ALICE, plan["plan_id"], "A real justification here")
-    world.clock.advance(9 * 3600)
-    with pytest.raises(Invalid, match="no longer open"):
-        world.svc.approve_plan(BOB, plan["plan_id"])
-    assert world.svc.list_pending_approvals()["pending"] == []
-
-
-def test_forged_approval_record_is_caught_at_apply(world):
-    plan = prod_plan(world)
-    key = f"plans/{plan['plan_id']}/meta.json"
-    meta = world.data.get_json(key)
-    meta["approval"] = {"required": True, "status": "approved", "decided_by": ALICE.public(), "plan_sha256": meta["tfplan_sha256"]}
-    world.data.put_json(key, meta)
-    with pytest.raises(Denied, match="Two-person rule violated"):
-        world.svc.apply_plan(ALICE, plan["plan_id"])
-    meta["approval"]["decided_by"] = BOB.public()
-    meta["approval"]["plan_sha256"] = "0" * 64
-    world.data.put_json(key, meta)
-    with pytest.raises(Denied, match="does not match this plan"):
-        world.svc.apply_plan(ALICE, plan["plan_id"])
+PROD = dict(environment="prod", tags=PROD_TAGS)
 
 
 # ------------------------------------------------------------------ cost / budget
@@ -426,14 +322,14 @@ def test_cost_estimate_is_returned_and_budget_cap_blocks_apply():
     w.tf.plan_builder = vm_plan
     dev = w.plan(name="vm1")
     assert dev["cost"]["monthly_total_usd"] == 730.0 and dev["cost"]["monthly_delta_usd"] == 730.0 and dev["budget"]["status"] == "no_budget"
-    assert "+USD 730.00 per month" in dev["explanation"]["read_to_user"] and dev["can_apply"]
+    assert "+USD 730.00 per month" in dev["explanation"]["read_to_user"] and dev["blockers"] == []
     prod = w.plan(name="vm1", environment="prod", tags=PROD_TAGS)
     assert prod["budget"]["status"] == "over_budget" and not prod["can_apply"]
     assert "over this environment's limit of USD 500.00" in prod["blockers"][0]
     with pytest.raises(Denied, match="over this environment's limit"):
         w.svc.apply_plan(ALICE, prod["plan_id"])
     w.apply(ALICE, dev["plan_id"])
-    assert w.svc.list_deployments("dev")["deployments"][0]["monthly_estimate_usd"] == 730.0
+    assert w.svc.list_deployments(ALICE, "dev")["deployments"][0]["monthly_estimate_usd"] == 730.0
 
 
 def test_price_service_offline_does_not_block_planning(world):
@@ -442,7 +338,7 @@ def test_price_service_offline_does_not_block_planning(world):
     w = World(price_fetch=offline)
     w.tf.plan_builder = vm_plan
     plan = w.plan(name="vm1")
-    assert plan["cost"]["status"] == "unavailable" and plan["can_apply"]
+    assert plan["cost"]["status"] == "unavailable" and plan["blockers"] == []
     assert "could not be estimated" in plan["explanation"]["cost_summary"]
 
 
@@ -463,7 +359,7 @@ def test_reaper_notifies_then_destroys_only_expired_ephemeral_deployments(world)
     assert world.data.get_json(f"plans/{plan['plan_id']}/meta.json")["tfvars"]["tags"]["ephemeral"] == "true"
     result = world.apply(ALICE, plan["plan_id"])
     assert "time-boxed" in result["note"]
-    listed = {d["deployment"]: d for d in world.svc.list_deployments("dev")["deployments"]}
+    listed = {d["deployment"]: d for d in world.svc.list_deployments(ALICE, "dev")["deployments"]}
     assert listed["sandbox"]["ephemeral"] and listed["sandbox"]["expires_in_hours"] == 48.0 and not listed["perm"]["ephemeral"]
 
     assert world.svc.run_reaper(REAPER) == {"notified": [], "destroyed": [], "failed": [], "skipped": []}   # too early
@@ -477,7 +373,7 @@ def test_reaper_notifies_then_destroys_only_expired_ephemeral_deployments(world)
     report = world.svc.run_reaper(REAPER)
     assert report["destroyed"] == ["dev/sandbox"] and report["failed"] == []
     assert [a["deployment"] for a in world.tf.applied if a["destroy"]] == ["sandbox"]     # 'perm' untouched
-    assert [d["deployment"] for d in world.svc.list_deployments("dev")["deployments"]] == ["perm"]
+    assert [d["deployment"] for d in world.svc.list_deployments(ALICE, "dev")["deployments"]] == ["perm"]
     destroy_event = [e for e in world.events("apply") if e["destroy"]][0]
     assert destroy_event["user"] == "system:ttl-reaper" and destroy_event["origin"] == "ttl-reaper"
 
@@ -496,15 +392,15 @@ def test_extend_ttl_postpones_destruction_within_limit(world):
     world.apply(ALICE, world.plan(name="sandbox", ttl_hours=2)["plan_id"])
     world.clock.advance(1 * 3600)
     world.svc.run_reaper(REAPER)                                # notice sent
-    out = world.svc.extend_ttl(BOB, "sandbox", 24, "dev")
+    out = world.svc.extend_ttl(ALICE, "sandbox", 24, "dev")
     assert out["expires_in_hours"] == 25.0
     world.clock.advance(3 * 3600)                               # past the ORIGINAL expiry
     report = world.svc.run_reaper(REAPER)
     assert report["destroyed"] == [] and report["notified"] == ["dev/sandbox"]   # new expiry is <24h away: fresh notice
     with pytest.raises(Denied, match="more than 72 hours"):
-        world.svc.extend_ttl(BOB, "sandbox", 100, "dev")
+        world.svc.extend_ttl(ADMIN, "sandbox", 100, "dev")
     with pytest.raises(Invalid):
-        world.svc.extend_ttl(BOB, "sandbox", -5, "dev")
+        world.svc.extend_ttl(ALICE, "sandbox", -5, "dev")
 
 
 def test_reaper_works_even_when_destroy_is_disabled_for_users_but_respects_policy():
@@ -520,7 +416,7 @@ def test_reaper_works_even_when_destroy_is_disabled_for_users_but_respects_polic
     w.clock.advance(3600)
     report = w.svc.run_reaper(REAPER)                           # storage accounts are protected under 'strict'
     assert report["destroyed"] == [] and "policy blocks the destroy" in report["failed"][0]["error"]
-    assert w.notifications[-1]["type"] == "ttl_reap_failed" and w.svc.list_deployments("dev")["count"] == 1
+    assert w.notifications[-1]["type"] == "ttl_reap_failed" and w.svc.list_deployments(ALICE, "dev")["count"] == 1
     # with a template that has no protected resources the reaper may proceed although users cannot destroy
     w.tf.plan_builder = lambda tfvars, destroy: {"resource_changes": storage_plan(tfvars, destroy)["resource_changes"][:1]}
     assert w.svc.run_reaper(REAPER)["destroyed"] == ["dev/sandbox"]
@@ -533,7 +429,9 @@ def test_a_non_reaper_identity_cannot_use_the_reaper_bypass():
     w.apply(ALICE, w.plan(name="sandbox", ttl_hours=1)["plan_id"])
     plan = w.svc.plan_destroy(REAPER, "sandbox", "dev", origin="ttl-reaper", inline=True)["result"]
     with pytest.raises(Denied, match="Destroy is switched off"):
-        w.svc.apply_plan(ALICE, plan["plan_id"])                # a user cannot apply the reaper's plan
+        w.svc.apply_plan(ADMIN, plan["plan_id"])                # not even an admin can apply the reaper's plan
+    with pytest.raises(Invalid):
+        w.svc.apply_plan(ALICE, plan["plan_id"])                # and other users cannot even see it
 
 
 # ------------------------------------------------------------------ drift
@@ -548,14 +446,14 @@ def test_drift_detection_single_and_all(world):
                     "after": {"min_tls_version": "TLS1_0", "id": "x", "tags": {"a": "1"}}}},
         {"address": "random_string.suffix", "mode": "managed", "type": "random_string", "name": "suffix",
          "change": {"actions": ["no-op"], "before": {}, "after": {}}}]
-    batch = world.svc.detect_drift(BOB, None, "dev")
+    batch = world.svc.detect_drift(ALICE, None, "dev")
     assert sorted(s["deployment"] for s in batch["started"]) == ["one", "two"]
     for s in batch["started"]:
         for _ in range(500):
-            if world.svc.get_operation(s["operation_id"])["status"] == "succeeded":
+            if world.svc.get_operation(ALICE, s["operation_id"])["status"] == "succeeded":
                 break
             threading.Event().wait(0.01)
-    result = world.svc.get_deployment("one", "dev")
+    result = world.svc.get_deployment(ALICE, "one", "dev")
     assert result["drift"]["drifted"] is True and result["drift_detail"]["changes"] == [
         {"resource": "azurerm_storage_account.this", "type": "azurerm_storage_account", "what": "changed outside Terraform",
          "changed_settings": ["min_tls_version"]}]

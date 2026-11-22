@@ -49,6 +49,12 @@ def iso(ts: float | None) -> str | None:
     return dt.datetime.fromtimestamp(ts, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def short_etag(tag: str) -> str:
+    """Opaque change marker for cheap polling ("unchanged since etag X")."""
+    import hashlib
+    return hashlib.sha256(str(tag).encode()).hexdigest()[:8]
+
+
 class OpContext:
     def __init__(self, engine: "OperationEngine", op: dict, cancel: threading.Event) -> None:
         self.engine = engine
@@ -81,6 +87,8 @@ class OperationEngine:
         self.max_attempts = max_attempts
         self.log = log or (lambda event: None)
         self._handlers: dict[str, tuple[Callable[[dict, OpContext], Any], bool]] = {}
+        self._accepted: set[str] = set()
+        self._inline_only: set[str] = set()   # kinds this process may QUEUE without being able to RUN them
         self._slots = threading.Semaphore(max_workers)
         self._running: dict[str, tuple[threading.Event, threading.Event]] = {}   # op id -> (cancel, done)
         self._mu = threading.Lock()
@@ -88,16 +96,26 @@ class OperationEngine:
         self._poller: threading.Thread | None = None
 
     # ------------------------------------------------------------------ registration / public API
-    def register(self, kind: str, handler: Callable[[dict, OpContext], Any], *, retryable: bool) -> None:
+    def register(self, kind: str, handler: Callable[[dict, OpContext], Any], *, retryable: bool, adopt: bool = True) -> None:
+        """``adopt=False``: this process can run the kind inline (its own jobs) but never picks up queued ones."""
         self._handlers[kind] = (handler, retryable)
+        if not adopt:
+            self._inline_only.add(kind)
+
+    def accept(self, *kinds: str) -> None:
+        """Allow queuing these kinds. A process only RUNS the kinds it registered a handler for: the MCP
+        front-end queues 'apply' but has no handler (and no Azure write rights); the privileged executor has."""
+        self._accepted.update(kinds)
 
     def submit(self, kind: str, params: dict, *, actor: dict, environment: str = "", deployment: str = "",
                lock: str | None = None, state_key: str | None = None, wait: float = 0.0, inline: bool = False) -> dict:
         """Queue an operation and start it on this replica if there is capacity. Waits up to ``wait``
         seconds for it to finish, then returns its current public view (poll ``get`` afterwards).
         ``inline=True`` runs it on the calling thread (scheduled jobs)."""
-        if kind not in self._handlers:
+        if kind not in self._handlers and kind not in self._accepted:
             raise ValueError(f"unknown operation kind {kind}")
+        if inline and kind not in self._handlers:
+            raise ValueError(f"this process cannot run '{kind}' operations")
         op_id = uuid.uuid4().hex[:12]
         now = self.clock()
         doc = {"operation_id": op_id, "kind": kind, "params": params, "status": "queued", "actor": actor,
@@ -119,14 +137,15 @@ class OperationEngine:
             self._slots.acquire()
             self._execute(op_id, threading.Event(), threading.Event(), holds_slot=True)
             return self.get(op_id)
-        done = self._start_local(op_id)
+        done = self._start_local(op_id) if kind in self._handlers and kind not in self._inline_only else None
         if done is not None and wait > 0:
             done.wait(wait)
         return self.get(op_id)
 
     def get(self, op_id: str) -> dict:
         try:
-            return self.public(self.store.get_json(f"ops/{op_id}.json"))
+            doc, tag = self.store.get_json_etag(f"ops/{op_id}.json")
+            return {**self.public(doc), "etag": short_etag(tag)}
         except NotFound:
             raise NotFound(f"No operation with id {op_id}") from None
 
@@ -328,6 +347,8 @@ class OperationEngine:
                 self._release_lock(doc.get("lock"), op_id)
                 self.store.delete(marker)
                 stats["cleaned"] += 1
+            elif doc["kind"] not in self._handlers or doc["kind"] in self._inline_only:
+                continue        # another process type owns this kind (e.g. applies belong to the executor)
             elif doc["status"] == "running" and (doc.get("lease_expires_at") or 0) < now:
                 retryable = self._handlers.get(doc["kind"], (None, False))[1]
                 requeue = retryable and doc.get("attempts", 0) < self.max_attempts

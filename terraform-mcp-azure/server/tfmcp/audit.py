@@ -15,10 +15,22 @@ import uuid
 from typing import Any, Callable, TextIO
 
 from .identity import Identity
+from .sanitize import redact
 from .storage import Store
 
-SAFE_ARGS = ("environment", "deployment_name", "template", "plan_id", "operation_id", "ttl_hours", "hours")
+SAFE_ARGS = ("environment", "deployment_name", "template", "plan_id", "operation_id", "ttl_hours", "hours", "action")
 _print_lock = threading.Lock()
+
+
+def _scrub(value: Any) -> Any:
+    """Secrets must not reach the logs either (keys, SAS signatures, tokens, connection strings)."""
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, dict):
+        return {k: _scrub(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_scrub(v) for v in value]
+    return value
 
 
 def args_hash(args: dict) -> str:
@@ -35,7 +47,7 @@ class AuditLog:
         """Write one structured log line (also used for non-audit events such as drift or TTL notices)."""
         event = {"ts": dt.datetime.fromtimestamp(self.clock(), dt.timezone.utc).isoformat(timespec="milliseconds"),
                  "app": "azure-terraform-mcp", **event}
-        line = json.dumps(event, default=str, sort_keys=True)
+        line = json.dumps(_scrub(event), default=str, sort_keys=True)
         with _print_lock:
             stream = self.stream or sys.stdout
             stream.write(line + "\n")
@@ -56,7 +68,7 @@ class AuditLog:
         if self.store is not None:
             day = dt.datetime.fromtimestamp(now, dt.timezone.utc).strftime("%Y/%m/%d")
             try:
-                self.store.put_json(f"{day}/{int(now * 1000)}-{event['audit_id'][:8]}.json", event)
+                self.store.put_json(f"{day}/{int(now * 1000)}-{event['audit_id'][:8]}.json", _scrub(event))
             except Exception as e:  # the stdout line is the primary record; never fail the call
                 self.emit({"type": "audit_write_failed", "audit_id": event["audit_id"], "error": str(e)[:300]})
         return event

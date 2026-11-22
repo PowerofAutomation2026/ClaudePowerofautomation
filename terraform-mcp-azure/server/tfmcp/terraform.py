@@ -70,6 +70,9 @@ def backend_args(state_account: str, state_key: str, subscription_id: str) -> li
 def prepare_workdir(workdir: pathlib.Path, template_path: pathlib.Path, common_file: pathlib.Path, variables: dict) -> None:
     shutil.copytree(template_path, workdir, dirs_exist_ok=True)
     shutil.copy(common_file, workdir / "common.tf")
+    lock = common_file.parent / "providers.lock.hcl"
+    if lock.exists():       # dependency lock: Terraform refuses any provider build whose hash is not listed
+        shutil.copy(lock, workdir / ".terraform.lock.hcl")
     (workdir / "template.json").unlink(missing_ok=True)
     (workdir / "terraform.tfvars.json").write_text(json.dumps(variables))
 
