@@ -10,6 +10,49 @@ Time: about 60-90 minutes for the first run (most of it waiting for Azure and En
 
 ---
 
+## 0. The fast path: `Install.cmd` (new in v2.2)
+
+Sections 3-7 below describe every step by hand. The installer does them for you; use the manual steps only if
+you want to understand or customise them. (The installer was executed end to end against fake `az`/`pac`
+command-line tools; `Install.cmd` itself could not be run - no Windows machine was available.)
+
+1. Unzip the package on a Windows admin workstation and **double-click `Install.cmd`**.
+   It unblocks the files, installs PowerShell 7 if needed, and starts the wizard.
+   > 📸 **SCREENSHOT 00a** – the installer window with the step banner "[1/8] Prerequisites".
+2. Sign in when the browser opens. Pick the **subscription** and the **Power Platform environment** from the
+   numbered lists. Accept the defaults for prefix and region, or type your own.
+3. Read the **preflight list** (PASS / WARN / FAIL). Nothing has been changed at this point. A FAIL stops the
+   install and prints the exact fix. To see only this list: `Install.cmd -PreflightOnly`.
+   > 📸 **SCREENSHOT 00b** – the preflight PASS/FAIL list.
+4. The installer then: creates the four Entra groups (or reuses them), adds you to *Admins* and *Requesters*
+   and the second approver you named to *Approvers*; deploys everything in sections 6 and 11; creates the
+   solution **Azure Terraform MCP** and the custom connector in your Power Platform environment; runs the smoke
+   test; and writes `out/install-summary.md`.
+   > 📸 **SCREENSHOT 00c** – the green INSTALLED banner with the two URLs.
+5. Open **`out/agent-setup.md`** and do the remaining clicks (they cannot be automated, see below), then
+   continue with **section 8.3** (instructions) and **section 9** (examples). Send `out/what-users-do-now.md`
+   to your users.
+
+| The installer does | A person still has to |
+|---|---|
+| Install Azure CLI / Power Platform CLI (winget), sign-in, pick lists | Paste the connector's client secret once in the maker portal (the CLI cannot set it) |
+| Preflight checks with fixes | Create the agent in Copilot Studio, add the tool, publish, share it with the groups - unless you pass your own exported agent template (`-AgentTemplateFile`, from `pac copilot extract-template`) |
+| Entra groups and memberships | Grant admin consent if your account may not (preflight tells you) |
+| Azure deployment, roles, locks, app registrations | Add a Conditional Access policy for the approval app |
+| Solution + custom connector; sharing with the groups if the Power Platform admin PowerShell module is installed | Every user: sign in to the connection once on first use; have a licence that covers Copilot Studio agents |
+
+Other ways to run it:
+```
+Install.cmd -PreflightOnly                                   check only
+Install.cmd -WhatIf                                          check + list what would be created
+Install.cmd -Unattended -ConfigFile install.config.json      no prompts (copy install.config.example.json)
+Install.cmd -Uninstall [-RemoveGroups]                       remove the server (not the workloads)
+```
+If it stops half-way, fix what it reports and run it again: finished steps are skipped (`-Force` redoes all).
+Logs: `.deploy-logs/`. Re-running after success is the upgrade path.
+
+---
+
 ## 1. What you are building
 
 ```
@@ -56,6 +99,7 @@ az version                     # 2.60 or newer
 3. Windows may block downloaded scripts: `Get-ChildItem -Recurse . -File | Unblock-File`
 
 ## 4. Create the Entra groups (Azure portal)
+*(Skip if you used `Install.cmd`: it created "Azure Terraform MCP Viewers / Requesters / Approvers / Admins".)*
 1. Azure portal → **Microsoft Entra ID** → **Groups** → **New group**.
 2. Create four **Security** groups: `aztfmcp-requesters`, `aztfmcp-approvers`, `aztfmcp-viewers`, `aztfmcp-admins`.
 3. Add yourself to *requesters* and *admins* for testing, and a **second person** to *approvers* (production approval needs a different person than the requester; in dev you may approve your own on the approval page).

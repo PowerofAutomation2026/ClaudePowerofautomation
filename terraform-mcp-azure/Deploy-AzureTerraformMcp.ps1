@@ -77,6 +77,7 @@ param(
   [ValidateSet('jwt', 'easyauth')] [string] $AuthMode = 'jwt',   # jwt: the server re-validates the token itself; easyauth: trust Easy Auth headers
   [string[]] $AllowedCidrs,                       # ingress IP allow-list
   [switch] $RotateConnectorSecret,
+  [switch] $SkipPacConnector,                     # the installer creates the connector itself (inside a solution)
   [switch] $Destroy
 )
 $ErrorActionPreference = 'Stop'
@@ -658,7 +659,7 @@ Kill switch (admins): POST https://$approvalFqdn/api/freeze {"frozen": true, "re
 Each user signs in with their own account: approvals and the audit trail use that identity.
 "@ | Set-Content -Path (Join-Path $outDir 'copilot-studio-wizard-values.md') -Encoding utf8
 
-if (Get-Command pac -CommandType Application -ErrorAction SilentlyContinue) {
+if (-not $SkipPacConnector -and (Get-Command pac -CommandType Application -ErrorAction SilentlyContinue)) {
   Write-Host '     pac found: creating the connector (select your Power Platform environment first with `pac auth`)' -ForegroundColor Cyan
   & pac connector create --api-definition-file (Join-Path $outDir 'terraform-mcp.swagger.json') --api-properties-file (Join-Path $outDir 'apiProperties.json')
 }

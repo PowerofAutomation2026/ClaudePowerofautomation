@@ -60,6 +60,48 @@ def answer(value):
     sys.exit(0)
 
 
+SUB = "11111111-1111-1111-1111-111111111111"
+url = opt("--url", "--uri") or ""
+if noun == "account" and verb == "list":
+    subs = [{"name": "Sandbox", "id": SUB, "tenantId": "22222222-2222-2222-2222-222222222222"}]
+    if os.environ.get("FAKE_AZ_SUBS") == "2":
+        subs.append({"name": "Other", "id": "33333333-3333-3333-3333-333333333333", "tenantId": subs[0]["tenantId"]})
+    answer(json.dumps(subs))
+if noun == "ad signed-in-user" and verb == "show" and "upn" in query:
+    answer(json.dumps({"id": guid("me"), "upn": "admin@contoso.com"}))
+if noun == "role assignment" and verb == "list":
+    answer(os.environ.get("FAKE_AZ_ROLES", "Owner"))
+if words[:1] == ["rest"] and "GET" in args:
+    if "directoryRole" in url:
+        answer(os.environ.get("FAKE_AZ_DIRROLES", "Global Administrator"))
+    if "authorizationPolicy" in url:
+        answer(json.dumps({"apps": True, "groups": True}))
+    if "/api/data/" in url:
+        answer(state.get("dv|" + url.split("/api/data/v9.2/")[1].split("?")[0], ""))
+if words[:1] == ["rest"] and "POST" in args and "/api/data/" in url:
+    state["dv|" + url.split("/api/data/v9.2/")[1]] = guid(url)
+    save_now = True
+    json.dump(state, open(state_path, "w", encoding="utf-8"))
+    answer("{}")
+if noun == "provider" and verb == "show":
+    answer("Registered" if "registrationState" in query else "East US 2\nWest US 2\nWest Europe")
+if verb == "check-name":
+    answer("true")
+if noun == "ad group" and verb == "list":
+    answer(state.get(f"group|{name}", ""))
+if noun == "ad group" and verb == "create":
+    state[f"group|{name}"] = guid("group" + name)
+    json.dump(state, open(state_path, "w", encoding="utf-8"))
+    answer(state[f"group|{name}"])
+if noun == "ad group member":
+    mkey = f"member|{opt('--group')}|{opt('--member-id')}"
+    if verb == "check":
+        answer("true" if state.get(mkey) else "false")
+    state[mkey] = True
+    json.dump(state, open(state_path, "w", encoding="utf-8"))
+    answer("")
+if noun == "ad user" and verb == "show":
+    answer(guid("user" + name))
 if noun == "account" and verb == "show":
     answer("22222222-2222-2222-2222-222222222222" if "tenantId" in query else json.dumps({"id": "sub"}))
 if noun == "ad app" and verb == "list":

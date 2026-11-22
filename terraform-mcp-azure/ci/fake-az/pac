@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""Fake Power Platform CLI for the installer tests: logs every call to $FAKE_PAC_LOG and answers the few
+commands the installer uses. It proves the installer's flow and arguments, not Power Platform's behaviour."""
+import json
+import os
+import sys
+
+args = sys.argv[1:]
+with open(os.environ.get("FAKE_PAC_LOG", "/tmp/fake-pac.log"), "a", encoding="utf-8") as f:
+    f.write(json.dumps(args) + "\n")
+state_path = os.environ.get("FAKE_AZ_STATE", "/tmp/fake-az-state.json") + ".pac"
+try:
+    state = json.load(open(state_path))
+except (OSError, ValueError):
+    state = {}
+cmd = " ".join(a for a in args[:2])
+if os.environ.get("FAKE_PAC_FAIL") and os.environ["FAKE_PAC_FAIL"] in cmd:
+    sys.stderr.write(f"Error: simulated failure of pac {cmd}\n")
+    sys.exit(1)
+if cmd == "auth list":
+    print("[1] * UNIVERSAL admin@contoso.com")
+elif cmd == "env list":
+    print(json.dumps([{"DisplayName": "Contoso (default)", "EnvironmentUrl": "https://contoso.crm.dynamics.com/", "EnvironmentId": "env-default"},
+                      {"DisplayName": "Platform Engineering", "EnvironmentUrl": "https://platform.crm.dynamics.com/", "EnvironmentId": "env-platform"}]))
+elif cmd == "connector list":
+    print(json.dumps([{"DisplayName": "Azure Terraform MCP", "ConnectorId": "conn-1", "Name": "aztf_azure-terraform-mcp"}] if state.get("connector") else []))
+elif cmd == "connector create":
+    state["connector"] = True
+    json.dump(state, open(state_path, "w"))
+    print("Connector created")
+else:
+    print("ok")

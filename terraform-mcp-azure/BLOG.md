@@ -164,6 +164,23 @@ dropped, a single text block instead of text plus a structured duplicate, one-li
 on demand, paging and field selection, hard caps with an explicit `truncated` marker. The instructions shrank
 because the rules moved into the server - which is where they had to go anyway. A test enforces the budgets.
 
+## v2.2: one double-click
+
+*A designed, interactive version of this post is in [`blog/index.html`](blog/index.html).*
+
+Security nobody installs protects nothing, so the last piece is an installer. `Install.cmd` bootstraps
+PowerShell 7 if it has to, then a wizard: sign in, pick the subscription and the Power Platform environment
+from a list, read a preflight report **before anything is changed** (your role on the subscription, your Entra
+permissions, region support, name availability, data-policy hints - each failure with its fix), and go. It
+creates the four Entra groups, deploys, puts a solution with the custom connector into your environment, runs
+the smoke test, and leaves three files: a summary, the remaining clicks, and a one-page note for your users.
+It resumes after a failure and has an unattended mode for pipelines.
+
+What it does not do is pretend. Microsoft requires a person for a few things - pasting the connector's client
+secret, creating and publishing the agent in Copilot Studio, each user's first sign-in - and the installer
+says so and hands you the exact steps instead of a brittle hack. We ran it end to end against fake `az` and
+`pac` command-line tools; we could not run it on Windows or against a real tenant.
+
 ## How it compares
 
 | | Plain Terraform MCP server (CLI wrapper) | HashiCorp Terraform MCP + HCP Terraform | This package |
@@ -188,7 +205,7 @@ Azure-native alternative in which the guardrails are part of the tool surface th
 
 ## Honest limitations
 
-* Built and tested without an Azure tenant. 237 automated tests, `terraform validate` on every template, the
+* Built and tested without an Azure tenant. 239 automated tests, `terraform validate` on every template, the
   deploy script executed end-to-end against a fake `az`, and the token broker checked against the real
   Terraform binaries - but **no plan or apply has run against Azure, and no real Copilot Studio agent has
   called it**. Expect to fix small things on first contact.
@@ -203,6 +220,7 @@ Azure-native alternative in which the guardrails are part of the tool surface th
 
 ## Try it
 
+Double-click `Install.cmd`, or by hand:
 ```powershell
 az login
 ./Deploy-AzureTerraformMcp.ps1 -SubscriptionId <guid> -RequesterGroupId <g> -ApproverGroupId <g> -AdminGroupId <g>   # plan-only sandbox

@@ -196,3 +196,39 @@ def test_terraform_runner_runs_cancels_and_times_out(tmp_path):
     (tmp_path / "providers.lock.hcl").write_text("# lock")
     prepare_workdir(work, template, common, {"a": 1})
     assert (work / ".terraform.lock.hcl").read_text() == "# lock"
+
+
+def test_installer_files_are_consistent():
+    import pathlib
+    import re
+
+    pkg = pathlib.Path(__file__).resolve().parents[2]
+    ps1 = (pkg / "Install-AzureTerraformMcp.ps1").read_text()
+    known = set(re.findall(r"'([A-Za-z]+)'", re.search(r"\$KnownConfigKeys = @\((.*?)\)", ps1, re.S).group(1)))
+    example = json.loads((pkg / "install.config.example.json").read_text())
+    assert set(example) == known, "install.config.example.json must show exactly the settings the installer accepts"
+    assert set(example["groupNames"]) == {"viewers", "requesters", "approvers", "admins"}
+    for key in known - {"powerPlatform", "groupNames"}:
+        assert ps1.count(f"'{key}'") >= 2, f"setting {key} is declared but never read"
+    cmd = (pkg / "Install.cmd").read_bytes()
+    assert b"Install-AzureTerraformMcp.ps1" in cmd and b"Unblock-File" in cmd and b"Microsoft.PowerShell" in cmd
+    assert cmd.count(b"\r\n") > 20 and b"\n" not in cmd.replace(b"\r\n", b""), "Install.cmd needs Windows line endings"
+    deploy = (pkg / "Deploy-AzureTerraformMcp.ps1").read_text()
+    for param in re.findall(r"\$deploy\.(\w+) = |\$deploy\[\$pair\[1\]\]|@\('\w+', '(\w+)'\)", ps1):
+        for name in filter(None, param):
+            assert re.search(r"\$%s\b" % name, deploy), f"installer passes -{name}, which the deploy script does not have"
+    assert not re.search(r"(?m)^function (az|pac)\b", ps1, re.I), "never shadow a CLI with a function of the same name"
+
+
+def test_blog_page_is_self_contained_and_honest():
+    import pathlib
+    import re
+
+    html = (pathlib.Path(__file__).resolve().parents[2] / "blog" / "index.html").read_text()
+    assert not re.search(r'<(script|link|img|iframe)[^>]+(src|href)="https?://', html), "no external resources"
+    assert "ILLUSTRATIVE SIMULATION" in html and "Not verified" in html and 'lang="en"' in html
+    assert "prefers-color-scheme:dark" in html and "prefers-reduced-motion" in html and 'role="tablist"' in html
+    for banned in ("#1 ", "no. 1", "number one", "market-leading", "best-in-class", "trusted by"):
+        assert banned not in html.lower()
+    # the token numbers on the page are the measured ones (README / test_tokens.py)
+    assert '["Tool definitions",2117,902]' in html and '["Template catalog",4981,300]' in html

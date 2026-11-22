@@ -1,0 +1,31 @@
+{
+  "subscriptionId": "00000000-0000-0000-0000-000000000000",
+  "prefix": "aztfmcp",
+  "location": "eastus2",
+  "environments": ["dev", "test", "prod"],
+  "allowedLocations": "eastus2,westus2",
+  "enableApply": false,
+  "enableDestroy": false,
+  "lockEnvironments": ["prod"],
+  "groupNames": {
+    "viewers": "Azure Terraform MCP Viewers",
+    "requesters": "Azure Terraform MCP Requesters",
+    "approvers": "Azure Terraform MCP Approvers",
+    "admins": "Azure Terraform MCP Admins"
+  },
+  "secondApproverUpn": "second.approver@contoso.com",
+  "monthlyBudgetUsd": 2000,
+  "enableScheduledJobs": true,
+  "enableMonitoring": true,
+  "alertEmail": "platform-team@contoso.com",
+  "privateNetworking": false,
+  "enableDenyDeletePolicy": true,
+  "allowAzureCliClient": false,
+  "powerPlatform": {
+    "enabled": true,
+    "environment": "https://yourorg.crm.dynamics.com",
+    "shareWithGroups": true,
+    "agentTemplateFile": null
+  },
+  "skipSmokeTest": false
+}

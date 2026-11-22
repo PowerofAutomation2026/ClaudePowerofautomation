@@ -2,6 +2,37 @@
 
 Not validated against a live tenant (README: "What was tested"). Use a sandbox subscription first.
 
+## 0. Recommended: the installer
+
+```
+Install.cmd                                                  (double-click; interactive wizard)
+Install.cmd -PreflightOnly                                   (checks only - changes nothing)
+pwsh ./Install-AzureTerraformMcp.ps1 -Unattended -ConfigFile ./install.config.json     (pipelines)
+Install.cmd -Uninstall
+```
+`Install-AzureTerraformMcp.ps1` wraps everything below: prerequisites (winget: Azure CLI, Power Platform CLI),
+sign-in, subscription and Power Platform environment pickers, **preflight checks** (subscription role, Entra
+permissions, provider registration, region support, storage/registry name availability, Power Platform
+environment, DLP hint), the four **Entra groups**, `Deploy-AzureTerraformMcp.ps1`, the **Power Platform solution
+and custom connector**, the smoke test, and `out/install-summary.md|json`, `out/agent-setup.md`,
+`out/what-users-do-now.md`. It keeps a transcript in `.deploy-logs/` and resumes after a failure.
+
+Power Platform, precisely:
+* **Automated:** publisher `aztfmcp` + unmanaged solution `AzureTerraformMcp` (Dataverse Web API, token from
+  `az`), connector via `pac connector create --solution-unique-name` (or `pac connector update` on re-runs).
+  Sharing with the requester/viewer/admin groups via `Set-AdminPowerAppConnectorRoleAssignment` **only if** the
+  module `Microsoft.PowerApps.Administration.PowerShell` is installed; the DLP check uses `Get-DlpPolicy` from
+  the same module, otherwise it prints what to check by hand.
+* **Not automated:** the connector's OAuth client secret (paste once in the maker portal), creating and
+  publishing the agent (the installer can run `pac copilot create` from a template **you** exported with
+  `pac copilot extract-template`; generating an agent definition from scratch is not a documented, supported
+  path, so we do not pretend to), sharing the agent, each user's first sign-in, licensing.
+* **Unverified:** all of it against a real environment. `pac` argument names and JSON output shapes follow the
+  CLI's documentation as we know it; if a step fails the Azure installation still completes and the manual
+  instructions are written to `out/agent-setup.md`.
+
+The rest of this document is the manual route and the reference for every parameter.
+
 ## Prerequisites
 * **Owner** on the subscription(s): the script creates custom role definitions, role assignments, locks and,
   optionally, policy definitions/assignments. (Without Owner you need Contributor + User Access Administrator +

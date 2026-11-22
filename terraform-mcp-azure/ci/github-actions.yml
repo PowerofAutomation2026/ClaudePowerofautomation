@@ -57,6 +57,8 @@ jobs:
       - run: pip install -r server/requirements.txt
       - name: Parse-check all scripts and run the deploy script against the fake az CLI
         run: ci/test-deploy-script.sh
+      - name: Run the installer (wizard, unattended, preflight, resume, uninstall) against fake az + pac
+        run: ci/test-installer.sh
 
   image:
     runs-on: ubuntu-latest

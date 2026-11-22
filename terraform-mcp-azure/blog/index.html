@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terraform for agents - Azure Terraform MCP</title>
+<meta name="description" content="Let a Copilot Studio agent plan Azure infrastructure with Terraform while approval, write access and destroy protection stay out of its reach.">
+<style>
+:root{--bg:#f7f8fb;--surface:#fff;--ink:#131722;--muted:#5b6475;--line:#dfe3ec;--accent:#5b3fd6;--accent-ink:#fff;--accent-soft:#ece8fd;
+--good:#0f7a4d;--good-soft:#e2f5ec;--warn:#9a5b00;--warn-soft:#fdf1dc;--bad:#b3261e;--bad-soft:#fde8e6;--code:#10131c;--code-ink:#e7eaf3;--shadow:0 10px 30px rgba(20,25,50,.08)}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1118;--surface:#161a24;--ink:#edf0f7;--muted:#a2abbd;--line:#2a3040;--accent:#a493ff;--accent-ink:#14102b;--accent-soft:#241f45;
+--good:#5fd39c;--good-soft:#10301f;--warn:#f0b65a;--warn-soft:#33250c;--bad:#ff8f87;--bad-soft:#3a1614;--code:#090b11;--code-ink:#e7eaf3;--shadow:0 10px 30px rgba(0,0,0,.45)}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-text-size-adjust:100%}
+a{color:var(--accent)}a:focus-visible,button:focus-visible,summary:focus-visible,[tabindex]:focus-visible{outline:3px solid var(--accent);outline-offset:3px;border-radius:6px}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+.skip{position:absolute;left:-999px}.skip:focus{left:12px;top:12px;background:var(--surface);padding:8px 12px;border-radius:8px;z-index:9}
+header.top{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+header.top .wrap{display:flex;align-items:center;gap:18px;min-height:54px}
+.brand{font-weight:700;letter-spacing:-.01em;white-space:nowrap}.brand span{color:var(--accent)}
+nav{display:flex;gap:14px;overflow-x:auto;font-size:14.5px;scrollbar-width:none}nav::-webkit-scrollbar{display:none}nav a{color:var(--muted);text-decoration:none;white-space:nowrap;padding:6px 0}nav a:hover{color:var(--ink)}
+.hero{padding-top:72px;padding-bottom:44px}
+.kicker{display:inline-block;background:var(--accent-soft);color:var(--accent);font-weight:600;font-size:13.5px;padding:5px 12px;border-radius:999px}
+h1{font-size:clamp(34px,6vw,58px);line-height:1.06;letter-spacing:-.03em;margin:18px 0 16px;max-width:17ch}
+h1 em{font-style:normal;color:var(--accent)}
+.lede{font-size:clamp(18px,2.2vw,21px);color:var(--muted);max-width:62ch;margin:0 0 26px}
+.cta{display:flex;flex-wrap:wrap;gap:12px}
+.btn{display:inline-flex;align-items:center;gap:8px;border-radius:12px;padding:12px 18px;font-weight:600;text-decoration:none;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer;font:inherit;font-weight:600}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+.note{font-size:14px;color:var(--muted);margin-top:18px}
+section{padding:54px 0;border-top:1px solid var(--line)}
+h2{font-size:clamp(26px,3.6vw,36px);letter-spacing:-.02em;line-height:1.15;margin:0 0 10px}
+h3{font-size:18.5px;margin:0 0 6px}
+.sub{color:var(--muted);max-width:68ch;margin:0 0 26px}
+.grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:var(--shadow)}
+.card p{margin:0;color:var(--muted);font-size:15.5px}
+.ico{width:38px;height:38px;border-radius:10px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;margin-bottom:12px;font-size:19px}
+.two{display:grid;gap:22px;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));align-items:start}
+.diagram{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:14px;box-shadow:var(--shadow);overflow-x:auto}
+.diagram svg{display:block;min-width:760px;width:100%;height:auto}
+.d-box{fill:var(--surface);stroke:var(--line);stroke-width:1.5}.d-agent{fill:var(--bad-soft);stroke:var(--bad)}.d-ro{fill:var(--accent-soft);stroke:var(--accent)}.d-ok{fill:var(--good-soft);stroke:var(--good)}.d-az{fill:var(--warn-soft);stroke:var(--warn)}
+.d-t{fill:var(--ink);font:600 15px system-ui,sans-serif}.d-s{fill:var(--muted);font:13px system-ui,sans-serif}.d-l{stroke:var(--muted);stroke-width:1.8;fill:none}.d-x{stroke:var(--bad);stroke-width:2.2;stroke-dasharray:6 5;fill:none}.d-xt{fill:var(--bad);font:600 12.5px system-ui,sans-serif}
+table{width:100%;border-collapse:collapse;font-size:15.5px}th,td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}.tablewrap{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow)}
+.tablewrap table{min-width:640px}
+.bars{display:grid;gap:14px}.bar{display:grid;grid-template-columns:minmax(120px,190px) 1fr;gap:12px;align-items:center;font-size:15px}
+.track{display:grid;gap:5px}.track i{display:block;height:13px;border-radius:7px;background:var(--line);min-width:3px}.track i.new{background:var(--accent)}
+.track span{font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+pre{margin:0;background:var(--code);color:var(--code-ink);border-radius:14px;padding:16px 18px;overflow-x:auto;font:14.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.copy{position:relative}.copy button{position:absolute;top:10px;right:10px;background:#2a3040;color:#fff;border:0;border-radius:8px;padding:6px 11px;font:600 13px system-ui,sans-serif;cursor:pointer}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}.tabs button{border:1px solid var(--line);background:var(--surface);color:var(--muted);border-radius:999px;padding:8px 14px;font:600 14.5px system-ui,sans-serif;cursor:pointer}
+.tabs button[aria-selected=true]{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:22px;box-shadow:var(--shadow)}.panel ol{margin:8px 0 0;padding-left:22px}.panel li{margin:7px 0}
+.panel .shot{margin-top:14px;border:1.5px dashed var(--line);border-radius:12px;padding:14px;color:var(--muted);font-size:14px}
+.chat{background:var(--surface);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);overflow:hidden}
+.chat-head{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);font-weight:600;flex-wrap:wrap}
+.sim{background:var(--warn-soft);color:var(--warn);font-size:12.5px;font-weight:700;padding:4px 10px;border-radius:999px}
+.chat-body{padding:16px;min-height:330px;max-height:470px;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
+.msg{max-width:86%;padding:10px 14px;border-radius:14px;font-size:15.5px;white-space:pre-wrap}
+.msg.user{align-self:flex-end;background:var(--accent);color:var(--accent-ink);border-bottom-right-radius:4px}
+.msg.bot{align-self:flex-start;background:var(--bg);border:1px solid var(--line);border-bottom-left-radius:4px}
+.msg.sys{align-self:center;max-width:96%;background:var(--good-soft);color:var(--good);font-size:14px;font-weight:600;border-radius:10px;text-align:center}
+.msg.sys.stop{background:var(--bad-soft);color:var(--bad)}
+.chat-foot{display:flex;gap:10px;padding:12px 16px;border-top:1px solid var(--line);align-items:center;flex-wrap:wrap}.chat-foot small{color:var(--muted)}
+details{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 18px;margin-bottom:10px}summary{cursor:pointer;font-weight:600}details p{color:var(--muted);margin:10px 0 2px}
+.pill{display:inline-block;font-size:12.5px;font-weight:700;border-radius:999px;padding:3px 10px}.pill.ok{background:var(--good-soft);color:var(--good)}.pill.no{background:var(--bad-soft);color:var(--bad)}
+ul.check{list-style:none;padding:0;margin:10px 0 0}ul.check li{padding-left:26px;position:relative;margin:8px 0;color:var(--muted);font-size:15.5px}ul.check li::before{content:"✓";position:absolute;left:0;color:var(--good);font-weight:700}ul.check.no li::before{content:"–";color:var(--bad)}
+footer{padding:36px 0 60px;color:var(--muted);font-size:14.5px;border-top:1px solid var(--line)}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+@media (max-width:560px){.hero{padding-top:44px;padding-bottom:30px}section{padding:40px 0}.bar{grid-template-columns:1fr}.msg{max-width:94%}}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="top"><div class="wrap">
+  <div class="brand">Azure <span>Terraform MCP</span></div>
+  <nav aria-label="Sections"><a href="#how">How it works</a><a href="#features">Features</a><a href="#tokens">Tokens</a><a href="#install">Install</a><a href="#demo">Demo</a><a href="#security">Security</a><a href="#tested">Tested?</a><a href="#compare">Compare</a></nav>
+</div></header>
+
+<main id="main">
+<div class="wrap hero">
+  <span class="kicker">Open package · v2.2 · Azure + Copilot Studio</span>
+  <h1>Give your agent Terraform. <em>Keep the keys.</em></h1>
+  <p class="lede">A Copilot Studio agent that plans Azure infrastructure from approved templates - and physically cannot apply or destroy anything without a human decision made somewhere it cannot reach.</p>
+  <div class="cta"><a class="btn primary" href="#install">Install with one double-click</a><a class="btn" href="#demo">Watch the flow</a></div>
+  <p class="note">Honest status: built and tested without access to a live Azure tenant or Copilot Studio. <a href="#tested">See exactly what was and was not verified.</a></p>
+</div>
+
+<section id="problem"><div class="wrap">
+  <h2>The problem with "an agent that runs Terraform"</h2>
+  <p class="sub">Asking a chat assistant for a database is a great experience. Giving a language model Contributor rights is not. Models can be talked into things - by a user, by a document, by text hidden in a resource name.</p>
+  <div class="grid">
+    <div class="card"><div class="ico" aria-hidden="true">💬</div><h3>"The user said yes"</h3><p>If confirmation happens in the chat, the model decides whether it happened. A prompt injection can simply claim it did.</p></div>
+    <div class="card"><div class="ico" aria-hidden="true">🔑</div><h3>One identity does everything</h3><p>The process that reads untrusted text is usually the same one holding write access to your subscription.</p></div>
+    <div class="card"><div class="ico" aria-hidden="true">🧾</div><h3>Plans nobody can read</h3><p>A Terraform plan is written for engineers. Approvers click "OK" on a summary the model improvised.</p></div>
+  </div>
+</div></section>
+
+<section id="how"><div class="wrap">
+  <h2>How it works: three parts, two identities, one human</h2>
+  <p class="sub">The agent proposes. A read-only service plans and explains. A person approves on a separate page. Only then does a different identity touch Azure.</p>
+  <div class="diagram" role="img" aria-label="Architecture: the Copilot Studio agent calls the read-only MCP front-end, which can plan but not apply. A human approves on a separate approval page with a fresh sign-in. Only the executor with its own identity applies to Azure. Azure locks and policy protect resources independently.">
+  <svg viewBox="0 0 1000 400" xmlns="http://www.w3.org/2000/svg">
+    <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+    <g color="var(--muted)">
+    <rect class="d-box d-agent" x="18" y="46" width="190" height="104" rx="14"/><text class="d-t" x="34" y="78">Copilot Studio agent</text><text class="d-s" x="34" y="100">untrusted: may be</text><text class="d-s" x="34" y="118">injected or jailbroken</text>
+    <rect class="d-box d-ro" x="290" y="46" width="230" height="104" rx="14"/><text class="d-t" x="306" y="78">MCP front-end</text><text class="d-s" x="306" y="100">READ-ONLY Azure identity</text><text class="d-s" x="306" y="118">plan · policy · cost · explain</text><text class="d-s" x="306" y="136">8 tools, none can approve</text>
+    <rect class="d-box d-ok" x="290" y="232" width="230" height="110" rx="14"/><text class="d-t" x="306" y="264">Approval page</text><text class="d-s" x="306" y="286">separate Entra app + audience</text><text class="d-s" x="306" y="304">fresh sign-in, single use,</text><text class="d-s" x="306" y="322">bound to the exact plan</text>
+    <rect class="d-box d-ok" x="596" y="232" width="190" height="110" rx="14"/><text class="d-t" x="612" y="264">Executor</text><text class="d-s" x="612" y="286">the only WRITE identity</text><text class="d-s" x="612" y="304">re-checks the plan file,</text><text class="d-s" x="612" y="322">policy and quotas</text>
+    <rect class="d-box d-az" x="846" y="120" width="136" height="150" rx="14"/><text class="d-t" x="862" y="152">Azure</text><text class="d-s" x="862" y="176">resource locks</text><text class="d-s" x="862" y="194">deny-delete policy</text><text class="d-s" x="862" y="212">custom roles</text><text class="d-s" x="862" y="230">immutable audit</text>
+    <rect class="d-box" x="18" y="246" width="190" height="82" rx="14"/><text class="d-t" x="34" y="278">Human approver</text><text class="d-s" x="34" y="300">a different person in prod</text>
+    <path class="d-l" d="M208 98H286" marker-end="url(#arr)"/><text class="d-s" x="214" y="88">MCP token</text>
+    <path class="d-l" d="M208 287H286" marker-end="url(#arr)"/><text class="d-s" x="212" y="277">browser</text>
+    <path class="d-l" d="M520 287H592" marker-end="url(#arr)"/><text class="d-s" x="526" y="277">approved</text>
+    <path class="d-l" d="M786 270C812 270 818 232 842 222" marker-end="url(#arr)"/><text class="d-s" x="800" y="296">apply</text>
+    <path class="d-l" d="M405 150V228" marker-end="url(#arr)"/><text class="d-s" x="414" y="194">queues plan + request</text>
+    <path class="d-l" d="M520 84C700 84 820 96 876 116" marker-end="url(#arr)"/><text class="d-s" x="640" y="74">read only</text>
+    <path class="d-x" d="M160 150C160 200 232 216 286 246"/><text class="d-xt" x="22" y="200">no approve tool</text>
+    </g>
+  </svg></div>
+  <div class="two" style="margin-top:22px">
+    <div class="card"><h3>What a hijacked agent can still do</h3><p>Read what its user may read, create plans, and ask for approvals. It can also trip the server's automatic freeze - an intentional fail-closed.</p></div>
+    <div class="card"><h3>What it cannot do</h3><p>Approve, apply, destroy, raise its own rights, remove a lock, or make the executor apply a plan that differs from what the approver saw.</p></div>
+  </div>
+</div></section>
+
+<section id="features"><div class="wrap">
+  <h2>What makes it different</h2>
+  <p class="sub">Every item below is enforced by the server or by Azure itself - never by the agent's instructions.</p>
+  <div class="grid">
+    <div class="card"><div class="ico" aria-hidden="true">🧍</div><h3>Out-of-band approval</h3><p>No approve tool exists. Decisions happen on a separate page with a different token audience and a fresh sign-in; valid 30 minutes, usable once.</p></div>
+    <div class="card"><div class="ico" aria-hidden="true">🪪</div><h3>Split identities</h3><p>The agent-facing service is read-only. A second service with a custom role (no role assignments, no lock removal) applies approved plans.</p></div>
+    <div class="card"><div class="ico" aria-hidden="true">🛡️</div><h3>Policy gate on the plan</h3><p>Regions, tags, public access, TLS, SKUs, protected resources and blast radius are checked on Terraform's own plan - again at approval and at apply.</p></div>
+    <div class="card"><div class="ico" aria-hidden="true">💶</div><h3>Cost before apply</h3><p>A labelled monthly estimate from Azure's public list prices, with an optional budget cap that blocks the apply.</p></div>
+    <div class="card"><div class="ico" aria-hidden="true">⏳</div><h3>Time-boxed environments</h3><p>"For 8 hours" creates a deployment that gives notice and then removes itself. Only deployments created that way are ever touched.</p></div>
+    <div class="card"><div class="ico" aria-hidden="true">🧭</div><h3>Drift and rollback</h3><p>Ask whether Azure still matches what was deployed, on demand or nightly. Plan a return to the previous applied inputs.</p></div>
+    <div class="card"><div class="ico" aria-hidden="true">🗣️</div><h3>Explain this plan</h3><p>The server writes the plain-English summary, risk level and next step - the model reads it out instead of inventing one.</p></div>
+    <div class="card"><div class="ico" aria-hidden="true">🧯</div><h3>Kill switch</h3><p>Admins freeze all changes out of band. Bursts of denied calls, destroy attempts or plans freeze it automatically. Daily deletion quota.</p></div>
+    <div class="card"><div class="ico" aria-hidden="true">📜</div><h3>Per-user audit</h3><p>Every call on both channels with the Entra identity, to Log Analytics and to write-once storage. Workbook, alerts and queries included.</p></div>
+  </div>
+</div></section>
+
+<section id="tokens"><div class="wrap">
+  <h2>Token-frugal by design</h2>
+  <p class="sub">Tool definitions are sent to the model in every conversation; every result is read by it. These are our own measurements of this package, v2.0 against v2.1+, using a simple characters ÷ 4 estimate. A test fails the build if a budget is exceeded.</p>
+  <div class="card"><div class="bars" id="bars"></div>
+  <p class="note">Grey = v2.0, purple = v2.1 and later. Source: <code>server/tests/test_tokens.py</code>. Estimates, not billing figures.</p></div>
+</div></section>
+
+<section id="install"><div class="wrap">
+  <h2>Install: one double-click</h2>
+  <p class="sub">On a Windows admin workstation, unzip the package and double-click <strong>Install.cmd</strong>. It installs what is missing, signs you in, runs preflight checks before changing anything, creates the Entra groups, deploys to Azure, creates the Power Platform connector and prints a pass/fail summary.</p>
+  <div class="two">
+    <div>
+      <div class="copy"><pre id="cmd1">Install.cmd</pre><button type="button" data-copy="cmd1">Copy</button></div>
+      <p class="note">Check first, change nothing:</p>
+      <div class="copy"><pre id="cmd2">Install.cmd -PreflightOnly</pre><button type="button" data-copy="cmd2">Copy</button></div>
+      <p class="note">Pipelines (no prompts):</p>
+      <div class="copy"><pre id="cmd3">pwsh ./Install-AzureTerraformMcp.ps1 -Unattended -ConfigFile ./install.config.json</pre><button type="button" data-copy="cmd3">Copy</button></div>
+    </div>
+    <div class="card"><h3>Automated vs. needs a person</h3>
+      <ul class="check"><li>Prerequisites (Azure CLI, Power Platform CLI), sign-in, subscription and environment pickers</li><li>Preflight list with the exact fix for every failure</li><li>Four Entra groups, you as admin, an optional second approver</li><li>Azure deployment, custom roles, locks, app registrations</li><li>Solution and custom connector in your Power Platform environment</li></ul>
+      <ul class="check no"><li>Pasting the connector's client secret once in the maker portal</li><li>Creating the agent, adding the tool and publishing it in Copilot Studio (or supply your own exported template)</li><li>Each user's first sign-in to the connection; licensing; admin consent if you lack the role</li></ul>
+    </div>
+  </div>
+
+  <h3 style="margin-top:34px">Step by step</h3>
+  <div class="tabs" role="tablist" aria-label="Deployment steps">
+    <button role="tab" id="t1" aria-controls="p1" aria-selected="true">1 · Preflight</button><button role="tab" id="t2" aria-controls="p2" aria-selected="false" tabindex="-1">2 · Install</button><button role="tab" id="t3" aria-controls="p3" aria-selected="false" tabindex="-1">3 · Copilot Studio</button><button role="tab" id="t4" aria-controls="p4" aria-selected="false" tabindex="-1">4 · Approvers</button><button role="tab" id="t5" aria-controls="p5" aria-selected="false" tabindex="-1">5 · Turn on changes</button>
+  </div>
+  <div class="panel" role="tabpanel" id="p1" aria-labelledby="t1"><strong>See what would fail before anything is created.</strong><ol><li>Run <code>Install.cmd -PreflightOnly</code>.</li><li>Read the PASS / WARN / FAIL list: subscription role, Entra permissions, region, name availability, Power Platform environment, data-loss-prevention hints.</li><li>Each FAIL line names the fix. Apply it and run again.</li></ol></div>
+  <div class="panel" role="tabpanel" id="p2" aria-labelledby="t2" hidden><strong>Run the installer and answer five questions.</strong><ol><li>Double-click <code>Install.cmd</code>. Pick the subscription and the Power Platform environment from the lists.</li><li>Keep "plan-only" for the first run.</li><li>Wait for the green INSTALLED banner; the summary is in <code>out/install-summary.md</code>.</li><li>If it stops, fix what it says and run it again - finished steps are skipped.</li></ol></div>
+  <div class="panel" role="tabpanel" id="p3" aria-labelledby="t3" hidden><strong>Finish the agent (about five minutes of clicks).</strong><ol><li>Open <code>out/agent-setup.md</code>.</li><li>Paste the connector's client secret in the maker portal.</li><li>In Copilot Studio create "Azure Platform Assistant", add the tool <em>Azure Terraform MCP</em>, choose end-user authentication.</li><li>Paste <code>agent-instructions.md</code>, publish, share with the requester and viewer groups.</li></ol><div class="shot">Screenshot placeholder: Copilot Studio › Tools › Add a tool › Azure Terraform MCP</div></div>
+  <div class="panel" role="tabpanel" id="p4" aria-labelledby="t4" hidden><strong>Tell approvers where decisions happen.</strong><ol><li>Send them the approval page address from the summary.</li><li>Add a Conditional Access policy for the approval app: multi-factor, sign-in every time.</li><li>Add at least one <em>other</em> person to the Approvers group - the two-person rule needs two people.</li></ol><div class="shot">Screenshot placeholder: the approval page showing a plan summary with Approve / Reject</div></div>
+  <div class="panel" role="tabpanel" id="p5" aria-labelledby="t5" hidden><strong>When you trust it, allow approved changes.</strong><ol><li>Run the installer again and answer "yes" to allowing changes (or set <code>enableApply</code> in the config).</li><li>Production stays locked against deletion; destroy stays off unless you enable it.</li><li>Send users <code>out/what-users-do-now.md</code>.</li></ol></div>
+</div></section>
+
+<section id="demo"><div class="wrap">
+  <h2>What a conversation looks like</h2>
+  <p class="sub">A scripted illustration of the flow, including the hand-off to a human. It is not connected to anything.</p>
+  <div class="chat" aria-label="Illustrative chat simulation">
+    <div class="chat-head"><span>Azure Platform Assistant</span><span class="sim">ILLUSTRATIVE SIMULATION - not a live system</span></div>
+    <div class="chat-body" id="chat" aria-live="polite"></div>
+    <div class="chat-foot"><button class="btn primary" id="play" type="button">Play</button><button class="btn" id="showall" type="button">Show whole transcript</button><small id="chatstate">Press Play.</small></div>
+  </div>
+</div></section>
+
+<section id="security"><div class="wrap">
+  <h2>Security questions people ask</h2>
+  <details open><summary>What if the agent is prompt-injected and "confirms" for the user?</summary><p>Nothing happens. There is no tool that approves, and the apply tool is refused unless a human created an approval on the separate page for that exact plan file. Chat content is not an input to that decision.</p></details>
+  <details><summary>What if someone steals a user's token for the MCP?</summary><p>It works for reading and planning as that user until it expires. It is rejected by the approval service (different audience, client and scope), so nothing can be applied with it.</p></details>
+  <details><summary>What if the agent-facing container itself is compromised?</summary><p>It holds a read-only Azure role. It could forge its own records, so the executor ignores them: it reads approvals from a store that container cannot write, asks Terraform what the plan file really does, and compares that with what the approver saw. It can read Terraform state - that is a real residual risk.</p></details>
+  <details><summary>Can an approved plan delete production data?</summary><p>In locked environments the apply role cannot delete data-bearing resource types, the resource group carries a delete lock, protected deployments are refused, and a daily deletion quota applies. An Owner can still remove those protections on purpose; an alert fires when a lock or role changes.</p></details>
+  <details><summary>So it cannot be hacked?</summary><p>No system can promise that. A person can approve the wrong thing, two insiders can collude, and everything here still has to be confirmed in a real tenant. The threat model lists each scenario with what stops it and what remains.</p></details>
+</div></section>
+
+<section id="tested"><div class="wrap">
+  <h2>What is tested - and what is not</h2>
+  <div class="two">
+    <div class="card"><span class="pill ok">Verified locally</span><ul class="check">
+      <li>Automated test suite for policy, cost, approvals, roles, limits, injection inputs, redaction, durability and token budgets (count in the README)</li>
+      <li>Both HTTP channels with locally signed tokens: wrong audience, wrong client, stale sign-in and replays are rejected</li>
+      <li><code>terraform validate</code> for all 15 templates with the pinned provider</li>
+      <li>Installer and deploy scripts executed end to end in PowerShell 7 against fake <code>az</code> and <code>pac</code> command-line tools</li>
+      <li>This page: rendered at desktop and phone widths, light and dark</li></ul></div>
+    <div class="card"><span class="pill no">Not verified</span><ul class="check no">
+      <li>Anything against live Azure, Entra ID, Power Platform or Copilot Studio</li>
+      <li><code>Install.cmd</code> itself (no Windows machine was available) and winget installs</li>
+      <li>Real token claims, custom-role, lock and policy behaviour</li>
+      <li>The approval page's browser sign-in flow</li>
+      <li>Connector and solution creation through the real Power Platform CLI and Dataverse API</li>
+      <li>The container image build</li></ul></div>
+  </div>
+  <p class="note">Run it in a sandbox subscription first and expect to adjust small things.</p>
+</div></section>
+
+<section id="compare"><div class="wrap">
+  <h2>How it compares</h2>
+  <p class="sub">Our understanding at the time of writing; check each vendor's documentation. HCP Terraform is a mature, supported platform with far richer policy and registry features - if you already run it, its own MCP server is the natural choice.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th scope="col"></th><th scope="col">Terraform CLI wrapped as MCP</th><th scope="col">HashiCorp Terraform MCP + HCP Terraform</th><th scope="col">This package</th></tr></thead>
+    <tbody>
+    <tr><th scope="row">Where Terraform runs</th><td>Wherever the server runs</td><td>HCP Terraform workspaces</td><td>Azure Container Apps, managed identities</td></tr>
+    <tr><th scope="row">Who can change Azure</th><td>The server's identity</td><td>The workspace's identity</td><td>A separate executor; the agent-facing process is read-only</td></tr>
+    <tr><th scope="row">Approval</th><td>Not built in</td><td>Run approval in HCP</td><td>Separate page and token audience; no approve tool</td></tr>
+    <tr><th scope="row">Policy on the plan</th><td>Not built in</td><td>Sentinel / OPA policy sets</td><td>Built-in JSON rules per environment</td></tr>
+    <tr><th scope="row">Cost before apply</th><td>Not built in</td><td>Cost estimation</td><td>List-price estimate + budget cap (best effort)</td></tr>
+    <tr><th scope="row">Extra service to buy</th><td>None</td><td>HCP Terraform</td><td>None beyond Azure</td></tr>
+    <tr><th scope="row">Maturity</th><td>Varies</td><td>Vendor-supported product</td><td>New; not yet proven on a live tenant</td></tr>
+    </tbody></table></div>
+</div></section>
+</main>
+
+<footer><div class="wrap">Azure Terraform MCP v2.2 · Read <code>README.md</code>, <code>THREAT-MODEL.md</code> and <code>GUIDE.md</code> in the package. No customer quotes, no benchmarks beyond our own measurements, no claims we could not check.</div></footer>
+
+<script>
+(() => {
+  // token bars (our own measurements; characters / 4)
+  const data = [["Tool definitions",2117,902],["Template catalog",4981,300],["Environments",2921,93],["Plan result",906,277],["One poll while running",238,26],["Agent instructions",952,231]];
+  const max = Math.max(...data.map(d => d[1])), bars = document.getElementById("bars");
+  for (const [label, before, after] of data) {
+    const row = document.createElement("div"); row.className = "bar";
+    row.innerHTML = `<div><strong>${label}</strong></div><div class="track"><i style="width:${Math.max(1, before / max * 100)}%"></i><span>v2.0: ~${before} tokens</span><i class="new" style="width:${Math.max(1, after / max * 100)}%"></i><span>now: ~${after} tokens (−${Math.round((1 - after / before) * 100)}%)</span></div>`;
+    bars.appendChild(row);
+  }
+  // copy buttons
+  document.querySelectorAll("[data-copy]").forEach(b => b.addEventListener("click", async () => {
+    const text = document.getElementById(b.dataset.copy).textContent;
+    try { await navigator.clipboard.writeText(text); } catch { const r = document.createRange(); r.selectNodeContents(document.getElementById(b.dataset.copy)); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
+    b.textContent = "Copied"; setTimeout(() => b.textContent = "Copy", 1400);
+  }));
+  // tabs (arrow keys supported)
+  const tabs = [...document.querySelectorAll('[role=tab]')];
+  const select = t => { tabs.forEach(x => { const on = x === t; x.setAttribute("aria-selected", on); x.tabIndex = on ? 0 : -1; document.getElementById(x.getAttribute("aria-controls")).hidden = !on; }); };
+  tabs.forEach((t, i) => { t.addEventListener("click", () => select(t)); t.addEventListener("keydown", e => { const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0; if (d) { const n = tabs[(i + d + tabs.length) % tabs.length]; select(n); n.focus(); } }); });
+  // scripted chat (illustration only)
+  const script = [
+    ["user","I need a PostgreSQL database for the payments team in prod."],
+    ["bot","I can plan that from the approved template. I need the Entra group that will administer it and a cost centre."],
+    ["user","Group \"payments-dba\", cost centre CC-4711."],
+    ["bot","Plan ready - nothing has been changed.\n\nDeploy 'payments-db' in prod: 3 to create.\n• PostgreSQL server (Entra-only sign-in, no public access)\n• database 'appdb'\nRisk: MEDIUM - production environment.\nEstimated cost: [monthly list-price estimate appears here].\nPolicy check passed."],
+    ["user","Looks good, go ahead and apply it."],
+    ["sys stop","Apply refused by the server: not approved. Approval cannot be given in chat."],
+    ["bot","I can't apply this from our conversation. Production needs a second person to approve on the approval page. I've created the request - please send this link to an approver:\nhttps://approval.example/?plan=3f9a…"],
+    ["sys","Hand-off: an approver signs in again on the approval page, reads the server's own summary, and approves. Valid 30 minutes, usable once."],
+    ["user","Dana approved it."],
+    ["bot","Confirmed with the server: approved by Dana. Applying now…"],
+    ["sys","A separate executor identity applies the plan after re-checking the plan file, policy and quotas."],
+    ["bot","Done. Server: psql-payments-db-x7k2q.postgres.database.azure.com, database: appdb. Sign-in is Entra-only for the group payments-dba."]
+  ];
+  const chat = document.getElementById("chat"), state = document.getElementById("chatstate"), play = document.getElementById("play");
+  let run = 0;
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const add = cls => { const m = document.createElement("div"); m.className = "msg " + cls; chat.appendChild(m); return m; };
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function start(instant) {
+    const id = ++run; chat.textContent = ""; play.textContent = "Replay"; state.textContent = instant ? "Whole transcript shown." : "Playing…";
+    for (const [cls, text] of script) {
+      if (id !== run) return;
+      const m = add(cls);
+      if (instant || reduce || cls.startsWith("sys")) { m.textContent = text; if (!instant) await sleep(700); }
+      else { for (let i = 1; i <= text.length; i += 2) { if (id !== run) return; m.textContent = text.slice(0, i + 1); chat.scrollTop = chat.scrollHeight; await sleep(cls === "user" ? 14 : 7); } await sleep(450); }
+      chat.scrollTop = chat.scrollHeight;
+    }
+    state.textContent = "End of the illustration.";
+  }
+  play.addEventListener("click", () => start(false));
+  document.getElementById("showall").addEventListener("click", () => start(true));
+})();
+</script>
+</body>
+</html>

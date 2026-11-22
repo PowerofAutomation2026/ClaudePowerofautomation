@@ -20,6 +20,7 @@ param(
   [string] $Url,
   [string] $Token,
   [string] $ApprovalUrl,
+  [switch] $AnonymousOnly,               # only the checks that need no token (anonymous calls must be rejected)
   [hashtable] $ExtraHeaders = @{}
 )
 $ErrorActionPreference = 'Stop'
@@ -41,7 +42,7 @@ if ($SubscriptionId -and -not $ApprovalUrl) {
   $afqdn = "$(az containerapp show -g "rg-$Prefix" -n "ca-$Prefix-approval" --query properties.configuration.ingress.fqdn -o tsv 2>$null)".Trim()
   if ($afqdn) { $ApprovalUrl = "https://$afqdn" }
 }
-if (-not $Token -and $SubscriptionId) {
+if (-not $Token -and $SubscriptionId -and -not $AnonymousOnly) {
   $apiId = "$(az ad app list --display-name "$Prefix-api" --query '[0].appId' -o tsv)".Trim()
   $Token = "$(az account get-access-token --resource "api://$apiId" --query accessToken -o tsv)".Trim()
 }
@@ -60,6 +61,11 @@ if ($ApprovalUrl) {
   }
 }
 
+if ($AnonymousOnly) {
+  if ($failed) { Write-Host "$failed check(s) failed." -ForegroundColor Red; exit 1 }
+  Write-Host 'Anonymous checks passed (authenticated checks skipped).' -ForegroundColor Green
+  exit 0
+}
 # 2. authenticated MCP session
 $headers = @{ Accept = 'application/json, text/event-stream' }
 if ($Token) { $headers['Authorization'] = "Bearer $Token" }

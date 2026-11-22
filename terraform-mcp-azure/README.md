@@ -1,4 +1,4 @@
-# Azure Terraform MCP (v2.1) - Terraform for Copilot Studio agents that stays safe when the agent is not
+# Azure Terraform MCP (v2.2) - Terraform for Copilot Studio agents that stays safe when the agent is not
 
 A Copilot Studio agent can plan Azure infrastructure from approved Terraform templates. **It cannot change or
 destroy anything on its own** - not when it is prompt-injected, not with a stolen user token, not when the
@@ -85,6 +85,16 @@ instructions from [agent-instructions.md](agent-instructions.md).
 
 ## Quick start
 
+**Double-click `Install.cmd`** (Windows admin workstation). It installs prerequisites, signs you in, runs
+preflight checks, creates the Entra groups, deploys to Azure, creates the Power Platform solution + connector,
+runs the smoke test and writes `out/install-summary.md`. `Install.cmd -PreflightOnly` changes nothing;
+`-Unattended -ConfigFile install.config.json` is for pipelines; `-Uninstall` removes the server.
+What it cannot do for you (Microsoft requires a person): paste the connector secret once, create/publish the
+agent in Copilot Studio, each user's first sign-in, licensing - see `out/agent-setup.md` after the run.
+A designed overview of the whole thing: [blog/index.html](blog/index.html).
+
+Manual route:
+
 ```powershell
 az login
 # plan-only sandbox (one "dev" environment)
@@ -103,7 +113,7 @@ Security: [SECURITY.md](SECURITY.md), [THREAT-MODEL.md](THREAT-MODEL.md). Backgr
 
 No Azure tenant and no Copilot Studio environment were available. Tested locally:
 
-* **237 unit/integration tests** (`pytest`; 3 more run against the Azurite storage emulator): RBAC matrix,
+* **239 unit/integration tests** (`pytest`; 3 more run against the Azurite storage emulator): RBAC matrix,
   per-user visibility, out-of-band approval (two-person, self, replay, expiry, stale sign-in, MFA claim,
   wrong audience, changed plan, forged approval, swapped plan file, plan JSON that lies about the file),
   freeze / anomaly auto-freeze / rate limits / quotas / change windows, protected deployments, injection and
@@ -118,6 +128,14 @@ No Azure tenant and no Copilot Studio environment were available. Tested locally
   five scenarios with assertions on roles, scopes, identities, locks, policy, app registrations and env vars;
   the smoke-test script was run against a local server.
 
+* **Installer (v2.2)**: `Install-AzureTerraformMcp.ps1` executed in PowerShell 7 against fake `az` and `pac`
+  CLIs in 12 runs (preflight, what-if, unattended install, re-run, failure and resume, failed preflight,
+  Power Platform failure, interactive wizard with typed answers, uninstall). `blog/index.html` rendered with
+  headless Chromium at desktop and phone widths, light and dark: no console errors, no horizontal scroll.
+
+**Not tested (v2.2 additions):** `Install.cmd` (reviewed only - no Windows), winget installs, and every Power
+Platform call (`pac connector`, Dataverse solution creation, connector sharing, DLP read, `pac copilot create`).
+
 **Not tested:** anything against live Azure or Entra ID - no real `terraform plan/apply`, no real custom-role
 or lock behaviour, no real token from Entra (claims such as `auth_time`/`amr` follow documentation), the
 approval page's browser sign-in (MSAL) flow, whether the read-only role is sufficient for every provider
@@ -127,6 +145,8 @@ refresh, the Docker image build, the Azure Monitor template, `az` flag names, th
 ## Repository layout
 
 ```
+Install.cmd, Install-AzureTerraformMcp.ps1, install.config.example.json   one-click installer (wizard / unattended)
+blog/index.html                designed overview page (self-contained) + blog/screens/
 Deploy-AzureTerraformMcp.ps1   deploy (two container apps, two identities, custom roles, locks, Entra apps)
 Test-TerraformMcp.ps1          smoke test (MCP + approval channel)
 server/server.py, server/tfmcp/   the server: service, approvals, approval_app, guard, sanitize, compact, integrity, ...
@@ -145,6 +165,7 @@ python3 -m venv .venv && .venv/bin/pip install -r server/requirements-dev.txt
 ci/validate-templates.sh        # terraform + providers
 ci/run-azurite-tests.sh         # Node.js
 ci/test-deploy-script.sh        # pwsh
+ci/test-installer.sh            # pwsh (installer against fake az + pac)
 ```
 
 ## Changing templates or policies

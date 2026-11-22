@@ -8,3 +8,6 @@ __pycache__/
 *.tfstate
 *.tfstate.*
 tfplan
+.deploy-logs/
+.deploy-state/
+install.config.json
