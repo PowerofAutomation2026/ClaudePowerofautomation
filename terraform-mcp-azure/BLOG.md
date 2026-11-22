@@ -181,6 +181,22 @@ secret, creating and publishing the agent in Copilot Studio, each user's first s
 says so and hands you the exact steps instead of a brittle hack. We ran it end to end against fake `az` and
 `pac` command-line tools; we could not run it on Windows or against a real tenant.
 
+## v2.3: paste one URL
+
+The last rough edge was the Copilot Studio wizard: seven fields and a client secret, because Entra ID has no
+dynamic client registration and so the wizard's *Dynamic discovery* option had nothing to discover. The server
+now answers that itself. An anonymous call to `/mcp` gets a `401` that points at the server's own OAuth
+metadata; from there a client finds a registration endpoint (which hands out the one pre-registered connector
+app, never a secret), an authorize endpoint (which validates the request and redirects to Entra for your
+tenant) and a token endpoint (a thin proxy that adds the client secret server-side). Tokens still come from
+Entra and are validated exactly as before. The maker pastes the URL, picks *Dynamic discovery*, signs in.
+
+The price is stated plainly in SECURITY.md: these endpoints are public by design, and Easy Auth no longer
+sits in front of the MCP endpoint in this mode. We limited them hard - exact redirect allow-list, PKCE and
+state required, fixed upstream, rate limits, nothing built from the Host header - and tested the attacks. What
+we could not test is the real wizard, so the manual route stays documented as the fallback and
+`-ConnectorAuth manual` switches the facade off.
+
 ## How it compares
 
 | | Plain Terraform MCP server (CLI wrapper) | HashiCorp Terraform MCP + HCP Terraform | This package |
@@ -205,7 +221,7 @@ Azure-native alternative in which the guardrails are part of the tool surface th
 
 ## Honest limitations
 
-* Built and tested without an Azure tenant. 239 automated tests, `terraform validate` on every template, the
+* Built and tested without an Azure tenant. 267 automated tests, `terraform validate` on every template, the
   deploy script executed end-to-end against a fake `az`, and the token broker checked against the real
   Terraform binaries - but **no plan or apply has run against Azure, and no real Copilot Studio agent has
   called it**. Expect to fix small things on first contact.

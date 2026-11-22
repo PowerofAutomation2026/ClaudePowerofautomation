@@ -55,6 +55,8 @@ def build(settings: Settings, *, data=None, state=None, audit_store=None, contro
     """Wire the service. Stores / runner / price fetcher can be injected (tests, local runs)."""
     if settings.integrity_check:
         verify_integrity(HERE)      # refuses to start if templates or policies differ from integrity.json
+    from tfmcp.sanitize import register_secret
+    register_secret(settings.connector_client_secret)
     tf_env = {"ARM_USE_MSI": "true", "ARM_SUBSCRIPTION_ID": settings.subscription_id, "ARM_TENANT_ID": settings.tenant_id}
     if os.environ.get("AZURE_CLIENT_ID"):
         tf_env["ARM_CLIENT_ID"] = os.environ["AZURE_CLIENT_ID"]   # user-assigned managed identity
@@ -271,7 +273,7 @@ class _Refuse(Authenticator):
         raise AuthError("the approval channel needs AUTH_MODE=jwt and an approval audience")
 
 
-def create_app(rt: Runtime, fetch_jwks=None):
+def create_app(rt: Runtime, fetch_jwks=None, oauth_post=None):
     """ASGI app for this process role. /mcp and the approval channel use DIFFERENT token audiences."""
     settings, audit = rt.settings, rt.audit
     mcp_app = approval_app = None
@@ -279,8 +281,22 @@ def create_app(rt: Runtime, fetch_jwks=None):
         validator = None
         if settings.auth_mode == "jwt":
             validator = _validator(settings, settings.api_audiences, settings.allowed_client_ids, settings.required_scope, fetch_jwks)
-        mcp_app = IdentityMiddleware(create_mcp(rt).streamable_http_app(), Authenticator(settings.auth_mode, validator),
-                                     on_reject=lambda path, why: audit.emit({"type": "auth_rejected", "path": path, "reason": why}))
+        challenge = facade_app = None
+        if settings.connector_auth == "dynamic":
+            from tfmcp.oauth_facade import FACADE_PATHS, OAuthFacade, challenge_header
+
+            facade_app = OAuthFacade(settings, audit, post=oauth_post).app()
+            challenge = functools.partial(challenge_header, settings)
+        inner = IdentityMiddleware(create_mcp(rt).streamable_http_app(), Authenticator(settings.auth_mode, validator),
+                                   on_reject=lambda path, why: audit.emit({"type": "auth_rejected", "path": path, "reason": why}),
+                                   challenge=challenge)
+        mcp_app = inner
+        if facade_app is not None:
+            async def mcp_app(scope, receive, send):     # discovery / OAuth endpoints are public by design; /mcp is not
+                path = scope.get("path", "")
+                if scope["type"] == "http" and path.startswith(FACADE_PATHS):
+                    return await facade_app(scope, receive, send)
+                return await inner(scope, receive, send)
     if settings.process_role in ("approval", "all"):
         from tfmcp.approval_app import create_approval_app
 
@@ -299,7 +315,9 @@ def create_app(rt: Runtime, fetch_jwks=None):
         return approval_app
 
     async def both(scope, receive, send):       # local "all" mode: one port, two channels
-        if scope["type"] == "lifespan" or scope.get("path", "").startswith("/mcp"):
+        path = scope.get("path", "")
+        if scope["type"] == "lifespan" or path.startswith("/mcp") or \
+                (settings.connector_auth == "dynamic" and path.startswith(("/.well-known/", "/register", "/authorize", "/token"))):
             return await mcp_app(scope, receive, send)
         return await approval_app(scope, receive, send)
     return both

@@ -104,10 +104,22 @@ Storage data roles: front-end = Blob Data **Reader** on `tfstate` and `control`,
 Expected: MCP anonymous -> 401; approval API anonymous -> 401 and with the MCP token -> 401; initialize,
 tools/list (8 tools, none for approving), whoami, catalog -> PASS (your account needs a role).
 
-## 3. Copilot Studio
-Paste `out/copilot-studio-wizard-values.md` (OAuth 2.0 > Manual), use **end-user authentication**, paste
-[agent-instructions.md](agent-instructions.md). Entra ID has no dynamic client registration, so the app is
-pre-registered and pre-consented.
+## 3. Copilot Studio (default: Dynamic discovery)
+1. Copilot Studio: Agent > Tools > Add a tool > New tool > **Model Context Protocol**
+2. Server URL: `https://<mcp-host>/mcp`
+3. Authentication: **OAuth 2.0 > Dynamic discovery**
+4. Create
+5. Create new connection > sign in with your own account
+6. Add to agent, paste `agent-instructions.md` into Instructions
+
+`-ConnectorAuth dynamic` (default) makes the front-end serve the OAuth discovery + registration facade, stores the
+connector secret as a Container Apps secret for the `/token` proxy, sets `PUBLIC_BASE_URL`, registers the redirect
+URIs on the connector app (`-ExtraRedirectUris` adds more, exact https URLs only) and sets Easy Auth to allow
+anonymous (the server validates tokens itself). **Fallback** - if the wizard has no Dynamic discovery option or it
+fails - is the Manual section of `out/copilot-studio-wizard-values.md`; it works against the same deployment.
+`-ConnectorAuth manual` restores the v2.2 behaviour exactly (Easy Auth returns 401, no facade, no secret in the app).
+The pre-built custom connector from the installer always uses the manual OAuth settings.
+Not verified against a real Copilot Studio wizard; see SECURITY.md for the trade-off.
 
 ## 4. Approving
 The requester gets a link from the agent (`https://<approval-host>/?plan=<id>`) and passes it on - or

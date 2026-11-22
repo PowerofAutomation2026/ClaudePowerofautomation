@@ -77,6 +77,11 @@ param(
   [ValidateSet('jwt', 'easyauth')] [string] $AuthMode = 'jwt',   # jwt: the server re-validates the token itself; easyauth: trust Easy Auth headers
   [string[]] $AllowedCidrs,                       # ingress IP allow-list
   [switch] $RotateConnectorSecret,
+  # dynamic: Copilot Studio's "OAuth 2.0 > Dynamic discovery" - the maker pastes only the server URL. The MCP front-end then
+  #          serves the OAuth discovery/registration/authorize/token facade and is reachable anonymously (it validates tokens itself).
+  # manual : the v2.2 behaviour - Easy Auth returns 401, the maker pastes seven values and the client secret.
+  [ValidateSet('dynamic', 'manual')] [string] $ConnectorAuth = 'dynamic',
+  [string[]] $ExtraRedirectUris = @(),            # more exact redirect URIs to allow (the Copilot Studio one is always included)
   [switch] $SkipPacConnector,                     # the installer creates the connector itself (inside a solution)
   [switch] $Destroy
 )
@@ -125,6 +130,8 @@ $Environments = Split-List $Environments
 $LockEnvironments = Split-List $LockEnvironments
 $ApprovalAllowedCidrs = Split-List $ApprovalAllowedCidrs
 $PlanRoleExtraActions = Split-List $PlanRoleExtraActions
+$ExtraRedirectUris = Split-List $ExtraRedirectUris
+$redirectUris = @(@('https://global.consent.azure-apim.net/redirect') + $ExtraRedirectUris | Select-Object -Unique)
 $ApprovalEnvironments = Split-List $ApprovalEnvironments
 $AllowedCidrs = Split-List $AllowedCidrs
 
@@ -156,6 +163,8 @@ if ($Destroy) {
   return
 }
 if ($InternalIngress -and -not $PrivateNetworking) { throw '-InternalIngress needs -PrivateNetworking.' }
+if ($ConnectorAuth -eq 'dynamic' -and $AuthMode -ne 'jwt') { throw '-ConnectorAuth dynamic needs -AuthMode jwt (the server must validate tokens itself). Use -ConnectorAuth manual with -AuthMode easyauth.' }
+foreach ($u in $redirectUris) { if ($u -notmatch '^https://[A-Za-z0-9.-]+(:\d+)?(/[A-Za-z0-9._~/-]*)?$') { throw "Redirect URI '$u' must be an exact https URL without wildcard, query or fragment." } }
 if ($EnableMonitoring -and -not $AlertEmail) { throw '-EnableMonitoring needs -AlertEmail.' }
 if ($MaxReplicas -lt $MinReplicas) { throw '-MaxReplicas must be >= -MinReplicas.' }
 
@@ -442,6 +451,7 @@ if ($RotateConnectorSecret -or -not (Test-Path $secretFile)) {
   Write-Host '   keeping the existing connector client secret (use -RotateConnectorSecret to replace it)' -ForegroundColor DarkGray
 }
 if (-not (Test-AzCli ad sp show --id $cliId)) { Invoke-AzCli ad sp create --id $cliId | Out-Null }
+Invoke-AzCli ad app update --id $cliId --web-redirect-uris @redirectUris | Out-Null      # exact redirect URIs, also enforced by the server
 Invoke-AzCli ad app permission add --id $cliId --api $apiId --api-permissions "$scopeId=Scope" | Out-Null
 try { Invoke-WithRetry -What 'admin consent' -Attempts 3 -DelaySeconds $retrySeconds -Action { Invoke-AzCli ad app permission grant --id $cliId --api $apiId --scope access_as_user | Out-Null } }
 catch { Write-Warning 'Admin consent was not granted automatically. Ask a Global Administrator to grant it for the connector app in Entra ID.' }
@@ -503,14 +513,20 @@ $commonVars = @(
   'TOKEN_BROKER=auto', 'SHUTDOWN_GRACE_SECONDS=540'
 )
 if ($ApprovalRequireAmr) { $commonVars += "APPROVAL_REQUIRE_AMR=$ApprovalRequireAmr" }
-function Deploy-ContainerApp([string] $Name, [hashtable] $Identity, [string[]] $EnvVars, [int] $Min, [int] $Max, [string] $WebhookSecret) {
+function Deploy-ContainerApp([string] $Name, [hashtable] $Identity, [string[]] $EnvVars, [int] $Min, [int] $Max, [string] $WebhookSecret, [string] $ConnectorSecret) {
   $vars = $EnvVars + "AZURE_CLIENT_ID=$($Identity.clientId)"
-  $secretArgs = @()
+  $secretValues = @()
   if ($WebhookSecret) {
     # the webhook URL is a credential: stored as a Container Apps secret, referenced from the environment
-    $secretArgs = @('--secrets', "notify-webhook=$WebhookSecret")
+    $secretValues += "notify-webhook=$WebhookSecret"
     $vars += 'NOTIFY_WEBHOOK_URL=secretref:notify-webhook'
   }
+  if ($ConnectorSecret) {
+    # used only by the /token proxy of the OAuth facade; a Container Apps secret, never a plain environment value
+    $secretValues += "connector-secret=$ConnectorSecret"
+    $vars += 'CONNECTOR_CLIENT_SECRET=secretref:connector-secret'
+  }
+  $secretArgs = if ($secretValues) { @('--secrets') + $secretValues } else { @() }
   if (-not (Test-AzCli containerapp show -g $rg -n $Name)) {
     Invoke-WithRetry -What 'AcrPull role propagation' -DelaySeconds $retrySeconds -Action {
       Invoke-AzCli containerapp create -g $rg -n $Name --environment $envName --image $image --target-port 8080 --ingress $ingress --transport http `
@@ -522,7 +538,7 @@ function Deploy-ContainerApp([string] $Name, [hashtable] $Identity, [string[]] $
     Invoke-WithRetry -What 'AcrPull role propagation' -DelaySeconds $retrySeconds -Action {
       Invoke-AzCli containerapp registry set -g $rg -n $Name --server "$acr.azurecr.io" --identity $Identity.id | Out-Null
     }
-    if ($WebhookSecret) { Invoke-AzCli containerapp secret set -g $rg -n $Name @secretArgs | Out-Null }
+    if ($secretValues) { Invoke-AzCli containerapp secret set -g $rg -n $Name @secretArgs | Out-Null }
     Invoke-AzCli containerapp update -g $rg -n $Name --image $image --replace-env-vars @vars --min-replicas $Min --max-replicas $Max --cpu 1 --memory 2Gi | Out-Null
   }
   # Give Terraform time to stop cleanly (write state, release its lock) when a replica is scaled in or replaced.
@@ -544,7 +560,20 @@ if ($ApprovalAllowedCidrs) {
 }
 # 6b. MCP front-end
 $frontVars = $commonVars + 'TFMCP_ROLE=frontend' + "APPROVAL_BASE_URL=https://$approvalFqdn"
-$fqdn = Deploy-ContainerApp $app $planMi $frontVars $MinReplicas $MaxReplicas $NotifyWebhookUrl
+$connectorSecret = ''
+$knownFqdn = ''
+if ($ConnectorAuth -eq 'dynamic') {
+  $connectorSecret = (Get-Content -Raw -Path $secretFile).Trim()
+  $frontVars += @('CONNECTOR_AUTH=dynamic', "CONNECTOR_CLIENT_ID=$cliId", "OAUTH_SCOPE=api://$apiId/access_as_user", "REDIRECT_URIS=$($redirectUris -join ',')")
+  if (Test-AzCli containerapp show -g $rg -n $app) { $knownFqdn = Invoke-AzCli containerapp show -g $rg -n $app --query properties.configuration.ingress.fqdn -o tsv }
+  if ($knownFqdn) { $frontVars += "PUBLIC_BASE_URL=https://$knownFqdn" }
+}
+$fqdn = Deploy-ContainerApp $app $planMi $frontVars $MinReplicas $MaxReplicas $NotifyWebhookUrl $connectorSecret
+$connectorSecret = $null
+if ($ConnectorAuth -eq 'dynamic' -and -not $knownFqdn) {
+  # the public address is only known after the first creation; all OAuth metadata is built from this value, never from a Host header
+  Invoke-AzCli containerapp update -g $rg -n $app --set-env-vars "PUBLIC_BASE_URL=https://$fqdn" | Out-Null
+}
 if (-not $NoResourceLocks) {
   # The MCP's own resource group (state storage, registry, logs, apps) cannot be deleted while this lock exists.
   Invoke-AzCli lock create --name $lockName --lock-type CanNotDelete --resource-group $rg `
@@ -552,9 +581,13 @@ if (-not $NoResourceLocks) {
 }
 
 # --- 7. authentication -----------------------------------------------------------------------
-Write-Host '7/9 Container Apps authentication (anonymous calls get 401; the server validates the token again)' -ForegroundColor Cyan
+Write-Host "7/9 Authentication ($ConnectorAuth): anonymous calls to /mcp get 401; the server validates every token itself" -ForegroundColor Cyan
 Invoke-AzCli containerapp auth microsoft update -g $rg -n $app --client-id $apiId --tenant-id $tenantId --allowed-audiences "api://$apiId" --yes | Out-Null
-Invoke-AzCli containerapp auth update -g $rg -n $app --enabled true --unauthenticated-client-action Return401 --yes | Out-Null
+# manual : Easy Auth rejects anonymous calls before they reach the app.
+# dynamic: Easy Auth lets anonymous calls through so the app can answer with the OAuth discovery challenge and serve the
+#          facade endpoints; /mcp is protected by the server's own token validation (AUTH_MODE=jwt), which is tested.
+$anonymousAction = if ($ConnectorAuth -eq 'dynamic') { 'AllowAnonymous' } else { 'Return401' }
+Invoke-AzCli containerapp auth update -g $rg -n $app --enabled true --unauthenticated-client-action $anonymousAction --yes | Out-Null
 
 if ($SecurityGroupId) {
   Write-Host '     restricting access to the Entra group (needs Entra ID P1)' -ForegroundColor Cyan
@@ -629,9 +662,7 @@ Set-Content -Path (Join-Path $outDir 'environments.json') -Value ($envConfig | C
 
 # Entra ID has no dynamic client registration, so the wizard's "Dynamic discovery" cannot self-register;
 # the app is pre-created and pre-consented instead, so makers paste these values once.
-@"
-# Copilot Studio - add Azure Terraform MCP (copy/paste)
-
+$manualSection = @"
 Agent > Tools > Add a tool > New tool > Model Context Protocol
 
 | Field | Value |
@@ -657,7 +688,32 @@ Finally paste agent-instructions.md into the agent's Instructions.
 Approvals are NOT done in Copilot Studio. Approvers open https://$approvalFqdn/ and sign in again there.
 Kill switch (admins): POST https://$approvalFqdn/api/freeze {"frozen": true, "reason": "..."} with an approval-audience token.
 Each user signs in with their own account: approvals and the audit trail use that identity.
-"@ | Set-Content -Path (Join-Path $outDir 'copilot-studio-wizard-values.md') -Encoding utf8
+"@
+$wizard = if ($ConnectorAuth -eq 'dynamic') { @"
+# Copilot Studio - add Azure Terraform MCP
+
+## Primary: OAuth 2.0 > Dynamic discovery (one field)
+
+1. Agent > Tools > Add a tool > New tool > **Model Context Protocol**
+2. Server name: Azure Terraform MCP    Server URL: **https://$fqdn/mcp**
+3. Authentication: **OAuth 2.0** > **Dynamic discovery**
+4. Create
+5. Create new connection > sign in with your own account
+6. Add to agent, then paste agent-instructions.md into the agent's Instructions.
+
+No client id, secret or URLs to paste: the server publishes its OAuth metadata and registers the connection itself.
+Each user signs in with their own account: approvals and the audit trail use that identity.
+If the wizard shows a redirect URL that is not in this list, re-run the deploy with -ExtraRedirectUris <that URL>:
+$(($redirectUris | ForEach-Object { "  - $_" }) -join "`n")
+
+## FALLBACK: if your wizard has no "Dynamic discovery" option, or it fails
+
+Not every tenant's wizard offers Dynamic discovery, and its exact behaviour could not be verified by the authors.
+The manual route below always works with the same server (choose OAuth 2.0 > **Manual**):
+
+$manualSection
+"@ } else { "# Copilot Studio - add Azure Terraform MCP (copy/paste)`n`n$manualSection" }
+$wizard | Set-Content -Path (Join-Path $outDir 'copilot-studio-wizard-values.md') -Encoding utf8
 
 if (-not $SkipPacConnector -and (Get-Command pac -CommandType Application -ErrorAction SilentlyContinue)) {
   Write-Host '     pac found: creating the connector (select your Power Platform environment first with `pac auth`)' -ForegroundColor Cyan
@@ -679,10 +735,9 @@ Roles             : custom role JSON in out/role-*.json; assign people via -Requ
 Private networking: $([bool]$PrivateNetworking)   Group-restricted: $([bool]$SecurityGroupId)   IP allow-list: $([bool]$AllowedCidrs)
 Smoke test        : ./Test-TerraformMcp.ps1 -SubscriptionId $SubscriptionId -Prefix $Prefix
 
-Next, in Copilot Studio (about one minute):
-  open out/copilot-studio-wizard-values.md and paste its values into
-  Agent > Tools > Add a tool > New tool > Model Context Protocol, then paste agent-instructions.md
-  into the agent's Instructions.
+Next, in Copilot Studio ($ConnectorAuth):
+  $(if ($ConnectorAuth -eq 'dynamic') { "Agent > Tools > Add a tool > New tool > Model Context Protocol > Server URL https://$fqdn/mcp >`n  OAuth 2.0 > Dynamic discovery > Create > Create new connection > sign in.  (Fallback: out/copilot-studio-wizard-values.md)" } else { 'open out/copilot-studio-wizard-values.md and paste its values (OAuth 2.0 > Manual).' })
+  Then paste agent-instructions.md into the agent's Instructions.
 Check: an anonymous POST to https://$fqdn/mcp must return 401.
 "@ | Write-Host
 if ($InternalIngress) {

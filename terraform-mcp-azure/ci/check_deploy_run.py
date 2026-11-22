@@ -31,6 +31,10 @@ def env_vars(call, flag):
     return dict(v.split("=", 1) for v in multi(call, flag))
 
 
+def swagger_host():
+    return json.loads((work / "out" / "terraform-mcp.swagger.json").read_text())["host"]
+
+
 def expect(cond, msg):
     if not cond:
         print(f"CHECK FAILED [{scenario}]: {msg}")
@@ -118,7 +122,24 @@ expect(len(env["AZURE_CLIENT_ID"]) == 36 and env["STATE_SA"].startswith("st"), "
 expect(opt(app_call, "--image").endswith(image_tags[0]), "app uses the image that was just built")
 auth = find("containerapp", "auth", "microsoft", "update")[0]
 expect(opt(auth, "--client-id") == api_id and opt(auth, "--allowed-audiences") == f"api://{api_id}" and "--client-secret" not in auth, "Easy Auth config")
-expect(opt(find("containerapp", "auth", "update")[0], "--unauthenticated-client-action") == "Return401", "anonymous -> 401")
+dynamic = scenario != "manual"
+expect(opt(find("containerapp", "auth", "update")[0], "--unauthenticated-client-action") == ("AllowAnonymous" if dynamic else "Return401"), "Easy Auth action matches the connector mode")
+set_base = [c for c in find("containerapp", "update") if "--set-env-vars" in c and any(a.startswith("PUBLIC_BASE_URL=") for a in c)]
+if dynamic:
+    expect(env["CONNECTOR_AUTH"] == "dynamic" and env["CONNECTOR_CLIENT_SECRET"] == "secretref:connector-secret", "facade on; secret only as a secret reference")
+    expect(env["OAUTH_SCOPE"] == f"api://{api_id}/access_as_user" and env["REDIRECT_URIS"].split(",")[0] == "https://global.consent.azure-apim.net/redirect", "scope and redirect allow-list")
+    expect("--secrets" in app_call or find("containerapp", "secret", "set"), "connector secret stored as a Container Apps secret")
+    expect("CONNECTOR_AUTH" not in back_env and "CONNECTOR_CLIENT_SECRET" not in back_env, "the approval service gets no facade and no connector secret")
+    if scenario == "rerun":
+        expect(env.get("PUBLIC_BASE_URL", "").startswith("https://ca-") and not set_base, "re-run knows the public URL up front")
+    else:
+        expect(len(set_base) == 1 and opt(set_base[0], "-n") == FRONT, "public base URL set after the first creation")
+        env["PUBLIC_BASE_URL"] = [a for a in set_base[0] if a.startswith("PUBLIC_BASE_URL=")][0].split("=", 1)[1]
+    expect(env["PUBLIC_BASE_URL"] == f"https://{swagger_host()}", "PUBLIC_BASE_URL is the app's own address")
+    upd = find("ad", "app", "update")
+    expect(upd and "https://global.consent.azure-apim.net/redirect" in upd[0], "redirect URIs registered on the connector app")
+else:
+    expect("CONNECTOR_AUTH" not in env and "CONNECTOR_CLIENT_SECRET" not in env and not set_base, "manual mode: no facade settings")
 for name, cfg in envs.items():
     scope = f"/subscriptions/{cfg['subscription_id']}/resourceGroups/{cfg['resource_group']}"
     expect(any(r == (plan_role[0][0], scope) for r in roles) and any(r[1] == scope for r in apply_role), f"plan + apply roles on {scope}")
@@ -137,12 +158,19 @@ expect(oauth["scopes"] == [f"api://{api_id}/access_as_user"] and len(oauth["clie
 secret = (work / "out" / "connector-client-secret.txt").read_text()
 wizard = (work / "out" / "copilot-studio-wizard-values.md").read_text()
 expect(secret and secret not in wizard and secret not in json.dumps(swagger) + json.dumps(props) and secret not in out, "client secret only in its own file")
-expect(all(secret not in " ".join(c) for c in calls), "client secret never passed back to az / app settings")
+leaks = [c for c in calls if any(secret in a and not a.startswith("connector-secret=") for a in c)]
+expect(not leaks, "client secret reaches az only as the value of the Container Apps secret 'connector-secret'")
+if scenario == "manual":
+    expect(all(secret not in " ".join(c) for c in calls), "manual mode: the secret is never passed to az")
 expect(f"https://{swagger['host']}/mcp" in wizard and "OAuth 2.0 > Manual" in wizard, "wizard values")
+if scenario != "manual":
+    expect("Dynamic discovery" in wizard and wizard.index("Dynamic discovery") < wizard.index("FALLBACK") < wizard.index("OAuth 2.0 > Manual"), "dynamic is primary, manual is the fallback")
+else:
+    expect("Dynamic discovery" not in wizard, "manual mode keeps the old wizard file")
 graph = graph_patches[0]
 expect(opt(graph, "--body").startswith("@"), "Graph body passed as a file")
 
-if scenario == "default":
+if scenario in ("default", "manual"):
     expect(list(envs) == ["dev"] and envs["dev"] == {"resource_group": "rg-aztfmcp-dev", "subscription_id": SUB, "allowed_locations": ["eastus2"],
                                                      "policy_profile": "standard", "enable_apply": False, "enable_destroy": False,
                                                      "require_approval": False, "allow_ephemeral": True, "allow_self_approval": True}, f"default environments {envs}")
@@ -180,6 +208,7 @@ if scenario == "full":
     acl = find("containerapp", "ingress", "access-restriction", "set")
     expect([opt(c, "--ip-address") for c in acl if opt(c, "-n") == FRONT] == ["203.0.113.0/24", "198.51.100.7/32"], "IP allow-list (MCP)")
     expect([opt(c, "--ip-address") for c in acl if opt(c, "-n") == BACK] == ["203.0.113.0/24"], "IP allow-list (approval page)")
+    expect(env["REDIRECT_URIS"] == "https://global.consent.azure-apim.net/redirect,https://copilot.example/cb", "extra redirect URI")
     expect(opt(app_call, "--max-replicas") == "4", "max replicas")
 
 if scenario == "rerun":
@@ -194,5 +223,6 @@ sys.path.insert(0, str(work / "server"))
 from tfmcp.config import Settings  # noqa: E402
 for e in (env, back_env):
     settings = Settings.from_env({**e, "NOTIFY_WEBHOOK_URL": "https://x"})
+    expect(settings.connector_auth == ("dynamic" if dynamic and e is env else "manual"), "connector mode parsed by the server")
     expect(sorted(settings.environments) == sorted(envs), "server parses the generated configuration")
 print(f"OK   {scenario}: {len(calls)} az calls verified")

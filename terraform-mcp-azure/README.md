@@ -1,4 +1,4 @@
-# Azure Terraform MCP (v2.2) - Terraform for Copilot Studio agents that stays safe when the agent is not
+# Azure Terraform MCP (v2.3) - Terraform for Copilot Studio agents that stays safe when the agent is not
 
 A Copilot Studio agent can plan Azure infrastructure from approved Terraform templates. **It cannot change or
 destroy anything on its own** - not when it is prompt-injected, not with a stolen user token, not when the
@@ -42,6 +42,21 @@ platform; agent instructions are never a control. We do not claim it cannot be a
 | **Token and supply-chain checks** | JWT signature/audience/issuer/tenant/expiry, client-app allow-list (`azp`), required scope, token age for writes. Base image pinned by digest, Terraform and providers checksum-verified, provider lock file, integrity manifest for templates and policies (server refuses to start on mismatch). |
 | **Small token footprint** | 8 tools (was 18), compact JSON, no duplicated structured output, one-line catalog, paging, `fields`, etag polling. Numbers below. |
 | **Still there from v2.0** | 15 secure-by-default templates, policy gate on the plan, cost estimate and budget cap, environments, explain-this-plan, time-boxed deployments, drift detection, rollback, durable operations. |
+
+## Connecting Copilot Studio: paste one URL (v2.3)
+
+1. Copilot Studio: Agent > Tools > Add a tool > New tool > **Model Context Protocol**
+2. Server URL: `https://<mcp-host>/mcp`
+3. Authentication: **OAuth 2.0 > Dynamic discovery**
+4. Create
+5. Create new connection > sign in with your own account
+6. Add to agent, paste `agent-instructions.md` into Instructions
+
+This works because the MCP front-end now serves the OAuth discovery metadata and a registration / authorize /
+token facade in front of Entra ID (which has no dynamic client registration). No client id or secret is pasted.
+If your wizard has no *Dynamic discovery* option, or it fails, use the **FALLBACK** section of
+`out/copilot-studio-wizard-values.md` (OAuth 2.0 > Manual) - same server, no reinstall. Deploy with
+`-ConnectorAuth manual` to switch the facade off and keep Easy Auth in front of `/mcp`. Trade-offs: SECURITY.md.
 
 ## Token footprint (estimate: characters / 4)
 
@@ -113,7 +128,7 @@ Security: [SECURITY.md](SECURITY.md), [THREAT-MODEL.md](THREAT-MODEL.md). Backgr
 
 No Azure tenant and no Copilot Studio environment were available. Tested locally:
 
-* **239 unit/integration tests** (`pytest`; 3 more run against the Azurite storage emulator): RBAC matrix,
+* **267 unit/integration tests** (`pytest`; 3 more run against the Azurite storage emulator): RBAC matrix,
   per-user visibility, out-of-band approval (two-person, self, replay, expiry, stale sign-in, MFA claim,
   wrong audience, changed plan, forged approval, swapped plan file, plan JSON that lies about the file),
   freeze / anomaly auto-freeze / rate limits / quotas / change windows, protected deployments, injection and
@@ -132,6 +147,17 @@ No Azure tenant and no Copilot Studio environment were available. Tested locally
   CLIs in 12 runs (preflight, what-if, unattended install, re-run, failure and resume, failed preflight,
   Power Platform failure, interactive wizard with typed answers, uninstall). `blog/index.html` rendered with
   headless Chromium at desktop and phone widths, light and dark: no console errors, no horizontal scroll.
+
+* **Dynamic discovery (v2.3)**: 28 tests for the facade (full client flow, 11 redirect-URI attacks, PKCE/state,
+  scope and `resource` handling, host-header spoofing, body/content-type limits, rate limits, secret never in
+  any response/log/audit record, manual mode unaffected, approval service unaffected). **Local end-to-end run on
+  the real server**: `Test-TerraformMcp.ps1` walked 401 challenge -> resource metadata -> server metadata ->
+  register (good and bad) -> authorize (redirect inspected) -> `/token` against a stub "Entra" (which confirmed it
+  received the server-side secret and no `resource`) -> MCP calls with the issued token: all checks passed.
+
+**Not tested (v2.3):** the real Copilot Studio *Dynamic discovery* wizard and real Entra ID. MCP authorization
+spec revisions differ between clients (2025-03-26 vs 2025-06-18 with resource indicators); whether the wizard
+requires a client secret or accepts `token_endpoint_auth_method: none` is unknown. Manual remains the fallback.
 
 **Not tested (v2.2 additions):** `Install.cmd` (reviewed only - no Windows), winget installs, and every Power
 Platform call (`pac connector`, Dataverse solution creation, connector sharing, DLP read, `pac copilot create`).

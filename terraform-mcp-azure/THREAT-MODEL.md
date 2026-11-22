@@ -94,6 +94,19 @@ policies verified against `integrity.json` at build and at every start. **Residu
 publishers at pin time; no image signing/SBOM/scanning in this package; the approval page loads MSAL from
 Microsoft's CDN (pinned version, no subresource-integrity hash).
 
+### I. The unauthenticated OAuth facade (v2.3, `-ConnectorAuth dynamic`)
+| Attack | What stops it | Residual |
+|---|---|---|
+| Open redirect / phishing through `/authorize` | Redirects only to the fixed Entra authorize URL of the tenant; `redirect_uri` must exactly equal an allow-listed value; errors are answered directly, never by redirect. | A link to our `/authorize` leads to the genuine Entra sign-in for the genuine connector app - as any OAuth client's link does. |
+| Register a malicious client / redirect | `/register` creates nothing: it returns the one pre-registered client and refuses any redirect URI not on the allow-list. | - |
+| Authorization-code interception | PKCE S256 required by the facade and enforced by Entra; codes are single use at Entra; redirect URI must match. | Compromise of Copilot Studio's redirect endpoint itself. |
+| Use `/token` as a confidential-client oracle | Needs a valid code for the connector app and allowed redirect URI plus its PKCE verifier; scope is forced; only two grant types; rate limited. | Whoever legitimately completes a sign-in gets a token for themselves - intended. Refresh tokens presented to `/token` are exchanged; a stolen refresh token is as dangerous as with any OAuth client. |
+| Host-header spoofing to poison metadata | All URLs come from `PUBLIC_BASE_URL`. | Mis-set configuration. |
+| SSRF | No user-supplied URL is ever fetched; upstream URL is fixed; no redirects followed. | - |
+| Secret leak | Never returned, never logged; registered with the log scrubber; held as a Container Apps secret. | Readable by code running in the front-end container. |
+| Flooding | Per-address rate limits, body cap, small in-memory state. | Addresses can be rotated; add an IP allow-list or a WAF if needed. |
+| Bypass of `/mcp` protection now that Easy Auth allows anonymous | The server validates every request itself; tests assert 401 for every method without a valid token. | One layer instead of two for the MCP endpoint (use manual mode to keep Easy Auth in front). |
+
 ## STRIDE summary
 | | Main controls |
 |---|---|

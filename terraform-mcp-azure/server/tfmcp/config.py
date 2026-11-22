@@ -171,6 +171,14 @@ class Settings:
     anomaly_destroy_plans_per_hour: int = 6          # per user -> auto-freeze
     anomaly_plans_per_10min: int = 80                # all users -> auto-freeze
     integrity_check: bool = True
+    # --- OAuth facade for Copilot Studio "Dynamic discovery" (front-end only) ---------------------
+    connector_auth: str = "manual"          # dynamic: serve discovery metadata, /register, /authorize, /token
+    public_base_url: str = ""               # https://<host> - URLs are built from this, never from the Host header
+    connector_client_id: str = ""           # the pre-registered Entra connector app
+    connector_client_secret: str = field(default="", repr=False)   # injected server-side at /token; never returned or logged
+    redirect_uris: list[str] = field(default_factory=list)          # exact-match allow-list
+    oauth_scope: str = ""                   # api://<api-app-id>/access_as_user
+    entra_base_url: str = "https://login.microsoftonline.com"       # fixed; override only for local tests
 
     def env(self, name: str | None) -> EnvironmentConfig:
         name = name or self.default_environment
@@ -231,8 +239,31 @@ class Settings:
                 raise ConfigError(f"ROLE_GROUPS_B64: roles must be among {ROLES}")
         if auth_mode == "jwt" and role in ("approval", "all") and env.get("APPROVAL_AUDIENCES") is None and role == "approval":
             raise ConfigError("TFMCP_ROLE=approval needs APPROVAL_AUDIENCES")
+        connector_auth = env.get("CONNECTOR_AUTH", "manual").lower()
+        if connector_auth not in ("dynamic", "manual"):
+            raise ConfigError("CONNECTOR_AUTH must be dynamic or manual")
+        base = env.get("PUBLIC_BASE_URL", "").rstrip("/")
+        if not base and env.get("CONTAINER_APP_NAME") and env.get("CONTAINER_APP_ENV_DNS_SUFFIX"):
+            base = f"https://{env['CONTAINER_APP_NAME']}.{env['CONTAINER_APP_ENV_DNS_SUFFIX']}"   # set by Container Apps
+        redirects = csv("REDIRECT_URIS") or ["https://global.consent.azure-apim.net/redirect"]
+        entra = env.get("ENTRA_BASE_URL", "https://login.microsoftonline.com").rstrip("/")
+        if connector_auth == "dynamic" and role in ("frontend", "all"):
+            local = re.match(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$", base)
+            if auth_mode != "jwt":
+                raise ConfigError("CONNECTOR_AUTH=dynamic needs AUTH_MODE=jwt (the server itself must validate tokens)")
+            if not (re.match(r"^https://[A-Za-z0-9.-]+(:\d+)?$", base) or local):
+                raise ConfigError("CONNECTOR_AUTH=dynamic needs PUBLIC_BASE_URL=https://<public host> (no path)")
+            for key in ("CONNECTOR_CLIENT_ID", "CONNECTOR_CLIENT_SECRET", "OAUTH_SCOPE"):
+                if not env.get(key):
+                    raise ConfigError(f"CONNECTOR_AUTH=dynamic needs {key}")
+            for uri in redirects:
+                if not re.match(r"^https://[A-Za-z0-9.-]+(:\d+)?(/[A-Za-z0-9._~/-]*)?$", uri) and not (local and uri.startswith("http://127.0.0.1")):
+                    raise ConfigError(f"REDIRECT_URIS: '{uri}' must be an exact https URL without wildcard, query or fragment")
         here = pathlib.Path(__file__).resolve().parent.parent
         return cls(
+            connector_auth=connector_auth, public_base_url=base, connector_client_id=env.get("CONNECTOR_CLIENT_ID", ""),
+            connector_client_secret=env.get("CONNECTOR_CLIENT_SECRET", ""), redirect_uris=redirects,
+            oauth_scope=env.get("OAUTH_SCOPE", ""), entra_base_url=entra,
             process_role=role,
             rbac=env.get("RBAC", "enforce").lower(),
             role_groups={k: [g.lower() for g in v] for k, v in role_groups.items()},

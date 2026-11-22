@@ -2,11 +2,17 @@
   "subscriptionId": "00000000-0000-0000-0000-000000000000",
   "prefix": "aztfmcp",
   "location": "eastus2",
-  "environments": ["dev", "test", "prod"],
+  "environments": [
+    "dev",
+    "test",
+    "prod"
+  ],
   "allowedLocations": "eastus2,westus2",
   "enableApply": false,
   "enableDestroy": false,
-  "lockEnvironments": ["prod"],
+  "lockEnvironments": [
+    "prod"
+  ],
   "groupNames": {
     "viewers": "Azure Terraform MCP Viewers",
     "requesters": "Azure Terraform MCP Requesters",
@@ -27,5 +33,7 @@
     "shareWithGroups": true,
     "agentTemplateFile": null
   },
-  "skipSmokeTest": false
+  "skipSmokeTest": false,
+  "connectorAuth": "dynamic",
+  "extraRedirectUris": []
 }

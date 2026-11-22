@@ -17,6 +17,35 @@ locally signed tokens; none has been confirmed against live Entra ID / Azure. Re
 | Untrusted output and log scrubbing | `tfmcp/sanitize.py` |
 | Template/policy integrity | `tfmcp/integrity.py`, `integrity.json` |
 
+## OAuth facade for "Dynamic discovery" (v2.3, default)
+Copilot Studio's *Dynamic discovery* needs RFC 9728/8414 metadata and RFC 7591 client registration. Entra ID
+offers no registration endpoint and Easy Auth answers 401 without a challenge, so in `-ConnectorAuth dynamic` the
+MCP front-end serves a small facade (`tfmcp/oauth_facade.py`): `/.well-known/oauth-protected-resource`,
+`/.well-known/oauth-authorization-server`, `POST /register`, `GET /authorize`, `POST /token`.
+
+**What changes, honestly:**
+* Easy Auth on the front-end is set to *allow anonymous*, so it is **no longer a second layer in front of `/mcp`**.
+  `/mcp` is protected by the server's own token validation only (signature, audience, tenant, client allow-list,
+  scope, age - unchanged and tested: every method without a valid token gets 401). A bug there would not be
+  caught by the platform. Use `-ConnectorAuth manual` if you want Easy Auth in front and accept seven pasted values.
+* The facade endpoints are **unauthenticated by design**. What limits them: URLs built only from the configured
+  `PUBLIC_BASE_URL` (never the Host header); `redirect_uri` exact-match allow-list (default only Copilot
+  Studio's `https://global.consent.azure-apim.net/redirect`); one fixed client; PKCE S256 and `state` required;
+  scopes forced to the MCP scope; `resource` dropped; `/authorize` redirects only to Entra for your tenant;
+  `/token` posts only to Entra's fixed token URL; 8 KB body limit; per-address rate limits (register 10/min,
+  token 30/min, authorize 60/min); `no-store`; every registration, refusal and token exchange is logged
+  (without codes, tokens or the secret).
+* The front-end now **holds the connector app's client secret** (a Container Apps secret) to complete the code
+  exchange. `/register` hands every caller the same public `client_id` and never a secret, but `/token` adds the
+  secret for anyone presenting a valid authorization code + PKCE verifier for an allowed redirect URI. An
+  attacker therefore still needs a real user sign-in at Entra *and* control of an allowed redirect URI to obtain
+  a token. A compromised front-end container can read this secret (it could already see users' tokens).
+* It issues no tokens of its own: tokens come from Entra and are validated as before. The approval service has
+  no facade and keeps its separate audience.
+* **Unverified:** the real Copilot Studio wizard (whether it insists on a client secret, how it treats
+  `token_endpoint_auth_method: none`, which MCP authorization spec revision it follows - 2025-03-26 vs 2025-06-18
+  with resource indicators) and real Entra behaviour with these parameters. That is why Manual stays as a fallback.
+
 ## What you must configure
 1. **Roles.** Assign Entra groups: `-RequesterGroupId`, `-ViewerGroupId`, `-AdminGroupId` (API app roles) and
    `-ApproverGroupId`, `-AdminGroupId` (approval app roles). Without a role every call is refused.

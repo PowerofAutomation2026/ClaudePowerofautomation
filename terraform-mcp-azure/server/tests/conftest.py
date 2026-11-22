@@ -267,6 +267,7 @@ def mint(who: Identity, *, aud=MCP_AUD, azp=CONNECTOR, scp="access_as_user", age
 
 
 def jwt_settings(environments=None, **over) -> Settings:
-    return make_settings(environments, AUTH_MODE="jwt", API_AUDIENCES=MCP_AUD, ALLOWED_CLIENT_IDS=CONNECTOR,
-                         REQUIRED_SCOPE="access_as_user", APPROVAL_AUDIENCES=APPROVAL_AUD, APPROVAL_CLIENT_IDS=APPROVAL_SPA,
-                         APPROVAL_BASE_URL="https://approve.example", **over)
+    base = dict(AUTH_MODE="jwt", API_AUDIENCES=MCP_AUD, ALLOWED_CLIENT_IDS=CONNECTOR, REQUIRED_SCOPE="access_as_user",
+                APPROVAL_AUDIENCES=APPROVAL_AUD, APPROVAL_CLIENT_IDS=APPROVAL_SPA, APPROVAL_BASE_URL="https://approve.example")
+    base.update(over)
+    return make_settings(environments, **base)

@@ -225,10 +225,12 @@ class Authenticator:
 class IdentityMiddleware:
     """Pure ASGI middleware: authenticate, publish the identity, or answer 401."""
 
-    def __init__(self, app, authenticator: Authenticator, on_reject: Callable[[str, str], None] | None = None) -> None:
+    def __init__(self, app, authenticator: Authenticator, on_reject: Callable[[str, str], None] | None = None,
+                 challenge: Callable[[bool], str] | None = None) -> None:
         self.app = app
         self.auth = authenticator
         self.on_reject = on_reject
+        self.challenge = challenge      # builds the WWW-Authenticate value (MCP authorization discovery)
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -247,9 +249,10 @@ class IdentityMiddleware:
             if self.on_reject:
                 self.on_reject(path, str(e))
             body = json.dumps({"error": "unauthorized", "detail": str(e)}).encode()
+            value = self.challenge("authorization" in headers) if self.challenge else "Bearer"
             await send({"type": "http.response.start", "status": 401,
                         "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode()),
-                                    (b"www-authenticate", b"Bearer")]})
+                                    (b"www-authenticate", value.encode("latin-1"))]})
             await send({"type": "http.response.body", "body": body})
             return
         token = set_identity(identity)

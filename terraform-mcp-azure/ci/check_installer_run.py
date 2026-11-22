@@ -40,6 +40,7 @@ if name in ("preflight", "whatif", "badpreflight"):
         expect(summary["result"] == "preflight-ok" and "PASS  Container Apps available in region - eastus2" in out, "preflight ok")
         expect("PASS  Power Platform environment - Platform Engineering" in out and "WARN  DLP policies" in out, "Power Platform checks")
         expect(("WHAT WOULD HAPPEN" in out) == (name == "whatif"), "-WhatIf prints the plan")
+        expect("WARN  Copilot Studio sign-in mode - Dynamic discovery" in out and "FALLBACK section" in out, "preflight explains the Dynamic discovery requirement")
     print(f"OK   {name}")
     sys.exit(0)
 if name == "blocked":
@@ -68,9 +69,19 @@ everything = summary_file.read_text() + (work / "out" / "install-summary.md").re
 expect(secret not in everything, "the client secret is in no summary and no log")
 expect(summary["mcpUrl"].endswith("/mcp") and "-approval" in summary["approvalUrl"] and set(summary["groups"]) == {"viewers", "requesters", "approvers", "admins"}, "summary content")
 expect("sign in" in (work / "out" / "what-users-do-now.md").read_text().lower(), "user message")
+setup = (work / "out" / "agent-setup.md").read_text()
+mode = "manual" if name == "manualmode" else "dynamic"
+expect(summary["connectorAuth"] == mode, f"summary records the connector mode {mode}")
+front = [c for c in deploys if c[c.index("-n") + 1] == f"ca-{summary['prefix']}"][0]
+expect(("CONNECTOR_AUTH=dynamic" in front) == (mode == "dynamic"), "installer passes the connector mode to the deploy script")
+if mode == "dynamic":
+    expect("OAuth 2.0 > Dynamic discovery" in setup and setup.index("Dynamic discovery") < setup.index("Alternative: the pre-built custom connector"), "agent-setup.md: dynamic first, connector as alternative")
+    expect(summary["mcpUrl"] in setup and "FALLBACK" in setup, "agent-setup.md has the URL and points to the fallback")
+else:
+    expect("Sign-in mode: Manual" in setup and "Dynamic discovery" not in setup.split("## Alternative")[0], "agent-setup.md for manual mode")
 expect(not find(pac, "connector", "create") or "--api-definition-file" in find(pac, "connector", "create")[0], "pac arguments")
 
-if name in ("install", "install2", "resume", "wizard", "pacfail"):
+if name in ("install", "install2", "resume", "wizard", "pacfail", "manualmode"):
     created = [opt(c, "--display-name") for c in find(az, "ad", "group", "create")]
     if name != "resume":
         expect(sorted(created) == ["Azure Terraform MCP Admins", "Azure Terraform MCP Approvers", "Azure Terraform MCP Requesters", "Azure Terraform MCP Viewers"], f"groups created: {created}")

@@ -29,7 +29,19 @@ command-line tools; `Install.cmd` itself could not be run - no Windows machine w
    solution **Azure Terraform MCP** and the custom connector in your Power Platform environment; runs the smoke
    test; and writes `out/install-summary.md`.
    > 📸 **SCREENSHOT 00c** – the green INSTALLED banner with the two URLs.
-5. Open **`out/agent-setup.md`** and do the remaining clicks (they cannot be automated, see below), then
+5. **Connect Copilot Studio by pasting one URL** (v2.3, "Dynamic discovery"):
+   1. Copilot Studio: Agent > Tools > Add a tool > New tool > **Model Context Protocol**
+   2. Server URL: `https://<mcp-host>/mcp`
+   3. Authentication: **OAuth 2.0 > Dynamic discovery**
+   4. Create
+   5. Create new connection > sign in with your own account
+   6. Add to agent, paste `agent-instructions.md` into Instructions
+   > 📸 **SCREENSHOT 00d** – the MCP wizard with Server URL filled in and "OAuth 2.0 > Dynamic discovery" selected.
+
+   If your wizard has no *Dynamic discovery* option, or the connection fails, use section 8.2 (Manual) with the
+   FALLBACK values in `out/copilot-studio-wizard-values.md`. The wizard's behaviour with this server has not
+   been verified by the authors.
+6. Open **`out/agent-setup.md`** for the remaining clicks (they cannot be automated, see below), then
    continue with **section 8.3** (instructions) and **section 9** (examples). Send `out/what-users-do-now.md`
    to your users.
 
@@ -169,7 +181,7 @@ Expected: anonymous calls → **401**; approval API with an MCP token → **401*
 2. **Create** → **New agent** (name it `Azure Platform Assistant`) or open an existing one.
 > 📸 **SCREENSHOT 12** – agent overview page.
 
-### 8.2 Add the MCP server as a tool
+### 8.2 Add the MCP server as a tool (Manual fallback - with v2.3 try Dynamic discovery in section 0 first)
 Open `out/copilot-studio-wizard-values.md` – it has every value pre-filled.
 1. In the agent: **Tools** → **Add a tool** → **New tool** → **Model Context Protocol**.
 2. Fill in:

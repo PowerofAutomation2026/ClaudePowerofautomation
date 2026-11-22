@@ -32,7 +32,19 @@ _INJECTION = re.compile(
     r"|as an ai\b|act as (an? )?(admin|administrator|approver)|approve (this|the) plan|apply (this|the) plan (now|immediately))")
 
 
+_KNOWN_SECRETS: set[str] = set()
+
+
+def register_secret(value: str) -> None:
+    """A secret the process holds (e.g. the connector client secret): removed verbatim from every output and log line."""
+    if value and len(value) >= 8:
+        _KNOWN_SECRETS.add(value)
+
+
 def redact(text: str) -> str:
+    for secret in _KNOWN_SECRETS:
+        if secret in text:
+            text = text.replace(secret, REDACTED)
     for rx in _SECRETS:
         if rx.groups:
             text = rx.sub(lambda m: f"{m.group(1)}={REDACTED}" if not m.group(1).startswith(("?", "&")) else m.group(1) + REDACTED, text)

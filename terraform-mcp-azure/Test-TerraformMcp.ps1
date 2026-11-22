@@ -20,6 +20,7 @@ param(
   [string] $Url,
   [string] $Token,
   [string] $ApprovalUrl,
+  [string] $TokenCode,                   # local end-to-end tests only: exchange this authorization code at the server's /token
   [switch] $AnonymousOnly,               # only the checks that need no token (anonymous calls must be rejected)
   [hashtable] $ExtraHeaders = @{}
 )
@@ -48,8 +49,40 @@ if (-not $Token -and $SubscriptionId -and -not $AnonymousOnly) {
 }
 
 # 1. anonymous calls are rejected
-$anon = try { [int](Invoke-WebRequest $Url -Method Post -Body '{}' -ContentType 'application/json' -SkipHttpErrorCheck).StatusCode } catch { 0 }
+$anonResponse = try { Invoke-WebRequest $Url -Method Post -Body '{}' -ContentType 'application/json' -SkipHttpErrorCheck } catch { $null }
+$anon = if ($anonResponse) { [int]$anonResponse.StatusCode } else { 0 }
 Show 'anonymous POST is rejected' ($anon -eq 401) "(HTTP $anon, expected 401)"
+
+# 1b. OAuth "Dynamic discovery": walk the same path an MCP client (Copilot Studio) takes, knowing only the URL
+$challenge = if ($anonResponse) { "$($anonResponse.Headers['WWW-Authenticate'])" } else { '' }
+if ($challenge -match 'resource_metadata="([^"]+)"') {
+  try {
+    $prm = Invoke-RestMethod $Matches[1]
+    Show 'discovery: protected-resource metadata' ($prm.resource -like '*/mcp' -and @($prm.authorization_servers).Count -eq 1) "(resource $($prm.resource))"
+    $as = "$(@($prm.authorization_servers)[0])".TrimEnd('/')
+    $meta = Invoke-RestMethod "$as/.well-known/oauth-authorization-server"
+    Show 'discovery: authorization-server metadata' ($meta.registration_endpoint -and $meta.code_challenge_methods_supported -contains 'S256' -and $meta.token_endpoint_auth_methods_supported -contains 'none') "(issuer $($meta.issuer))"
+    $redirect = 'https://global.consent.azure-apim.net/redirect'
+    $reg = Invoke-RestMethod $meta.registration_endpoint -Method Post -ContentType 'application/json' -Body (@{ client_name = 'smoke-test'; redirect_uris = @($redirect) } | ConvertTo-Json)
+    Show 'discovery: dynamic client registration' ([bool]$reg.client_id -and -not $reg.client_secret -and $reg.token_endpoint_auth_method -eq 'none') "(client $($reg.client_id), no secret returned)"
+    $bad = [int](Invoke-WebRequest $meta.registration_endpoint -Method Post -ContentType 'application/json' -Body '{"redirect_uris":["https://evil.example/cb"]}' -SkipHttpErrorCheck).StatusCode
+    Show 'discovery: unknown redirect URI is refused' ($bad -eq 400) "(HTTP $bad, expected 400)"
+    $verifier = -join ((1..64) | ForEach-Object { [char](Get-Random -Minimum 97 -Maximum 123) })
+    $hash = [Security.Cryptography.SHA256]::HashData([Text.Encoding]::ASCII.GetBytes($verifier))
+    $codeChallenge = [Convert]::ToBase64String($hash).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    $authUrl = "$($meta.authorization_endpoint)?client_id=$($reg.client_id)&response_type=code&state=smoke&code_challenge=$codeChallenge&code_challenge_method=S256&redirect_uri=$([uri]::EscapeDataString($redirect))"
+    $r = Invoke-WebRequest $authUrl -MaximumRedirection 0 -SkipHttpErrorCheck -ErrorAction SilentlyContinue
+    $location = "$($r.Headers['Location'])"
+    Show 'discovery: /authorize redirects to the tenant sign-in with PKCE' ([int]$r.StatusCode -eq 302 -and $location -match '/oauth2/v2\.0/authorize\?' -and $location -match 'code_challenge_method=S256') "($(($location -split '\?')[0]))"
+    $noPkce = [int](Invoke-WebRequest ($authUrl -replace '&code_challenge=[^&]+', '') -MaximumRedirection 0 -SkipHttpErrorCheck -ErrorAction SilentlyContinue).StatusCode
+    Show 'discovery: /authorize without PKCE is refused' ($noPkce -eq 400) "(HTTP $noPkce, expected 400)"
+    if ($TokenCode) {
+      $tok = Invoke-RestMethod $meta.token_endpoint -Method Post -ContentType 'application/x-www-form-urlencoded' -Body @{ grant_type = 'authorization_code'; client_id = $reg.client_id; code = $TokenCode; redirect_uri = $redirect; code_verifier = $verifier }
+      Show 'discovery: /token returns an access token' ([bool]$tok.access_token -and -not $tok.client_secret) ''
+      $Token = $tok.access_token
+    }
+  } catch { Show 'discovery flow' $false "$_" }
+} elseif ($anon -eq 401) { Write-Host '      (no OAuth discovery challenge: the server runs in manual connector mode)' -ForegroundColor DarkGray }
 
 if ($ApprovalUrl) {
   $base = $ApprovalUrl.TrimEnd('/')

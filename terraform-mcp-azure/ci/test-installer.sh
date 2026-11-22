@@ -42,5 +42,6 @@ FAKE_AZ_ROLES="Reader" run blocked 1 "${CFG[@]}"
 fresh d; FAKE_PAC_FAIL="connector create" run pacfail 0 "${CFG[@]}"
 fresh e; printf '2\n\n\ndev\nn\n\n2\n' > "$work/answers.txt"
 FAKE_AZ_SUBS=2 STDIN="$work/answers.txt" run wizard 0 -SkipSmokeTest
+fresh g; run manualmode 0 "${CFG[@]}" -ConnectorAuth manual
 fresh f; run install2 0 "${CFG[@]}"; run uninstall 0 "${CFG[@]}" -Uninstall -RemoveGroups
 echo "ALL INSTALLER CHECKS PASSED"

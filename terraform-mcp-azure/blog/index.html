@@ -80,7 +80,7 @@ footer{padding:36px 0 60px;color:var(--muted);font-size:14.5px;border-top:1px so
 
 <main id="main">
 <div class="wrap hero">
-  <span class="kicker">Open package · v2.2 · Azure + Copilot Studio</span>
+  <span class="kicker">Open package · v2.3 · Azure + Copilot Studio</span>
   <h1>Give your agent Terraform. <em>Keep the keys.</em></h1>
   <p class="lede">A Copilot Studio agent that plans Azure infrastructure from approved templates - and physically cannot apply or destroy anything without a human decision made somewhere it cannot reach.</p>
   <div class="cta"><a class="btn primary" href="#install">Install with one double-click</a><a class="btn" href="#demo">Watch the flow</a></div>
@@ -150,7 +150,7 @@ footer{padding:36px 0 60px;color:var(--muted);font-size:14.5px;border-top:1px so
 
 <section id="install"><div class="wrap">
   <h2>Install: one double-click</h2>
-  <p class="sub">On a Windows admin workstation, unzip the package and double-click <strong>Install.cmd</strong>. It installs what is missing, signs you in, runs preflight checks before changing anything, creates the Entra groups, deploys to Azure, creates the Power Platform connector and prints a pass/fail summary.</p>
+  <p class="sub">On a Windows admin workstation, unzip the package and double-click <strong>Install.cmd</strong>. It installs what is missing, signs you in, runs preflight checks before changing anything, creates the Entra groups, deploys to Azure and prints a pass/fail summary with the one URL you paste into Copilot Studio.</p>
   <div class="two">
     <div>
       <div class="copy"><pre id="cmd1">Install.cmd</pre><button type="button" data-copy="cmd1">Copy</button></div>
@@ -161,17 +161,18 @@ footer{padding:36px 0 60px;color:var(--muted);font-size:14.5px;border-top:1px so
     </div>
     <div class="card"><h3>Automated vs. needs a person</h3>
       <ul class="check"><li>Prerequisites (Azure CLI, Power Platform CLI), sign-in, subscription and environment pickers</li><li>Preflight list with the exact fix for every failure</li><li>Four Entra groups, you as admin, an optional second approver</li><li>Azure deployment, custom roles, locks, app registrations</li><li>Solution and custom connector in your Power Platform environment</li></ul>
-      <ul class="check no"><li>Pasting the connector's client secret once in the maker portal</li><li>Creating the agent, adding the tool and publishing it in Copilot Studio (or supply your own exported template)</li><li>Each user's first sign-in to the connection; licensing; admin consent if you lack the role</li></ul>
+      <ul class="check no"><li>Creating the agent, adding the tool by pasting the server URL (Dynamic discovery) and publishing it in Copilot Studio</li><li>Pasting values and the client secret - only if you need the manual fallback</li><li>Each user's first sign-in to the connection; licensing; admin consent if you lack the role</li></ul>
     </div>
   </div>
 
   <h3 style="margin-top:34px">Step by step</h3>
   <div class="tabs" role="tablist" aria-label="Deployment steps">
-    <button role="tab" id="t1" aria-controls="p1" aria-selected="true">1 · Preflight</button><button role="tab" id="t2" aria-controls="p2" aria-selected="false" tabindex="-1">2 · Install</button><button role="tab" id="t3" aria-controls="p3" aria-selected="false" tabindex="-1">3 · Copilot Studio</button><button role="tab" id="t4" aria-controls="p4" aria-selected="false" tabindex="-1">4 · Approvers</button><button role="tab" id="t5" aria-controls="p5" aria-selected="false" tabindex="-1">5 · Turn on changes</button>
+    <button role="tab" id="t1" aria-controls="p1" aria-selected="true">1 · Preflight</button><button role="tab" id="t2" aria-controls="p2" aria-selected="false" tabindex="-1">2 · Install</button><button role="tab" id="t3" aria-controls="p3" aria-selected="false" tabindex="-1">3 · Copilot Studio</button><button role="tab" id="t6" aria-controls="p6" aria-selected="false" tabindex="-1">3b · Manual fallback</button><button role="tab" id="t4" aria-controls="p4" aria-selected="false" tabindex="-1">4 · Approvers</button><button role="tab" id="t5" aria-controls="p5" aria-selected="false" tabindex="-1">5 · Turn on changes</button>
   </div>
   <div class="panel" role="tabpanel" id="p1" aria-labelledby="t1"><strong>See what would fail before anything is created.</strong><ol><li>Run <code>Install.cmd -PreflightOnly</code>.</li><li>Read the PASS / WARN / FAIL list: subscription role, Entra permissions, region, name availability, Power Platform environment, data-loss-prevention hints.</li><li>Each FAIL line names the fix. Apply it and run again.</li></ol></div>
   <div class="panel" role="tabpanel" id="p2" aria-labelledby="t2" hidden><strong>Run the installer and answer five questions.</strong><ol><li>Double-click <code>Install.cmd</code>. Pick the subscription and the Power Platform environment from the lists.</li><li>Keep "plan-only" for the first run.</li><li>Wait for the green INSTALLED banner; the summary is in <code>out/install-summary.md</code>.</li><li>If it stops, fix what it says and run it again - finished steps are skipped.</li></ol></div>
-  <div class="panel" role="tabpanel" id="p3" aria-labelledby="t3" hidden><strong>Finish the agent (about five minutes of clicks).</strong><ol><li>Open <code>out/agent-setup.md</code>.</li><li>Paste the connector's client secret in the maker portal.</li><li>In Copilot Studio create "Azure Platform Assistant", add the tool <em>Azure Terraform MCP</em>, choose end-user authentication.</li><li>Paste <code>agent-instructions.md</code>, publish, share with the requester and viewer groups.</li></ol><div class="shot">Screenshot placeholder: Copilot Studio › Tools › Add a tool › Azure Terraform MCP</div></div>
+  <div class="panel" role="tabpanel" id="p3" aria-labelledby="t3" hidden><strong>Connect the agent by pasting one URL.</strong><ol><li>Agent › Tools › Add a tool › New tool › <em>Model Context Protocol</em>.</li><li>Server URL: <code>https://&lt;your-mcp-host&gt;/mcp</code> (printed by the installer).</li><li>Authentication: <em>OAuth 2.0 › Dynamic discovery</em>. Create.</li><li>Create new connection and sign in with your own account.</li><li>Add to agent, paste <code>agent-instructions.md</code>, publish, share with the requester and viewer groups.</li></ol><p class="note">No client id, no secret, no endpoint URLs: the server publishes its own OAuth metadata. Not verified against a real Copilot Studio wizard - if yours has no "Dynamic discovery" option, use the fallback tab.</p><div class="shot">Screenshot placeholder: the MCP wizard with the server URL and "Dynamic discovery" selected</div></div>
+  <div class="panel" role="tabpanel" id="p6" aria-labelledby="t6" hidden><strong>If the wizard has no "Dynamic discovery" option, or it fails.</strong><ol><li>Open the FALLBACK section of <code>out/copilot-studio-wizard-values.md</code>.</li><li>In the same wizard choose <em>OAuth 2.0 › Manual</em> and paste the values (client id, the secret from <code>out/connector-client-secret.txt</code>, three URLs, scopes).</li><li>Create the connection and sign in. Same server, nothing to reinstall.</li></ol><p class="note">Prefer Easy Auth in front of the MCP endpoint? Deploy with <code>-ConnectorAuth manual</code>; the discovery endpoints are then switched off.</p></div>
   <div class="panel" role="tabpanel" id="p4" aria-labelledby="t4" hidden><strong>Tell approvers where decisions happen.</strong><ol><li>Send them the approval page address from the summary.</li><li>Add a Conditional Access policy for the approval app: multi-factor, sign-in every time.</li><li>Add at least one <em>other</em> person to the Approvers group - the two-person rule needs two people.</li></ol><div class="shot">Screenshot placeholder: the approval page showing a plan summary with Approve / Reject</div></div>
   <div class="panel" role="tabpanel" id="p5" aria-labelledby="t5" hidden><strong>When you trust it, allow approved changes.</strong><ol><li>Run the installer again and answer "yes" to allowing changes (or set <code>enableApply</code> in the config).</li><li>Production stays locked against deletion; destroy stays off unless you enable it.</li><li>Send users <code>out/what-users-do-now.md</code>.</li></ol></div>
 </div></section>
@@ -191,6 +192,7 @@ footer{padding:36px 0 60px;color:var(--muted);font-size:14.5px;border-top:1px so
   <details open><summary>What if the agent is prompt-injected and "confirms" for the user?</summary><p>Nothing happens. There is no tool that approves, and the apply tool is refused unless a human created an approval on the separate page for that exact plan file. Chat content is not an input to that decision.</p></details>
   <details><summary>What if someone steals a user's token for the MCP?</summary><p>It works for reading and planning as that user until it expires. It is rejected by the approval service (different audience, client and scope), so nothing can be applied with it.</p></details>
   <details><summary>What if the agent-facing container itself is compromised?</summary><p>It holds a read-only Azure role. It could forge its own records, so the executor ignores them: it reads approvals from a store that container cannot write, asks Terraform what the plan file really does, and compares that with what the approver saw. It can read Terraform state - that is a real residual risk.</p></details>
+  <details><summary>The server has public sign-in endpoints now. Is that a hole?</summary><p>For "Dynamic discovery" the MCP front-end serves OAuth metadata plus register, authorize and token endpoints without authentication - that is how discovery works. They create nothing and issue nothing themselves: registration returns the one existing client and never a secret, authorize only redirects to your tenant's Entra sign-in, token only forwards to Entra. Redirect addresses must match an exact allow-list, PKCE is required, and requests are rate limited. The trade-off: in this mode the platform's own authentication layer no longer sits in front of the MCP endpoint; the server's token validation does that job alone. A manual mode keeps the old setup.</p></details>
   <details><summary>Can an approved plan delete production data?</summary><p>In locked environments the apply role cannot delete data-bearing resource types, the resource group carries a delete lock, protected deployments are refused, and a daily deletion quota applies. An Owner can still remove those protections on purpose; an alert fires when a lock or role changes.</p></details>
   <details><summary>So it cannot be hacked?</summary><p>No system can promise that. A person can approve the wrong thing, two insiders can collude, and everything here still has to be confirmed in a real tenant. The threat model lists each scenario with what stops it and what remains.</p></details>
 </div></section>
@@ -203,12 +205,12 @@ footer{padding:36px 0 60px;color:var(--muted);font-size:14.5px;border-top:1px so
       <li>Both HTTP channels with locally signed tokens: wrong audience, wrong client, stale sign-in and replays are rejected</li>
       <li><code>terraform validate</code> for all 15 templates with the pinned provider</li>
       <li>Installer and deploy scripts executed end to end in PowerShell 7 against fake <code>az</code> and <code>pac</code> command-line tools</li>
-      <li>This page: rendered at desktop and phone widths, light and dark</li></ul></div>
+      <li>The whole "Dynamic discovery" path on the real server locally: challenge, metadata, registration, authorize redirect, token exchange against a stub identity provider, then MCP calls</li><li>This page: rendered at desktop and phone widths, light and dark</li></ul></div>
     <div class="card"><span class="pill no">Not verified</span><ul class="check no">
       <li>Anything against live Azure, Entra ID, Power Platform or Copilot Studio</li>
       <li><code>Install.cmd</code> itself (no Windows machine was available) and winget installs</li>
       <li>Real token claims, custom-role, lock and policy behaviour</li>
-      <li>The approval page's browser sign-in flow</li>
+      <li>The approval page's browser sign-in flow</li><li>Copilot Studio's real "Dynamic discovery" wizard (which MCP authorization revision it follows, whether it insists on a client secret) - the reason a manual fallback stays</li>
       <li>Connector and solution creation through the real Power Platform CLI and Dataverse API</li>
       <li>The container image build</li></ul></div>
   </div>
@@ -232,7 +234,7 @@ footer{padding:36px 0 60px;color:var(--muted);font-size:14.5px;border-top:1px so
 </div></section>
 </main>
 
-<footer><div class="wrap">Azure Terraform MCP v2.2 · Read <code>README.md</code>, <code>THREAT-MODEL.md</code> and <code>GUIDE.md</code> in the package. No customer quotes, no benchmarks beyond our own measurements, no claims we could not check.</div></footer>
+<footer><div class="wrap">Azure Terraform MCP v2.3 · Read <code>README.md</code>, <code>THREAT-MODEL.md</code> and <code>GUIDE.md</code> in the package. No customer quotes, no benchmarks beyond our own measurements, no claims we could not check.</div></footer>
 
 <script>
 (() => {

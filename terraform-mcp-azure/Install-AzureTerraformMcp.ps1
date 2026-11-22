@@ -39,6 +39,7 @@ param(
   [switch] $EnableDestroy,
   [string] $SecondApproverUpn,
   [string] $PowerPlatformEnvironment,   # environment URL, id or display name
+  [ValidateSet('', 'dynamic', 'manual')] [string] $ConnectorAuth = '',   # default dynamic (Copilot Studio 'Dynamic discovery')
   [string] $AgentTemplateFile,          # optional: template from `pac copilot extract-template` to create the agent
   # still supported: bring your own groups instead of letting the installer create them
   [string] $RequesterGroupId, [string] $ApproverGroupId, [string] $ViewerGroupId, [string] $AdminGroupId
@@ -50,7 +51,7 @@ $logDir = Join-Path $Root '.deploy-logs'
 $stateFile = Join-Path (Join-Path $Root '.deploy-state') 'install-state.json'
 $KnownConfigKeys = @('subscriptionId', 'prefix', 'location', 'environments', 'allowedLocations', 'enableApply', 'enableDestroy',
   'lockEnvironments', 'groupNames', 'secondApproverUpn', 'monthlyBudgetUsd', 'enableScheduledJobs', 'enableMonitoring', 'alertEmail',
-  'privateNetworking', 'enableDenyDeletePolicy', 'allowAzureCliClient', 'powerPlatform', 'skipSmokeTest')
+  'privateNetworking', 'enableDenyDeletePolicy', 'allowAzureCliClient', 'powerPlatform', 'skipSmokeTest', 'connectorAuth', 'extraRedirectUris')
 $Steps = @('Prerequisites', 'Sign-in', 'Preflight checks', 'Entra groups', 'Azure deployment', 'Power Platform', 'Smoke test', 'Summary')
 
 # ------------------------------------------------------------------------------------------------- helpers
@@ -154,7 +155,7 @@ $script:State = Get-State
 $script:Resuming = ($script:State.status -eq 'failed') -and -not $Force -and -not $Uninstall -and -not $PreflightOnly
 if (-not $script:Resuming) { $script:State.done = @{} }
 $script:State.status = 'failed'      # until the last step says otherwise
-$summary = [ordered]@{ version = '2.2.0'; startedAt = (Get-Date).ToString('s'); mode = $(if ($Uninstall) { 'uninstall' } elseif ($PreflightOnly) { 'preflight' } else { 'install' }); result = 'failed' }
+$summary = [ordered]@{ version = '2.3.0'; startedAt = (Get-Date).ToString('s'); mode = $(if ($Uninstall) { 'uninstall' } elseif ($PreflightOnly) { 'preflight' } else { 'install' }); result = 'failed' }
 $exitCode = 1
 Write-Host ''
 Write-Host ' Azure Terraform MCP - installer ' -ForegroundColor White -BackgroundColor DarkBlue
@@ -310,6 +311,9 @@ try {
         } catch { Add-Check 'DLP policies' 'WARN' 'could not be read' 'Check Power Platform admin center > Policies > Data policies for blocked custom connectors.' }
       } else { Add-Check 'DLP policies' 'WARN' 'not checked (module Microsoft.PowerApps.Administration.PowerShell is not installed)' 'Check Power Platform admin center > Policies > Data policies: custom connectors to https://*.azurecontainerapps.io must be allowed.' }
     }
+    $script:ConnAuth = Get-Setting 'connectorAuth' $ConnectorAuth 'dynamic'
+    if ($script:ConnAuth -eq 'dynamic') { Add-Check 'Copilot Studio sign-in mode' 'WARN' 'Dynamic discovery (paste only the server URL)' 'Your Copilot Studio MCP wizard must offer OAuth 2.0 > Dynamic discovery; some tenants do not have it yet. If yours does not, use the FALLBACK section of out/copilot-studio-wizard-values.md (Manual) - no reinstall needed.' }
+    else { Add-Check 'Copilot Studio sign-in mode' 'INFO' 'Manual (paste values and client secret)' '' }
     Add-Check 'Licences' 'INFO' 'each user of the agent needs Copilot Studio access (tenant licence or user licence / message capacity); this cannot be checked from here' ''
     $failed = @($script:Checks | Where-Object { $_.result -eq 'FAIL' })
     $summary.preflight = $script:Checks
@@ -373,8 +377,9 @@ try {
       SubscriptionId = $script:Sub; Prefix = $prefixV; Location = $script:LocationValue; Environments = $script:Envs
       AllowedLocations = (Get-Setting 'allowedLocations' $null $script:LocationValue)
       RequesterGroupId = $groups.requesters; ApproverGroupId = $groups.approvers; ViewerGroupId = $groups.viewers; AdminGroupId = $groups.admins
-      SkipPacConnector = $true
+      SkipPacConnector = $true; ConnectorAuth = $script:ConnAuth
     }
+    $extra = Get-Setting 'extraRedirectUris' $null $null; if ($extra) { $deploy.ExtraRedirectUris = $extra }
     if ($script:Apply) { $deploy.EnableApply = $true }
     if ($script:Destroy) { $deploy.EnableDestroy = $true }
     foreach ($pair in @(@('lockEnvironments', 'LockEnvironments'), @('monthlyBudgetUsd', 'MonthlyBudgetUsd'), @('alertEmail', 'AlertEmail'))) {
@@ -388,7 +393,7 @@ try {
     $script:State.data.mcpUrl = "https://$(Invoke-Cli az containerapp show -g $rg -n "ca-$prefixV" --query properties.configuration.ingress.fqdn -o tsv)/mcp"
     $script:State.data.approvalUrl = "https://$(Invoke-Cli az containerapp show -g $rg -n "ca-$prefixV-approval" --query properties.configuration.ingress.fqdn -o tsv)/"
   }
-  $summary.mcpUrl = $script:State.data.mcpUrl; $summary.approvalUrl = $script:State.data.approvalUrl
+  $summary.mcpUrl = $script:State.data.mcpUrl; $summary.approvalUrl = $script:State.data.approvalUrl; $summary.connectorAuth = $script:ConnAuth
 
   # ============================================================================================= 6 Power Platform
   $ppResult = [ordered]@{ connector = 'not attempted'; solution = 'not attempted'; sharing = 'manual'; agent = 'manual' }
@@ -466,21 +471,29 @@ try {
   # ============================================================================================= 8 summary
   Invoke-Step 8 -Always {
     $mcp = $summary.mcpUrl; $approval = $summary.approvalUrl
+    $dynamic = $script:ConnAuth -eq 'dynamic'
     @"
 # Finish the agent in Copilot Studio
 
+$(if ($dynamic) { @"
+## Recommended: Dynamic discovery (about one minute, nothing to paste but the URL)
+1. Copilot Studio > Create > New agent > name it **Azure Platform Assistant**.
+2. Tools > Add a tool > New tool > **Model Context Protocol**.
+3. Server URL: **$mcp**  -  Authentication: **OAuth 2.0 > Dynamic discovery**  -  Create.
+4. Create new connection > sign in.  Add to agent.
+5. Instructions: paste ``agent-instructions.md``.  Publish.
+6. Share the agent with "$($groupNames.requesters)" and "$($groupNames.viewers)" (Share > add the security groups).
+
+If the wizard has no "Dynamic discovery" option or it fails: use the FALLBACK section of
+``out/copilot-studio-wizard-values.md`` (OAuth 2.0 > Manual), or the pre-built connector below.
+"@ } else { "## Sign-in mode: Manual`nUse the paste-ready values in ``out/copilot-studio-wizard-values.md`` (OAuth 2.0 > Manual), or the pre-built connector below." })
+
+## Alternative: the pre-built custom connector (solution "Azure Terraform MCP")
 What the installer did in Power Platform: solution **$($ppResult.solution)**, connector **$($ppResult.connector)**, sharing **$($ppResult.sharing)**, agent **$($ppResult.agent)**.
-
-## If the connector was created
-1. make.powerapps.com > your environment > Solutions > **Azure Terraform MCP** > the connector > Edit > **Security**:
-   paste the client secret from ``out/connector-client-secret.txt`` (the CLI cannot set it) > Update connector.
-2. Copilot Studio > Create > New agent > name it **Azure Platform Assistant** (or open the one created from your template).
-3. Tools > Add a tool > search **Azure Terraform MCP** > Add. When asked for a connection choose *end user authentication*.
-4. Instructions: paste ``agent-instructions.md``. Publish. Share the agent with the groups
-   "$($groupNames.requesters)" and "$($groupNames.viewers)" (Share > add the security groups).
-
-## If the connector was NOT created
-Use the paste-ready values in ``out/copilot-studio-wizard-values.md`` (Tools > Add a tool > New tool > Model Context Protocol > OAuth 2.0 Manual).
+The connector uses the manual OAuth settings. To use it: make.powerapps.com > Solutions > **Azure Terraform MCP** > the connector >
+Edit > **Security** > paste the client secret from ``out/connector-client-secret.txt`` > Update connector; then in the agent:
+Tools > Add a tool > search **Azure Terraform MCP** > Add (end user authentication).
+$(if ($dynamic) { 'With Dynamic discovery working you do not need this connector.' })
 
 ## What only a human can do (Microsoft requires it)
 * Each user signs in to the connection once, on first use of the agent.
@@ -514,7 +527,7 @@ Questions: your platform team.
 | Result | **$($summary.result)** ($($summary.finishedAt)) |
 | Subscription / prefix / region | $($script:Sub) / $prefixV / $($script:LocationValue) |
 | Environments | $($script:Envs -join ', ') (apply: $($script:Apply), destroy: $($script:Destroy)) |
-| MCP endpoint | $mcp |
+| MCP endpoint | $mcp (Copilot Studio sign-in mode: $($script:ConnAuth)) |
 | Approval page | $approval |
 | Groups | $(($groupNames.Values) -join '; ') |
 | Power Platform | solution: $($ppResult.solution); connector: $($ppResult.connector); sharing: $($ppResult.sharing); agent: $($ppResult.agent) |
